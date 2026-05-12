@@ -1,0 +1,80 @@
+# RBAC for simian-controller (chaos SA).
+#
+# M1 ships the chaos SA and a per-eligible-namespace Role+RoleBinding template.
+# An operator applies one Role+RoleBinding per namespace they want Simian to
+# operate in. M3 will introduce the provisioner SA and a ValidatingAdmissionPolicy
+# that automates this.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: simian-controller
+  namespace: simian-system
+  labels:
+    app.kubernetes.io/name: simian-agent
+    app.kubernetes.io/component: controller
+---
+# ClusterRole grants only the cluster-scoped reads the controller needs:
+# discovery (CRDs, API resources) for catalog generation, and namespace-level
+# get for eligibility annotation reads. NO mutation, NO cluster-wide write.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simian-controller-discovery
+  labels:
+    app.kubernetes.io/name: simian-agent
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: simian-controller-discovery
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: simian-controller-discovery
+subjects:
+  - kind: ServiceAccount
+    name: simian-controller
+    namespace: simian-system
+---
+# Per-eligible-namespace Role: copy this and substitute ${EligibleNamespace}
+# for each namespace you want Simian to operate in. The namespace must also
+# carry the `simian.chaos/eligible: "true"` annotation; both must agree.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: simian-chaos
+  namespace: ${EligibleNamespace}
+  labels:
+    app.kubernetes.io/name: simian-agent
+rules:
+  - apiGroups: ["chaos-mesh.org"]
+    resources: ["*"]
+    verbs: ["create", "get", "list", "watch", "patch", "delete"]
+  - apiGroups: ["litmuschaos.io"]
+    resources: ["chaosengines", "chaosresults", "chaosschedules"]
+    verbs: ["create", "get", "list", "watch", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "configmaps", "services"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: simian-chaos
+  namespace: ${EligibleNamespace}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: simian-chaos
+subjects:
+  - kind: ServiceAccount
+    name: simian-controller
+    namespace: simian-system

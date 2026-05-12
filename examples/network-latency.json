@@ -1,0 +1,14 @@
+{
+  "action": "delay",
+  "mode": "all",
+  "selector": {
+    "labelSelectors": {
+      "app": "paymentservice"
+    }
+  },
+  "delay": {
+    "latency": "250ms",
+    "correlation": "0",
+    "jitter": "0ms"
+  }
+}

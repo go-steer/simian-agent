@@ -1,0 +1,28 @@
+{
+  "engine": "chaos-mesh",
+  "api_version": "chaos-mesh.org/v1alpha1",
+  "resource_kind": "NetworkChaos",
+  "spec": {
+    "action": "delay",
+    "mode": "all",
+    "selector": {
+      "labelSelectors": {
+        "app": "paymentservice"
+      }
+    },
+    "delay": {
+      "latency": "250ms",
+      "correlation": "0",
+      "jitter": "0ms"
+    }
+  },
+  "targets": [
+    {
+      "namespace": "online-boutique",
+      "name": "paymentservice"
+    }
+  ],
+  "duration": "2m",
+  "source": "directed",
+  "rationale": "Manually-crafted manifest demonstrating the deterministic-control path."
+}
