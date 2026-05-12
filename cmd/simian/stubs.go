@@ -18,31 +18,6 @@ func newPlanCmd() *cobra.Command {
 	}
 }
 
-// newSutCmd is a placeholder for the SUT-lifecycle subcommand that lands in
-// M2 Part B. Arena setup (M2 Part A) is shipped separately under
-// 'simian arena'.
-func newSutCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "sut",
-		Short: "Deploy / verify / tear down a SUT inside an arena (M2 Part B)",
-	}
-	cmd.AddCommand(&cobra.Command{
-		Use:   "deploy",
-		Short: "Deploy a SUT into an arena and capture the steady-state baseline (M2 Part B)",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return fmt.Errorf("simian sut deploy: not implemented (delivered in M2 Part B)")
-		},
-	})
-	cmd.AddCommand(&cobra.Command{
-		Use:   "destroy",
-		Short: "Tear down a SUT, optionally also tearing down its arena (M2 Part B)",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return fmt.Errorf("simian sut destroy: not implemented (delivered in M2 Part B)")
-		},
-	})
-	return cmd
-}
-
 // newProvisionCmd is the legacy single-command entry point. It now redirects
 // to the split 'arena' / 'sut' commands so existing scripts get a clear hint.
 func newProvisionCmd() *cobra.Command {
