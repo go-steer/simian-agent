@@ -7,48 +7,62 @@ import (
 )
 
 // newPlanCmd is a placeholder for the autonomous-mode dry-run subcommand
-// that lands in M4.
+// that lands in M3 (autonomous mode).
 func newPlanCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "plan",
-		Short: "Run an autonomous-mode planning cycle in dry-run mode (M4)",
+		Short: "Run an autonomous-mode planning cycle in dry-run mode (M3)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return fmt.Errorf("simian plan: not implemented in M1 (delivered in M4)")
+			return fmt.Errorf("simian plan: not implemented (delivered in M3 — autonomous mode)")
 		},
 	}
 }
 
-// newProvisionCmd is a placeholder for the namespace lifecycle subcommand
-// that lands in M3. M1 assumes operator-managed eligibility.
-func newProvisionCmd() *cobra.Command {
+// newSutCmd is a placeholder for the SUT-lifecycle subcommand that lands in
+// M2 Part B. Arena setup (M2 Part A) is shipped separately under
+// 'simian arena'.
+func newSutCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "provision",
-		Short: "Manage eligible namespaces and SUT lifecycle (M3)",
+		Use:   "sut",
+		Short: "Deploy / verify / tear down a SUT inside an arena (M2 Part B)",
 	}
 	cmd.AddCommand(&cobra.Command{
 		Use:   "deploy",
-		Short: "Provision a fresh eligible namespace + SUT (M3)",
+		Short: "Deploy a SUT into an arena and capture the steady-state baseline (M2 Part B)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return fmt.Errorf("simian provision deploy: not implemented in M1 (delivered in M3)")
+			return fmt.Errorf("simian sut deploy: not implemented (delivered in M2 Part B)")
 		},
 	})
 	cmd.AddCommand(&cobra.Command{
-		Use:   "cleanup",
-		Short: "Tear down a provisioned namespace (M3)",
+		Use:   "destroy",
+		Short: "Tear down a SUT, optionally also tearing down its arena (M2 Part B)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return fmt.Errorf("simian provision cleanup: not implemented in M1 (delivered in M3)")
+			return fmt.Errorf("simian sut destroy: not implemented (delivered in M2 Part B)")
 		},
 	})
 	return cmd
 }
 
-// newEvaluateCmd is a placeholder for the external-harness driver that lands in M6.
+// newProvisionCmd is the legacy single-command entry point. It now redirects
+// to the split 'arena' / 'sut' commands so existing scripts get a clear hint.
+func newProvisionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:        "provision",
+		Short:      "DEPRECATED — use 'simian arena' (M2 Part A) and 'simian sut' (M2 Part B) instead",
+		Deprecated: "split into 'simian arena' (eligibility setup, shipped in M2 Part A) and 'simian sut' (workload + baseline, shipped in M2 Part B)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return fmt.Errorf("simian provision: split into 'simian arena <create|destroy|describe>' (M2 Part A) and 'simian sut <deploy|destroy>' (M2 Part B)")
+		},
+	}
+}
+
+// newEvaluateCmd is a placeholder for the external-harness driver that lands in M5.
 func newEvaluateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "evaluate",
-		Short: "Drive an external evaluation harness against scenario records (M6)",
+		Short: "Drive an external evaluation harness against scenario records (M5)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return fmt.Errorf("simian evaluate: not implemented in M1 (delivered in M6)")
+			return fmt.Errorf("simian evaluate: not implemented (delivered in M5 — scenario data export)")
 		},
 	}
 }

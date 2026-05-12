@@ -1,0 +1,82 @@
+# Provisioner ServiceAccount (M2 Part A).
+#
+# This SA is the privileged actor that creates/destroys arenas — namespaces
+# annotated `simian.chaos/eligible="true"` and the chaos-SA RoleBindings
+# scoped into them. Per design.md §10.2, this is the only Simian component
+# with cluster-scoped privilege; the chaos controller SA can only mutate
+# Chaos Mesh / Litmus CRDs inside already-bound namespaces.
+#
+# The provisioner SA is intentionally a separate identity from the chaos
+# controller SA: a vulnerability in the chaos controller code path cannot
+# escalate to namespace creation or RoleBinding mutation because the chaos
+# controller's pod token cannot impersonate this SA.
+#
+# In M2 Part A, the provisioner SA is shipped here for in-cluster use cases
+# (e.g. an in-cluster `simian provision` Job) but `simian arena` CLI invoked
+# from a workstation runs with the operator's kubeconfig instead. Both paths
+# are guarded by the ValidatingAdmissionPolicy in 40-admission-policy.yaml.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: simian-provisioner
+  namespace: simian-system
+  labels:
+    app.kubernetes.io/name: simian-agent
+    app.kubernetes.io/component: provisioner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simian-provisioner
+  labels:
+    app.kubernetes.io/name: simian-agent
+rules:
+  # Manage namespaces (the arena lifecycle). Backstopped by the admission
+  # policy so create requires the eligibility annotation.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  # Manage the chaos-SA Role + RoleBinding inside arenas. Backstopped by the
+  # admission policy so RoleBindings granting the chaos SA can only land in
+  # eligible namespaces.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  # Required for RBAC privilege-escalation prevention to allow the
+  # provisioner to write Roles with chaos-engine rules and bind them into
+  # arenas. Note: `bind` accepts resourceNames; `escalate` does not (the
+  # request specifies the to-be-created Role's name, but the privilege check
+  # uses the role's RULES, not its name). Restricting escalate to a name
+  # would silently fail. Backstopped by the ValidatingAdmissionPolicy: the
+  # only RoleBindings the provisioner can create that grant the chaos SA
+  # are ones in eligible namespaces.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles"]
+    verbs: ["escalate"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles"]
+    resourceNames: ["simian-chaos"]
+    verbs: ["bind"]
+  # Read-only on chaos resources for the destroy-time active-fault check.
+  - apiGroups: ["chaos-mesh.org"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["litmuschaos.io"]
+    resources: ["chaosengines", "chaosresults"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: simian-provisioner
+  labels:
+    app.kubernetes.io/name: simian-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: simian-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: simian-provisioner
+    namespace: simian-system

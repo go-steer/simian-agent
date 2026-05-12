@@ -5,12 +5,22 @@ image:
   tag: 0.1.0-dev
   pullPolicy: IfNotPresent
 
-# Namespaces this Simian instance is permitted to operate in. Each entry must
-# (a) actually exist, (b) carry the simian.chaos/eligible="true" annotation,
-# and (c) be configured with a Role+RoleBinding granting chaos-controller SA
-# access. Apply deploy/manifests/20-example-namespace.yaml as a template.
-eligibleNamespaces:
-  - online-boutique
+# Static eligible-namespace allowlist. When empty, the controller falls back
+# to annotation-based lookup (`simian.chaos/eligible="true"`), which is the
+# preferred mode for installations that use `simian arena create`. Set this
+# only when you want to bypass annotation lookup entirely.
+eligibleNamespaces: []
+
+# M2 Part A: provisioner subsystem. When enabled, ships:
+#   - simian-provisioner ServiceAccount + ClusterRole (cluster-scoped: ns + RB)
+#   - ValidatingAdmissionPolicy backstop enforcing:
+#       * provisioner-SA ns CREATE/UPDATE requires simian.chaos/eligible="true"
+#       * provisioner-SA RoleBinding granting chaos SA may only target
+#         eligible namespaces
+# Disable for installations where arena management is performed by an
+# operator using their kubeconfig (no in-cluster provisioner workload).
+provisioner:
+  enabled: true
 
 # LLM provider configuration.
 llm:

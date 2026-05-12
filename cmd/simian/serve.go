@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/go-steer/simian-agent/pkg/arena"
 	"github.com/go-steer/simian-agent/pkg/audit"
 	"github.com/go-steer/simian-agent/pkg/driver/chaosmesh"
 	"github.com/go-steer/simian-agent/pkg/executor"
@@ -66,16 +67,17 @@ func newServeCmd() *cobra.Command {
 				return fmt.Errorf("discovery client: %w", err)
 			}
 			cached := memory.NewMemCacheClient(disco)
-			if _, err := kubernetes.NewForConfig(cfg); err != nil {
-				return fmt.Errorf("kubernetes clientset: %w", err)
-			}
 
 			cmDriver := chaosmesh.New(dyn, cached, "simian-")
 			drivers := map[simian.Engine]simian.ChaosDriver{
 				simian.EngineChaosMesh: cmDriver,
 			}
 
-			elig := buildEligibility(eligibleNS)
+			clientset, err := kubernetes.NewForConfig(cfg)
+			if err != nil {
+				return fmt.Errorf("kubernetes clientset: %w", err)
+			}
+			elig := buildEligibility(clientset, eligibleNS, logger)
 			execCfg := executor.DefaultConfig()
 			if durationCap > 0 {
 				execCfg.DurationCeiling = durationCap
@@ -157,12 +159,18 @@ func buildKubeConfig(path string) (*rest.Config, error) {
 	return clientCfg.ClientConfig()
 }
 
-func buildEligibility(eligible []string) executor.EligibilityChecker {
-	m := map[string]bool{}
-	for _, ns := range eligible {
-		m[ns] = true
+func buildEligibility(k8s kubernetes.Interface, eligible []string, logger *slog.Logger) executor.EligibilityChecker {
+	if len(eligible) > 0 {
+		m := map[string]bool{}
+		for _, ns := range eligible {
+			m[ns] = true
+		}
+		logger.Info("eligibility: using static --eligible-namespace allowlist",
+			slog.Any("namespaces", eligible))
+		return &executor.StaticEligibility{Eligible: m}
 	}
-	return &executor.StaticEligibility{Eligible: m}
+	logger.Info("eligibility: using annotation-based lookup (simian.chaos/eligible=\"true\")")
+	return arena.NewAnnotationEligibility(k8s)
 }
 
 func buildLLM(ctx context.Context, id, model string) (simian.LLMProvider, error) {
