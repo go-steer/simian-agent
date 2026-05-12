@@ -1,0 +1,57 @@
+# Default values for the simian Helm chart.
+
+image:
+  repository: simian-agent
+  tag: 0.1.0-dev
+  pullPolicy: IfNotPresent
+
+# Namespaces this Simian instance is permitted to operate in. Each entry must
+# (a) actually exist, (b) carry the simian.chaos/eligible="true" annotation,
+# and (c) be configured with a Role+RoleBinding granting chaos-controller SA
+# access. Apply deploy/manifests/20-example-namespace.yaml as a template.
+eligibleNamespaces:
+  - online-boutique
+
+# LLM provider configuration.
+llm:
+  provider: gemini       # gemini | stub
+  model: ""              # default: gemini-2.5-pro
+  vertex:
+    enabled: true
+    project: gke-demos-345619
+    location: us-central1
+  apiKey:
+    enabled: false
+    # Mounted from a Kubernetes Secret named .Values.llm.apiKey.secretRef.
+    secretRef: simian-llm
+    secretKey: geminiApiKey
+
+# Executor safety policy.
+executor:
+  durationCeiling: 15m   # hard cap per fault
+  permittedTiers:        # blast-radius tiers permitted by this installation
+    - namespace
+    - node
+  maxConcurrentFaults: 0 # 0 = no cap
+  minCooldown: 0s        # per-namespace cooldown between consecutive faults
+
+# MCP server.
+mcp:
+  port: 8081
+  serviceType: ClusterIP
+
+# Resources.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Pod security context.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  seccompProfile:
+    type: RuntimeDefault

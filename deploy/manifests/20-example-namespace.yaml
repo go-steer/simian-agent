@@ -1,0 +1,44 @@
+# Example eligible namespace + RoleBinding combo. Apply per-namespace and
+# substitute the placeholders. M1 assumes you have your SUT (e.g. Online
+# Boutique) already deployed into this namespace.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: online-boutique
+  annotations:
+    simian.chaos/eligible: "true"
+    # Optional: comma-separated list of workloads Simian must never target.
+    # simian.chaos/exclude-workloads: "loadgenerator"
+  labels:
+    app.kubernetes.io/name: online-boutique
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: simian-chaos
+  namespace: online-boutique
+rules:
+  - apiGroups: ["chaos-mesh.org"]
+    resources: ["*"]
+    verbs: ["create", "get", "list", "watch", "patch", "delete"]
+  - apiGroups: ["litmuschaos.io"]
+    resources: ["chaosengines", "chaosresults", "chaosschedules"]
+    verbs: ["create", "get", "list", "watch", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "configmaps", "services"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: simian-chaos
+  namespace: online-boutique
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: simian-chaos
+subjects:
+  - kind: ServiceAccount
+    name: simian-controller
+    namespace: simian-system

@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simian-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "simian.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "simian.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "simian.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: simian-controller
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: controller
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - serve
+            - --mcp-addr=:{{ .Values.mcp.port }}
+            - --llm-provider={{ .Values.llm.provider }}
+            {{- if .Values.llm.model }}
+            - --llm-model={{ .Values.llm.model }}
+            {{- end }}
+            - --duration-ceiling={{ .Values.executor.durationCeiling }}
+            {{- range .Values.eligibleNamespaces }}
+            - --eligible-namespace={{ . }}
+            {{- end }}
+          env:
+            {{- if .Values.llm.vertex.enabled }}
+            - name: GOOGLE_GENAI_USE_VERTEXAI
+              value: "true"
+            - name: GOOGLE_CLOUD_PROJECT
+              value: {{ .Values.llm.vertex.project | quote }}
+            - name: VERTEX_LOCATION
+              value: {{ .Values.llm.vertex.location | quote }}
+            {{- end }}
+            {{- if .Values.llm.apiKey.enabled }}
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.apiKey.secretRef }}
+                  key: {{ .Values.llm.apiKey.secretKey }}
+            {{- end }}
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - name: mcp
+              containerPort: {{ .Values.mcp.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: simian-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "simian.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.mcp.serviceType }}
+  selector:
+    {{- include "simian.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: mcp
+      port: {{ .Values.mcp.port }}
+      targetPort: mcp
+      protocol: TCP
