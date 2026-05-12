@@ -1,0 +1,92 @@
+# ValidatingAdmissionPolicy backstop for the M2 Part A provisioner SA.
+#
+# This is the defense-in-depth layer described in design.md §10.2 — even a
+# buggy or compromised provisioner cannot create non-eligible namespaces or
+# grant the chaos SA access into anything that isn't an arena.
+#
+# Two policies, two bindings:
+#   1. simian-eligibility-on-namespace — every namespace CREATE/UPDATE that
+#      originates from the provisioner SA must carry simian.chaos/eligible="true".
+#   2. simian-chaos-sa-binding-scope — every RoleBinding CREATE/UPDATE that
+#      grants the chaos controller SA must land in a namespace whose
+#      eligibility annotation is "true".
+#
+# Requires Kubernetes 1.30+ for the admission/v1 API.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: simian-eligibility-on-namespace
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:   [""]
+        apiVersions: ["v1"]
+        operations:  ["CREATE", "UPDATE"]
+        resources:   ["namespaces"]
+  matchConditions:
+    - name: only-provisioner-sa
+      expression: >
+        request.userInfo.username == "system:serviceaccount:simian-system:simian-provisioner"
+  validations:
+    - expression: >
+        has(object.metadata.annotations) &&
+        ("simian.chaos/eligible" in object.metadata.annotations) &&
+        object.metadata.annotations["simian.chaos/eligible"] == "true"
+      message: >
+        Namespaces created or updated by the simian-provisioner SA must carry
+        annotation simian.chaos/eligible="true". Use 'simian arena create' or
+        kubectl annotate.
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: simian-eligibility-on-namespace
+spec:
+  policyName: simian-eligibility-on-namespace
+  validationActions: [Deny, Audit]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: simian-chaos-sa-binding-scope
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:   ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations:  ["CREATE", "UPDATE"]
+        resources:   ["rolebindings"]
+  matchConditions:
+    - name: only-provisioner-sa
+      expression: >
+        request.userInfo.username == "system:serviceaccount:simian-system:simian-provisioner"
+    - name: grants-chaos-sa
+      expression: >
+        has(object.subjects) &&
+        object.subjects.exists(s,
+          s.kind == "ServiceAccount" &&
+          s.name == "simian-controller" &&
+          s.namespace == "simian-system"
+        )
+  validations:
+    - expression: >
+        has(namespaceObject.metadata.annotations) &&
+        ("simian.chaos/eligible" in namespaceObject.metadata.annotations) &&
+        namespaceObject.metadata.annotations["simian.chaos/eligible"] == "true"
+      message: >
+        RoleBindings created by simian-provisioner that grant the
+        simian-controller SA may only land in namespaces annotated
+        simian.chaos/eligible="true". Mark the namespace as an arena first.
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: simian-chaos-sa-binding-scope
+spec:
+  policyName: simian-chaos-sa-binding-scope
+  validationActions: [Deny, Audit]

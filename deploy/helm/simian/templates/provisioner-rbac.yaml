@@ -1,0 +1,50 @@
+{{- if .Values.provisioner.enabled -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: simian-provisioner
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "simian.labels" . | nindent 4 }}
+    app.kubernetes.io/component: provisioner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-simian-provisioner
+  labels:
+    {{- include "simian.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles"]
+    verbs: ["escalate"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles"]
+    resourceNames: ["simian-chaos"]
+    verbs: ["bind"]
+  - apiGroups: ["chaos-mesh.org"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["litmuschaos.io"]
+    resources: ["chaosengines", "chaosresults"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-simian-provisioner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-simian-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: simian-provisioner
+    namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -25,6 +25,8 @@ func main() {
 
 	root.AddCommand(newServeCmd())
 	root.AddCommand(newChaosCmd())
+	root.AddCommand(newArenaCmd())
+	root.AddCommand(newSutCmd())
 	root.AddCommand(newPlanCmd())
 	root.AddCommand(newProvisionCmd())
 	root.AddCommand(newEvaluateCmd())
