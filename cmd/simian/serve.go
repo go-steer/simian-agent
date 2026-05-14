@@ -25,6 +25,7 @@ import (
 	"github.com/go-steer/simian-agent/pkg/lease"
 	"github.com/go-steer/simian-agent/pkg/llm/gemini"
 	"github.com/go-steer/simian-agent/pkg/llm/stub"
+	"github.com/go-steer/simian-agent/pkg/loop"
 	"github.com/go-steer/simian-agent/pkg/mcp"
 	"github.com/go-steer/simian-agent/pkg/planner"
 	"github.com/go-steer/simian-agent/pkg/simian"
@@ -46,6 +47,12 @@ func newServeCmd() *cobra.Command {
 		debugLLMPayloads      bool
 		recentFaultsCapacity  int
 		topologyResync        time.Duration
+		autonomous            bool
+		cycleInterval         time.Duration
+		autonomousNS          []string
+		maxFaultsPerCycle     int
+		maxSeverityPerCycle   string
+		hypothesisHint        string
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -134,6 +141,55 @@ func newServeCmd() *cobra.Command {
 				mcp.WithBaselineEstablisher(sutMgr),
 			)
 
+			if autonomous {
+				if len(autonomousNS) == 0 {
+					return fmt.Errorf("--autonomous requires at least one --autonomous-namespace")
+				}
+				generator := planner.NewGenerator(llm)
+				if debugLLMPayloads {
+					generator.LogResponses = func(attempt int, raw []byte) {
+						logger.Info("planner: LLM raw plan response",
+							slog.Int("attempt", attempt),
+							slog.String("raw_json", string(raw)))
+					}
+				}
+				gate := &loop.BaselineHealthGate{
+					Baselines:    sutMgr,
+					Topology:     disco2,
+					ActiveFaults: exec,
+				}
+				lp := &loop.Loop{
+					Namespaces: autonomousNS,
+					Interval:   cycleInterval,
+					Generator:  generator,
+					Executor:   exec,
+					Topology:   disco2,
+					Baselines:  sutMgr,
+					Recents:    exec,
+					Catalog: func(c context.Context) ([]simian.CatalogEntry, error) {
+						return srv.GatherCatalog(c)
+					},
+					Health: gate,
+					Budget: planner.Budget{
+						MaxFaultsPerCycle:   maxFaultsPerCycle,
+						MaxConcurrentFaults: execCfg.MaxConcurrentFaults,
+						MinCooldown:         execCfg.MinCooldown,
+						MaxSeverityPerCycle: simian.BlastRadiusTier(maxSeverityPerCycle),
+					},
+					Auditor:    auditor,
+					Logger:     logger,
+					Hypothesis: hypothesisHint,
+				}
+				go func() {
+					logger.Info("simian serve: autonomous loop starting",
+						slog.Any("namespaces", autonomousNS),
+						slog.Duration("interval", cycleInterval))
+					if err := lp.Run(ctx); err != nil && err != context.Canceled {
+						logger.Warn("autonomous loop exited", slog.String("err", err.Error()))
+					}
+				}()
+			}
+
 			if mcpStdio {
 				logger.Info("simian serve: MCP stdio mode")
 				return srv.ServeStdio(ctx)
@@ -169,6 +225,12 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&debugLLMPayloads, "debug-llm-payloads", false, "Log raw LLM responses (debug only; do not enable in production — see design.md §12.2)")
 	cmd.Flags().IntVar(&recentFaultsCapacity, "recent-faults-capacity", executor.DefaultHistoryCapacity, "Bounded ring size backing the get_recent_faults MCP tool")
 	cmd.Flags().DurationVar(&topologyResync, "topology-resync", 30*time.Second, "Topology informer resync interval")
+	cmd.Flags().BoolVar(&autonomous, "autonomous", false, "Enable autonomous-mode planning loop (M3)")
+	cmd.Flags().DurationVar(&cycleInterval, "cycle-interval", 5*time.Minute, "Time between autonomous cycles")
+	cmd.Flags().StringSliceVar(&autonomousNS, "autonomous-namespace", nil, "Arena namespace(s) the autonomous loop targets (required with --autonomous; can be repeated)")
+	cmd.Flags().IntVar(&maxFaultsPerCycle, "max-faults-per-cycle", 3, "Per-cycle cap on faults applied")
+	cmd.Flags().StringVar(&maxSeverityPerCycle, "max-severity-per-cycle", "namespace", "Highest blast-radius tier the autonomous loop will apply (namespace|node|external)")
+	cmd.Flags().StringVar(&hypothesisHint, "hypothesis-hint", "", "Optional hypothesis text passed to the planner as a soft preference")
 	return cmd
 }
 

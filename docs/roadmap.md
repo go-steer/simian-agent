@@ -1,6 +1,6 @@
 # Simian Agent — Phased Development Roadmap
 
-> **Status:** Draft, v1 plan. M1 shipped 2026-05-12 (PR #1).
+> **Status:** Draft, v1 plan. M1 shipped 2026-05-12 (PR #1). M2 shipped 2026-05-12/14 (PRs #2, #5). M3 shipped 2026-05-14 (PRs #7, #8).
 > **Related:** [`requirements.md`](./requirements.md), [`design.md`](./design.md).
 > Supersedes the roadmap portion of [`simian-agent.md`](./simian-agent.md).
 
@@ -22,7 +22,7 @@ This roadmap lays out v1 in six milestones. Each milestone has a focused deliver
   * **Minimal Helm chart** with chaos-SA, `Role`, and `RoleBinding` for an operator-supplied list of eligible namespaces.
 * **Verified end-to-end** against a real GKE Standard cluster with Chaos Mesh + Online Boutique. Five LLM-path tests passed (PodChaos, NetworkChaos, StressChaos, namespace-not-eligible safety reject, duration-over-ceiling safety reject); kernel-level `tc -s qdisc` confirmed the netem rule was actually installed; PodChaos pod-rotation independently observable. NetworkChaos effect bypassed by GKE Dataplane V2 (Cilium) — documented as a known cluster-side caveat in `README.md`.
 
-## Milestone 2 — Provisioner: Arena + SUT Lifecycle
+## Milestone 2 — Provisioner: Arena + SUT Lifecycle ✅ shipped
 
 * **Goal:** Simian owns the target-namespace lifecycle. Drop M1's "operator pre-creates the namespace" assumption. Ships in two PRs that compose: arena setup standalone (universally useful, including v2 external posture), then SUT lifecycle on top.
 
@@ -58,7 +58,7 @@ This roadmap lays out v1 in six milestones. Each milestone has a focused deliver
   * `simian sut destroy --namespace chaos-arena-1` removes Online Boutique workloads; arena (and its RoleBinding) remain. `arena describe` confirms.
   * `simian sut destroy --namespace fresh-ns --with-arena` removes both.
 
-## Milestone 3 — Autonomous Mode
+## Milestone 3 — Autonomous Mode ✅ shipped
 
 * **Goal:** Simian can be pointed at a set of eligible namespaces and run a planning loop that drafts and executes attack plans under a budget. Plans are always emitted before execution.
 * **What ships:**

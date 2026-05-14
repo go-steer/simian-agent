@@ -27,6 +27,14 @@ const (
 	EventPageDispatched     = "page.dispatched"
 	EventPageFailed         = "page.failed"
 	EventAgentResponse      = "agent.response_received"
+
+	// M3 autonomous-mode cycle events.
+	EventCycleStarted     = "cycle.started"
+	EventCycleSkipped     = "cycle.skipped"
+	EventCycleCompleted   = "cycle.completed"
+	EventHealthGateFailed = "cycle.health_gate_failed"
+	EventLLMUnavailable   = "cycle.llm_unavailable"
+	EventStepSkipped      = "cycle.step_skipped"
 )
 
 // SLogAuditor is the default Auditor — it writes audit events to a slog.Logger

@@ -1,6 +1,6 @@
 // Package planner translates external inputs into FaultManifests / AttackPlans.
-// M1 implements only TranslateIntent (directed mode, plain-text → FaultManifest).
-// Autonomous-mode plan generation lands in M4.
+// translate.go is the directed-mode path (plain-text → FaultManifest);
+// generate.go is the autonomous-mode path (cluster context → AttackPlan).
 package planner
 
 import (

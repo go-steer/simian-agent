@@ -198,7 +198,7 @@ func (s *Server) handleSubmitFault(ctx context.Context, req mcpsdk.CallToolReque
 		}
 	}
 
-	cat, err := s.gatherCatalog(ctx)
+	cat, err := s.GatherCatalog(ctx)
 	if err != nil {
 		return mcpsdk.NewToolResultError(fmt.Sprintf("catalog: %v", err)), nil
 	}
@@ -276,7 +276,7 @@ func (s *Server) handleListActive(ctx context.Context, req mcpsdk.CallToolReques
 }
 
 func (s *Server) handleListCatalog(ctx context.Context, req mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-	cat, err := s.gatherCatalog(ctx)
+	cat, err := s.GatherCatalog(ctx)
 	if err != nil {
 		return mcpsdk.NewToolResultError(err.Error()), nil
 	}
@@ -305,7 +305,7 @@ func (s *Server) handleGetBaseline(_ context.Context, req mcpsdk.CallToolRequest
 	return mcpsdk.NewToolResultText(string(b)), nil
 }
 
-func (s *Server) gatherCatalog(ctx context.Context) ([]simian.CatalogEntry, error) {
+func (s *Server) GatherCatalog(ctx context.Context) ([]simian.CatalogEntry, error) {
 	var out []simian.CatalogEntry
 	for _, d := range s.Drivers {
 		entries, err := d.Catalog(ctx)

@@ -1,6 +1,6 @@
 # Simian Agent
 
-AI-native chaos engineering orchestrator for Kubernetes. **Milestone 1 shipped** (directed-mode end-to-end on Chaos Mesh). **Milestone 2** adds the provisioner — `simian arena` for namespace eligibility and RBAC, and `simian sut` for deploying / verifying the System Under Test.
+AI-native chaos engineering orchestrator for Kubernetes. **Milestone 1 shipped** (directed-mode end-to-end on Chaos Mesh). **Milestone 2** adds the provisioner — `simian arena` for namespace eligibility and RBAC, and `simian sut` for deploying / verifying the System Under Test. **Milestone 3** adds autonomous mode — the planning loop that drafts and executes attack plans against a baseline-checked arena.
 
 > **Design docs:** [`docs/requirements.md`](./docs/requirements.md) · [`docs/design.md`](./docs/design.md) · [`docs/roadmap.md`](./docs/roadmap.md)
 
@@ -19,6 +19,13 @@ AI-native chaos engineering orchestrator for Kubernetes. **Milestone 1 shipped**
 - **`simian sut destroy --namespace <arena> [--with-arena] [--force]`** — remove SUT resources; with `--with-arena`, also tear down the arena (RoleBinding + namespace).
 - **`get_baseline` MCP tool** — read-only access to the controller's cached baseline; returns `{exists: false}` until M3 unifies the deploy + serve processes (today the deploy CLI's cache is local to the CLI).
 
+### Autonomous mode (M3)
+- **`simian plan --namespace <arena> [--hypothesis "..."]`** — generate an `AttackPlan` against a real arena (informer-backed topology snapshot, cached baseline, fault catalog, recent-fault history) and emit it as JSON. Default `--dry-run=true` does not apply.
+- **`simian serve --autonomous --autonomous-namespace <arena> [--cycle-interval 5m]`** — run the planning loop. Each cycle: health gate (baseline cached, all baseline workloads Ready, no active simian-managed faults) → topology snapshot → `Generator.Generate` (Gemini structured output → `AttackPlan`) → bounded execution under per-cycle caps (`--max-faults-per-cycle`, `--max-severity-per-cycle`, the executor's existing `--duration-ceiling` / `--max-concurrent-faults` / `--min-cooldown`).
+- **DAG-aware execution** — plan steps with `depends_on` are layered topologically; within a layer, fan-out is capped by `MaxConcurrentFaults` (set to 1 to fully serialize). Steps exceeding the severity cap are skipped with audit reason `severity-cap`.
+- **LLM-down clean skip** — if the LLM is unreachable or returns schema-invalid output twice, the cycle emits `cycle.llm_unavailable` + `cycle.skipped` and applies nothing.
+- **New read-only MCP tools** — `get_topology(ns)`, `get_recent_faults(ns, limit)`, `establish_baseline(ns, sut)`, plus `get_metrics` (stub until a metrics provider is wired in a later milestone).
+
 ### Directed-mode chaos (M1)
 - **`simian serve`** — runs the Fault Executor + MCP server on port 8081 (default).
 - **`simian chaos --intent "..."`** — plain-text intent → Gemini translates to a `FaultManifest` → executor validates and applies.
@@ -30,7 +37,7 @@ AI-native chaos engineering orchestrator for Kubernetes. **Milestone 1 shipped**
 - **Pluggable LLM** — Gemini default (Vertex/ADC and API key both supported); stub provider for tests.
 - **Audit log** — structured events at every pipeline stage, JSON-formatted via `slog`.
 
-Five M1 components are implemented as stubs returning a clear "not implemented in M1" error: `simian plan` (M4), `simian provision deploy/cleanup` (M3), `simian evaluate` (M6).
+`simian evaluate` ships as a stub until M5 (scenario data export). The `simian provision` command is deprecated; use `simian arena` and `simian sut` directly.
 
 ## Quick start
 
@@ -58,6 +65,23 @@ bin/simian chaos --manifest examples/network-latency-manifest.json
 bin/simian sut destroy --namespace boutique-1 --with-arena
 ```
 
+### Autonomous-mode quick start (M3)
+
+```bash
+# Set up arena + SUT, capture baseline IN the controller process so the
+# autonomous loop can read it via get_baseline.
+bin/simian sut deploy --namespace boutique-1 --create-arena --use-controller
+
+# Dry-run plan: emit an AttackPlan as JSON, do NOT apply.
+bin/simian plan --namespace boutique-1 --hypothesis "frontend tolerates one cartservice pod restart"
+
+# Run the autonomous loop (every 90s; serializes at MaxConcurrentFaults=1).
+bin/simian serve --autonomous --autonomous-namespace boutique-1 \
+                 --cycle-interval 90s \
+                 --max-faults-per-cycle 2 \
+                 --max-severity-per-cycle namespace
+```
+
 For more granular control, `simian arena create/destroy/describe` and
 `simian sut list/deploy/destroy` can be invoked independently.
 
@@ -65,20 +89,22 @@ For more granular control, `simian arena create/destroy/describe` and
 
 ```
 cmd/simian/        single binary, cobra subcommands (serve, chaos, arena, sut, plan, evaluate)
-pkg/simian/        core types and interfaces (FaultManifest, ChaosDriver, LLMProvider, …)
+pkg/simian/        core types and interfaces (FaultManifest, AttackPlan, ChaosDriver, LLMProvider, …)
 pkg/arena/         arena CRUD (Manager) + annotation-driven eligibility checker (M2 Part A)
 pkg/sut/           SUT lifecycle (Manager: apply manifests, wait for Ready, capture Baseline) (M2 Part B)
   onlineboutique/  built-in Online Boutique SUT (embedded manifests from upstream v0.10.2)
-pkg/executor/      Fault Executor — single chokepoint for all fault application
+pkg/topology/      informer-backed read-only topology Discoverer (M3) — workloads, services, dep graph
+pkg/executor/      Fault Executor — single chokepoint for all fault application + recent-faults ring (M3)
 pkg/driver/
   chaosmesh/       generic dynamic-CRD driver for the full chaos-mesh.org/v1alpha1 catalog
   litmus/          (M6 placeholder)
 pkg/llm/
   gemini/          Vertex AI + Gemini Developer API
   stub/            deterministic test double
-pkg/planner/       intent translator (LLM → FaultManifest)
-pkg/mcp/           MCP server with directed-mode tools
-pkg/lease/         in-memory ActiveFault registry + duration-based reaper
+pkg/planner/       LLM bridge: translate.go (intent → FaultManifest), generate.go (context → AttackPlan, M3)
+pkg/loop/          autonomous-mode planning loop + health gate (M3)
+pkg/mcp/           MCP server with directed-mode + autonomous-mode tools
+pkg/lease/         in-memory ActiveFault registry + duration-based reaper (Reaper.OnExpire feeds M3 history)
 pkg/audit/         structured event logger
 pkg/catalog/       blast-radius tier classification (static map + per-spec re-classification)
 internal/testutil/ fake driver + fake auditor for tests
@@ -116,9 +142,9 @@ These bit us during M1 verification. Documenting so the next person doesn't lose
 
 ## What's *not* shipped yet (deferred per `docs/roadmap.md`)
 
-- Autonomous mode, Plan Generator, AttackPlan flow, budget enforcement (M3) — also unifies SUT deploy + serve into one process so `get_baseline` returns real data
 - Red Phone outbound bridge (M4)
 - Scenario data export, external harness driver (M5)
 - Litmus driver, ChaosHub experiment catalog, probes, workflows (M6)
-- Crash-recovery via `SimianLease` CR (M1 uses in-memory registry; orphan reaping on restart deferred)
-- Full CRD OpenAPI schema validation (M1 does basic structural checks; full validation lands once catalog discovery surfaces schemas)
+- Crash-recovery via `SimianLease` CR (in-memory registry today; orphan reaping on restart deferred)
+- Full CRD OpenAPI schema validation (basic structural checks today; full validation lands once catalog discovery surfaces schemas)
+- Live metrics provider for `get_metrics` (M3 ships a stub; Prometheus / Cloud Monitoring wiring deferred)

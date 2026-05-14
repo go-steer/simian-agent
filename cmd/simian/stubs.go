@@ -6,18 +6,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newPlanCmd is a placeholder for the autonomous-mode dry-run subcommand
-// that lands in M3 (autonomous mode).
-func newPlanCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "plan",
-		Short: "Run an autonomous-mode planning cycle in dry-run mode (M3)",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return fmt.Errorf("simian plan: not implemented (delivered in M3 — autonomous mode)")
-		},
-	}
-}
-
 // newProvisionCmd is the legacy single-command entry point. It now redirects
 // to the split 'arena' / 'sut' commands so existing scripts get a clear hint.
 func newProvisionCmd() *cobra.Command {

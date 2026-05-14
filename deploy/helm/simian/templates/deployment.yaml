@@ -35,6 +35,18 @@ spec:
             {{- range .Values.eligibleNamespaces }}
             - --eligible-namespace={{ . }}
             {{- end }}
+            {{- if .Values.autonomous.enabled }}
+            - --autonomous
+            - --cycle-interval={{ .Values.autonomous.cycleInterval }}
+            - --max-faults-per-cycle={{ .Values.autonomous.maxFaultsPerCycle }}
+            - --max-severity-per-cycle={{ .Values.autonomous.maxSeverityPerCycle }}
+            {{- if .Values.autonomous.hypothesisHint }}
+            - --hypothesis-hint={{ .Values.autonomous.hypothesisHint | quote }}
+            {{- end }}
+            {{- range .Values.autonomous.namespaces }}
+            - --autonomous-namespace={{ . }}
+            {{- end }}
+            {{- end }}
           env:
             {{- if .Values.llm.vertex.enabled }}
             - name: GOOGLE_GENAI_USE_VERTEXAI
