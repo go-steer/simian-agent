@@ -53,13 +53,15 @@ func newSutListCmd() *cobra.Command {
 
 func newSutDeployCmd() *cobra.Command {
 	var (
-		kubeconfig   string
-		namespace    string
-		sutName      string
-		createArena  bool
-		chaosSAName  string
-		chaosSANS    string
-		annotations  []string
+		kubeconfig    string
+		namespace     string
+		sutName       string
+		createArena   bool
+		chaosSAName   string
+		chaosSANS     string
+		annotations   []string
+		useController bool
+		mcpURL        string
 	)
 	cmd := &cobra.Command{
 		Use:   "deploy",
@@ -117,6 +119,22 @@ func newSutDeployCmd() *cobra.Command {
 				}
 			}
 
+			if useController {
+				fmt.Printf("deploying SUT %q into %q via controller (%s)...\n", sutName, namespace, mcpURL)
+				cli, err := newMCPClient(ctx, mcpURL)
+				if err != nil {
+					return fmt.Errorf("connect to controller: %w", err)
+				}
+				defer func() { _ = cli.Close() }()
+				if err := callTool(ctx, cli, "establish_baseline", map[string]any{
+					"namespace": namespace,
+					"sut":       sutName,
+				}); err != nil {
+					return err
+				}
+				return nil
+			}
+
 			cached := memory.NewMemCacheClient(disco)
 			mgr := sut.NewManager(clientset, dyn, cached, sut.Default)
 			fmt.Printf("deploying SUT %q into %q...\n", sutName, namespace)
@@ -139,6 +157,8 @@ func newSutDeployCmd() *cobra.Command {
 	cmd.Flags().StringVar(&chaosSAName, "chaos-sa", "simian-controller", "Chaos controller ServiceAccount (used only with --create-arena)")
 	cmd.Flags().StringVar(&chaosSANS, "chaos-sa-namespace", "simian-system", "Chaos controller SA namespace (used only with --create-arena)")
 	cmd.Flags().StringArrayVar(&annotations, "annotation", nil, "Extra namespace annotation key=value (used only with --create-arena)")
+	cmd.Flags().BoolVar(&useController, "use-controller", false, "Trigger the deploy + baseline capture inside a running 'simian serve' via the establish_baseline MCP tool, so the controller's get_baseline cache is populated. Requires --mcp-url to point at the running controller.")
+	cmd.Flags().StringVar(&mcpURL, "mcp-url", "http://localhost:8081/sse", "Simian MCP/SSE endpoint URL (only used with --use-controller)")
 	return cmd
 }
 

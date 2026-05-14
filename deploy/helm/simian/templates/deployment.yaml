@@ -30,6 +30,8 @@ spec:
             - --llm-model={{ .Values.llm.model }}
             {{- end }}
             - --duration-ceiling={{ .Values.executor.durationCeiling }}
+            - --recent-faults-capacity={{ .Values.executor.recentFaultsCapacity }}
+            - --topology-resync={{ .Values.topology.resync }}
             {{- range .Values.eligibleNamespaces }}
             - --eligible-namespace={{ . }}
             {{- end }}

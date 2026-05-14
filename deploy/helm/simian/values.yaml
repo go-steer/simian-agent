@@ -44,6 +44,20 @@ executor:
     - node
   maxConcurrentFaults: 0 # 0 = no cap
   minCooldown: 0s        # per-namespace cooldown between consecutive faults
+  recentFaultsCapacity: 100 # bounded ring backing get_recent_faults MCP tool
+
+# M3: read-only topology discovery for the autonomous-mode planner.
+# Powers the get_topology MCP tool and (in PR2) the plan generator.
+topology:
+  resync: 30s            # informer resync interval
+
+# M3: SUT lifecycle inside the controller. When enabled, the controller's
+# chaos-SA Role gains the verbs needed for the establish_baseline MCP tool
+# to apply SUT manifests into eligible namespaces. Operators who keep
+# 'simian sut deploy' running out-of-cluster (the default M2 path) can
+# leave this false.
+sutInController:
+  enabled: false
 
 # MCP server.
 mcp:
