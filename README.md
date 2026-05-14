@@ -1,6 +1,6 @@
 # Simian Agent
 
-AI-native chaos engineering orchestrator for Kubernetes. **Milestone 1 shipped** (directed-mode end-to-end on Chaos Mesh). **Milestone 2 Part A** adds arena management — the `simian arena` CLI plus a `ValidatingAdmissionPolicy` defense-in-depth backstop on the provisioner SA.
+AI-native chaos engineering orchestrator for Kubernetes. **Milestone 1 shipped** (directed-mode end-to-end on Chaos Mesh). **Milestone 2** adds the provisioner — `simian arena` for namespace eligibility and RBAC, and `simian sut` for deploying / verifying the System Under Test.
 
 > **Design docs:** [`docs/requirements.md`](./docs/requirements.md) · [`docs/design.md`](./docs/design.md) · [`docs/roadmap.md`](./docs/roadmap.md)
 
@@ -12,6 +12,12 @@ AI-native chaos engineering orchestrator for Kubernetes. **Milestone 1 shipped**
 - **`simian arena describe <ns>`** — eligibility annotation, exclusion list, RoleBinding state, active-fault count.
 - **`ValidatingAdmissionPolicy` backstop** — even a buggy or compromised `simian-provisioner` SA cannot create non-eligible namespaces or grant the chaos SA into namespaces that aren't arenas.
 - **Annotation-driven eligibility** in `simian serve` — when `--eligible-namespace` is omitted, the controller honors `simian.chaos/eligible="true"` live (no restart needed after `simian arena create`).
+
+### SUT lifecycle (M2 Part B)
+- **`simian sut list`** — show built-in SUTs from the registry. Online Boutique ships by default; the registry is pluggable for future SUTs.
+- **`simian sut deploy --namespace <arena> [--sut online-boutique] [--create-arena]`** — apply the SUT manifests via server-side apply, wait for declared workloads to reach Ready, hold for the configured stability window, capture and cache the `Baseline`. With `--create-arena`, composes `arena create` first.
+- **`simian sut destroy --namespace <arena> [--with-arena] [--force]`** — remove SUT resources; with `--with-arena`, also tear down the arena (RoleBinding + namespace).
+- **`get_baseline` MCP tool** — read-only access to the controller's cached baseline; returns `{exists: false}` until M3 unifies the deploy + serve processes (today the deploy CLI's cache is local to the CLI).
 
 ### Directed-mode chaos (M1)
 - **`simian serve`** — runs the Fault Executor + MCP server on port 8081 (default).
@@ -32,25 +38,28 @@ Five M1 components are implemented as stubs returning a clear "not implemented i
 # Build and test
 make all
 
-# Mark a namespace as a chaos arena (creates ns + chaos-SA RoleBinding).
-bin/simian arena create chaos-arena-1
-bin/simian arena describe chaos-arena-1
+# One-shot: create the arena, deploy Online Boutique, capture baseline.
+bin/simian sut deploy --namespace boutique-1 --create-arena
 
 # Start the controller. With no --eligible-namespace flag, it honors the
 # annotation set by `arena create` (live, no restart needed).
 source ~/scripts/gemini.sh
 bin/simian serve
 
-# In another shell — LLM-translated path
-bin/simian chaos --intent "kill one paymentservice pod in chaos-arena-1 for 30 seconds" \
-                 --namespace chaos-arena-1
+# In another shell — LLM-translated path against the freshly-deployed arena.
+bin/simian chaos --intent "kill one paymentservice pod in boutique-1 for 30 seconds" \
+                 --namespace boutique-1
 
 # Deterministic-control path
 bin/simian chaos --manifest examples/network-latency-manifest.json
 
-# Tear down the arena when done. Refuses if active faults are still present.
-bin/simian arena destroy chaos-arena-1
+# Tear down both layers (refuses if simian-managed faults are still leased;
+# pass --force to override after clearing them via 'simian chaos --clear').
+bin/simian sut destroy --namespace boutique-1 --with-arena
 ```
+
+For more granular control, `simian arena create/destroy/describe` and
+`simian sut list/deploy/destroy` can be invoked independently.
 
 ## Project layout
 
@@ -58,6 +67,8 @@ bin/simian arena destroy chaos-arena-1
 cmd/simian/        single binary, cobra subcommands (serve, chaos, arena, sut, plan, evaluate)
 pkg/simian/        core types and interfaces (FaultManifest, ChaosDriver, LLMProvider, …)
 pkg/arena/         arena CRUD (Manager) + annotation-driven eligibility checker (M2 Part A)
+pkg/sut/           SUT lifecycle (Manager: apply manifests, wait for Ready, capture Baseline) (M2 Part B)
+  onlineboutique/  built-in Online Boutique SUT (embedded manifests from upstream v0.10.2)
 pkg/executor/      Fault Executor — single chokepoint for all fault application
 pkg/driver/
   chaosmesh/       generic dynamic-CRD driver for the full chaos-mesh.org/v1alpha1 catalog
@@ -105,8 +116,7 @@ These bit us during M1 verification. Documenting so the next person doesn't lose
 
 ## What's *not* shipped yet (deferred per `docs/roadmap.md`)
 
-- SUT lifecycle: deploy / verify / teardown of a target workload + baseline (M2 Part B)
-- Autonomous mode, Plan Generator, AttackPlan flow, budget enforcement (M3)
+- Autonomous mode, Plan Generator, AttackPlan flow, budget enforcement (M3) — also unifies SUT deploy + serve into one process so `get_baseline` returns real data
 - Red Phone outbound bridge (M4)
 - Scenario data export, external harness driver (M5)
 - Litmus driver, ChaosHub experiment catalog, probes, workflows (M6)

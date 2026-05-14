@@ -28,6 +28,7 @@ import (
 	"github.com/go-steer/simian-agent/pkg/mcp"
 	"github.com/go-steer/simian-agent/pkg/planner"
 	"github.com/go-steer/simian-agent/pkg/simian"
+	"github.com/go-steer/simian-agent/pkg/sut"
 )
 
 func newServeCmd() *cobra.Command {
@@ -107,7 +108,14 @@ func newServeCmd() *cobra.Command {
 				}
 			}
 
-			srv := mcp.New(exec, drivers, translator, version)
+			// SUT manager owns the baseline cache that the MCP get_baseline
+			// tool exposes. Deploys still happen out-of-process via
+			// 'simian sut deploy'; until M3 wires them together, the
+			// in-controller cache is empty and get_baseline returns
+			// {exists:false}. That is the correct answer for this controller.
+			sutMgr := sut.NewManager(clientset, dyn, cached, sut.Default)
+
+			srv := mcp.New(exec, drivers, translator, sutMgr, version)
 
 			if mcpStdio {
 				logger.Info("simian serve: MCP stdio mode")

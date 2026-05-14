@@ -16,24 +16,40 @@ import (
 
 	"github.com/go-steer/simian-agent/pkg/planner"
 	"github.com/go-steer/simian-agent/pkg/simian"
+	"github.com/go-steer/simian-agent/pkg/sut"
 )
+
+// BaselineLookup is the read-only interface the MCP server uses to expose
+// SUT baselines via get_baseline. *sut.Manager satisfies it. nil is
+// permitted — when nil, get_baseline returns {exists: false} for every
+// namespace (useful for installations without M2 Part B wired in).
+type BaselineLookup interface {
+	Baseline(namespace string) (sut.Baseline, bool)
+}
 
 // Server bundles the Simian dependencies the tools need.
 type Server struct {
 	Executor   simian.FaultExecutor
 	Drivers    map[simian.Engine]simian.ChaosDriver
 	Translator *planner.Translator
+	Baselines  BaselineLookup // optional
 	Version    string
 
 	mcpServer *server.MCPServer
 }
 
-// New returns a Server with all M1 tools registered.
-func New(exec simian.FaultExecutor, drivers map[simian.Engine]simian.ChaosDriver, translator *planner.Translator, version string) *Server {
+// New returns a Server with all currently-shipped tools registered.
+func New(exec simian.FaultExecutor, drivers map[simian.Engine]simian.ChaosDriver, translator *planner.Translator, baselines BaselineLookup, version string) *Server {
 	if version == "" {
 		version = "0.1.0"
 	}
-	s := &Server{Executor: exec, Drivers: drivers, Translator: translator, Version: version}
+	s := &Server{
+		Executor:   exec,
+		Drivers:    drivers,
+		Translator: translator,
+		Baselines:  baselines,
+		Version:    version,
+	}
 	s.mcpServer = server.NewMCPServer("simian-agent", version,
 		server.WithToolCapabilities(true),
 	)
@@ -94,6 +110,11 @@ func (s *Server) registerTools() {
 	s.mcpServer.AddTool(mcpsdk.NewTool("list_fault_catalog",
 		mcpsdk.WithDescription("List all fault types installed in the cluster and permitted by current policy."),
 	), s.handleListCatalog)
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("get_baseline",
+		mcpsdk.WithDescription("Return the cached SUT baseline for a namespace. The baseline is captured by 'simian sut deploy' once all expected workloads are Ready and have held steady for the configured stability window. Returns {exists: false} if no SUT has been deployed there yet."),
+		mcpsdk.WithString("namespace", mcpsdk.Required()),
+	), s.handleGetBaseline)
 }
 
 func (s *Server) handleSubmitFault(ctx context.Context, req mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
@@ -194,6 +215,27 @@ func (s *Server) handleListCatalog(ctx context.Context, req mcpsdk.CallToolReque
 		return mcpsdk.NewToolResultError(err.Error()), nil
 	}
 	b, _ := json.Marshal(cat)
+	return mcpsdk.NewToolResultText(string(b)), nil
+}
+
+func (s *Server) handleGetBaseline(_ context.Context, req mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	args := req.GetArguments()
+	ns, _ := args["namespace"].(string)
+	if ns == "" {
+		return mcpsdk.NewToolResultError("namespace is required"), nil
+	}
+	if s.Baselines == nil {
+		return mcpsdk.NewToolResultText(`{"exists":false,"reason":"baseline subsystem not enabled in this controller"}`), nil
+	}
+	bl, ok := s.Baselines.Baseline(ns)
+	if !ok {
+		return mcpsdk.NewToolResultText(fmt.Sprintf(`{"exists":false,"namespace":%q}`, ns)), nil
+	}
+	out := struct {
+		Exists   bool         `json:"exists"`
+		Baseline sut.Baseline `json:"baseline"`
+	}{Exists: true, Baseline: bl}
+	b, _ := json.Marshal(out)
 	return mcpsdk.NewToolResultText(string(b)), nil
 }
 
