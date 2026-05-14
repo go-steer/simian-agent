@@ -23,14 +23,26 @@ type Executor struct {
 	registry *lease.Registry
 	auditor  simian.Auditor
 	elig     EligibilityChecker
+	history  *History // optional; nil disables get_recent_faults backing
 
 	mu             sync.Mutex
 	lastApplyByNS  map[string]time.Time
 }
 
+// Option configures an Executor at construction time.
+type Option func(*Executor)
+
+// WithHistory wires a recent-faults history buffer into the Executor. Apply
+// pushes a RecentFault on success; Clear updates ClearedAt with reason
+// "explicit-clear". Reaper-driven clears must call History.UpdateCleared
+// directly (wired in cmd/simian/serve.go via lease.Reaper.OnExpire).
+func WithHistory(h *History) Option {
+	return func(e *Executor) { e.history = h }
+}
+
 // New constructs an Executor.
-func New(cfg Config, drivers map[simian.Engine]simian.ChaosDriver, registry *lease.Registry, auditor simian.Auditor, elig EligibilityChecker) *Executor {
-	return &Executor{
+func New(cfg Config, drivers map[simian.Engine]simian.ChaosDriver, registry *lease.Registry, auditor simian.Auditor, elig EligibilityChecker, opts ...Option) *Executor {
+	e := &Executor{
 		cfg:           cfg,
 		drivers:       drivers,
 		registry:      registry,
@@ -38,7 +50,25 @@ func New(cfg Config, drivers map[simian.Engine]simian.ChaosDriver, registry *lea
 		elig:          elig,
 		lastApplyByNS: map[string]time.Time{},
 	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
 }
+
+// Recent returns a slice of recently-handled faults, optionally filtered by
+// namespace. Returns nil if no history buffer is wired.
+func (e *Executor) Recent(namespace string, limit int) []RecentFault {
+	if e.history == nil {
+		return nil
+	}
+	return e.history.List(namespace, limit)
+}
+
+// History returns the underlying buffer (may be nil). Exposed so the reaper
+// callback in serve.go can update entries on deadline-driven clears without
+// importing the executor's internals.
+func (e *Executor) History() *History { return e.history }
 
 // Apply runs the full executor pipeline.
 func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, error) {
@@ -95,9 +125,17 @@ func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, e
 		return "", err
 	}
 
-	deadline := time.Now().Add(m.Duration)
+	now := time.Now()
+	deadline := now.Add(m.Duration)
 	e.registry.Register(m.UID, engineUID, m, deadline)
 	e.recordApply(m)
+	if e.history != nil {
+		e.history.Push(RecentFault{
+			FaultUID:  m.UID,
+			Manifest:  m,
+			AppliedAt: now.UTC(),
+		})
+	}
 
 	e.auditor.Emit(ctx, simian.AuditEvent{
 		Event:    audit.EventDriverApplied,
@@ -133,6 +171,9 @@ func (e *Executor) Clear(ctx context.Context, faultUID string) error {
 		return err
 	}
 	_ = e.registry.Forget(faultUID)
+	if e.history != nil {
+		e.history.UpdateCleared(faultUID, time.Now().UTC(), "explicit-clear")
+	}
 	e.auditor.Emit(ctx, simian.AuditEvent{
 		Event:    audit.EventLeaseCleared,
 		FaultUID: faultUID,

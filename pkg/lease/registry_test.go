@@ -1,6 +1,7 @@
 package lease
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -56,4 +57,67 @@ func TestRegistryExpired(t *testing.T) {
 	if exp[0].FaultUID != "expired" {
 		t.Fatalf("Expired[0]=%s, want expired", exp[0].FaultUID)
 	}
+}
+
+// fakeDriver / fakeAuditor are local stubs to avoid an internal/testutil
+// import cycle (testutil already depends on pkg/simian, lease/Reaper takes
+// the same interfaces).
+type fakeDriver struct{ cleared []string }
+
+func (d *fakeDriver) Apply(context.Context, simian.FaultManifest) (string, error) {
+	return "", nil
+}
+func (d *fakeDriver) Clear(_ context.Context, engineUID string) error {
+	d.cleared = append(d.cleared, engineUID)
+	return nil
+}
+func (d *fakeDriver) Catalog(context.Context) ([]simian.CatalogEntry, error) { return nil, nil }
+func (d *fakeDriver) Engine() simian.Engine                                  { return simian.EngineChaosMesh }
+
+type fakeAuditor struct{ events []simian.AuditEvent }
+
+func (a *fakeAuditor) Emit(_ context.Context, e simian.AuditEvent) { a.events = append(a.events, e) }
+
+func TestReaperOnExpireFiresWithDeadlineReason(t *testing.T) {
+	r := NewRegistry("holder-1")
+	past := time.Now().Add(-1 * time.Minute)
+	r.Register("f-expired", "engine-1", newManifest("f-expired", "ns-a", "wf"), past)
+
+	driver := &fakeDriver{}
+	auditor := &fakeAuditor{}
+	var seenUID, seenReason string
+	rp := &Reaper{
+		Registry: r,
+		Driver:   driver,
+		Interval: time.Second,
+		Auditor:  auditor,
+		OnExpire: func(af simian.ActiveFault, reason string) {
+			seenUID = af.FaultUID
+			seenReason = reason
+		},
+	}
+	rp.Sweep(context.Background())
+
+	if seenUID != "f-expired" || seenReason != "deadline-reached" {
+		t.Errorf("OnExpire(uid=%q, reason=%q), want (f-expired, deadline-reached)", seenUID, seenReason)
+	}
+	if len(driver.cleared) != 1 {
+		t.Errorf("driver.cleared=%d, want 1", len(driver.cleared))
+	}
+	if _, ok := r.Get("f-expired"); ok {
+		t.Errorf("expected fault forgotten after sweep")
+	}
+}
+
+func TestReaperOnExpireNilIsSafe(t *testing.T) {
+	r := NewRegistry("holder-1")
+	r.Register("f-1", "e1", newManifest("f-1", "ns", "x"), time.Now().Add(-time.Second))
+	rp := &Reaper{
+		Registry: r,
+		Driver:   &fakeDriver{},
+		Interval: time.Second,
+		Auditor:  &fakeAuditor{},
+		// OnExpire intentionally nil
+	}
+	rp.Sweep(context.Background()) // must not panic
 }

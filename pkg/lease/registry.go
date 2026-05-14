@@ -124,6 +124,13 @@ type Reaper struct {
 	Driver   simian.ChaosDriver
 	Interval time.Duration
 	Auditor  simian.Auditor
+
+	// OnExpire, if set, fires after a successful driver-clear of an
+	// expired fault, before the audit "lease.expired" event. Used by the
+	// autonomous-mode controller to push the cleared fault into the
+	// executor's recent-faults history. Reason is always "deadline-reached"
+	// from the reaper.
+	OnExpire func(af simian.ActiveFault, reason string)
 }
 
 // Run blocks until ctx is done, calling Sweep at every tick.
@@ -155,6 +162,9 @@ func (rp *Reaper) Sweep(ctx context.Context) {
 			continue
 		}
 		_ = rp.Registry.Forget(af.FaultUID)
+		if rp.OnExpire != nil {
+			rp.OnExpire(af, "deadline-reached")
+		}
 		rp.Auditor.Emit(ctx, simian.AuditEvent{
 			Event:    "lease.expired",
 			FaultUID: af.FaultUID,

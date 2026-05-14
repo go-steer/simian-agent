@@ -29,20 +29,23 @@ import (
 	"github.com/go-steer/simian-agent/pkg/planner"
 	"github.com/go-steer/simian-agent/pkg/simian"
 	"github.com/go-steer/simian-agent/pkg/sut"
+	"github.com/go-steer/simian-agent/pkg/topology"
 )
 
 func newServeCmd() *cobra.Command {
 	var (
-		kubeconfig        string
-		mcpAddr           string
-		mcpStdio          bool
-		llmProviderID     string
-		llmModel          string
-		eligibleNS        []string
-		durationCap       time.Duration
-		reapInterval      time.Duration
-		holderID          string
-		debugLLMPayloads  bool
+		kubeconfig            string
+		mcpAddr               string
+		mcpStdio              bool
+		llmProviderID         string
+		llmModel              string
+		eligibleNS            []string
+		durationCap           time.Duration
+		reapInterval          time.Duration
+		holderID              string
+		debugLLMPayloads      bool
+		recentFaultsCapacity  int
+		topologyResync        time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -84,15 +87,26 @@ func newServeCmd() *cobra.Command {
 				execCfg.DurationCeiling = durationCap
 			}
 			registry := lease.NewRegistry(holderID)
-			exec := executor.New(execCfg, drivers, registry, auditor, elig)
+			history := executor.NewHistory(recentFaultsCapacity)
+			exec := executor.New(execCfg, drivers, registry, auditor, elig, executor.WithHistory(history))
 
 			reaper := &lease.Reaper{
 				Registry: registry,
 				Driver:   cmDriver,
 				Interval: reapInterval,
 				Auditor:  auditor,
+				OnExpire: func(af simian.ActiveFault, reason string) {
+					history.UpdateCleared(af.FaultUID, time.Now().UTC(), reason)
+				},
 			}
 			go reaper.Run(ctx)
+
+			disco2 := topology.New(clientset, topologyResync)
+			go func() {
+				if err := disco2.Run(ctx); err != nil {
+					logger.Warn("topology: discoverer exited", slog.String("err", err.Error()))
+				}
+			}()
 
 			llm, err := buildLLM(ctx, llmProviderID, llmModel)
 			if err != nil {
@@ -108,14 +122,17 @@ func newServeCmd() *cobra.Command {
 				}
 			}
 
-			// SUT manager owns the baseline cache that the MCP get_baseline
-			// tool exposes. Deploys still happen out-of-process via
-			// 'simian sut deploy'; until M3 wires them together, the
-			// in-controller cache is empty and get_baseline returns
-			// {exists:false}. That is the correct answer for this controller.
+			// SUT manager owns the baseline cache and is the BaselineEstablisher
+			// behind establish_baseline (M3). Out-of-process 'simian sut deploy'
+			// callers wanting the controller to know about a baseline pass
+			// --use-controller, which proxies through the new MCP tool.
 			sutMgr := sut.NewManager(clientset, dyn, cached, sut.Default)
 
-			srv := mcp.New(exec, drivers, translator, sutMgr, version)
+			srv := mcp.New(exec, drivers, translator, sutMgr, version,
+				mcp.WithTopology(disco2),
+				mcp.WithRecents(exec),
+				mcp.WithBaselineEstablisher(sutMgr),
+			)
 
 			if mcpStdio {
 				logger.Info("simian serve: MCP stdio mode")
@@ -150,6 +167,8 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&reapInterval, "reap-interval", 30*time.Second, "Lease reaper sweep interval")
 	cmd.Flags().StringVar(&holderID, "holder-id", os.Getenv("HOSTNAME"), "Holder ID recorded on leases (defaults to HOSTNAME)")
 	cmd.Flags().BoolVar(&debugLLMPayloads, "debug-llm-payloads", false, "Log raw LLM responses (debug only; do not enable in production — see design.md §12.2)")
+	cmd.Flags().IntVar(&recentFaultsCapacity, "recent-faults-capacity", executor.DefaultHistoryCapacity, "Bounded ring size backing the get_recent_faults MCP tool")
+	cmd.Flags().DurationVar(&topologyResync, "topology-resync", 30*time.Second, "Topology informer resync interval")
 	return cmd
 }
 

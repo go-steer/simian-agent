@@ -148,3 +148,63 @@ func TestClearForgetsAndCallsDriver(t *testing.T) {
 		t.Errorf("ListActive=%d, want 0 after clear", got)
 	}
 }
+
+func newTestExecutorWithHistory(t *testing.T, cfg Config, eligible map[string]bool, exclusions map[string][]string) (*Executor, *testutil.FakeDriver, *History) {
+	t.Helper()
+	driver := &testutil.FakeDriver{EngineName: simian.EngineChaosMesh}
+	registry := lease.NewRegistry("test-holder")
+	auditor := &testutil.FakeAuditor{}
+	elig := &StaticEligibility{Eligible: eligible, Exclusions: exclusions}
+	hist := NewHistory(0)
+	exec := New(cfg, map[simian.Engine]simian.ChaosDriver{simian.EngineChaosMesh: driver}, registry, auditor, elig, WithHistory(hist))
+	return exec, driver, hist
+}
+
+func TestApplyPushesHistoryEntry(t *testing.T) {
+	exec, _, hist := newTestExecutorWithHistory(t, DefaultConfig(), map[string]bool{"online-boutique": true}, nil)
+	uid, err := exec.Apply(context.Background(), goodManifest())
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	got := hist.List("", 0)
+	if len(got) != 1 {
+		t.Fatalf("History len=%d, want 1", len(got))
+	}
+	if got[0].FaultUID != uid {
+		t.Errorf("history UID=%q, want %q", got[0].FaultUID, uid)
+	}
+	if !got[0].ClearedAt.IsZero() {
+		t.Errorf("expected ClearedAt zero on fresh entry, got %v", got[0].ClearedAt)
+	}
+	if got := exec.Recent("", 0); len(got) != 1 {
+		t.Errorf("Executor.Recent len=%d, want 1", len(got))
+	}
+}
+
+func TestClearUpdatesHistory(t *testing.T) {
+	exec, _, hist := newTestExecutorWithHistory(t, DefaultConfig(), map[string]bool{"online-boutique": true}, nil)
+	uid, err := exec.Apply(context.Background(), goodManifest())
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if err := exec.Clear(context.Background(), uid); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+	got := hist.List("", 0)
+	if len(got) != 1 {
+		t.Fatalf("History len=%d, want 1", len(got))
+	}
+	if got[0].ClearReason != "explicit-clear" {
+		t.Errorf("ClearReason=%q, want explicit-clear", got[0].ClearReason)
+	}
+	if got[0].ClearedAt.IsZero() {
+		t.Errorf("ClearedAt should be set after Clear")
+	}
+}
+
+func TestRecentReturnsNilWithoutHistory(t *testing.T) {
+	exec, _, _ := newTestExecutor(t, DefaultConfig(), map[string]bool{"online-boutique": true}, nil)
+	if got := exec.Recent("", 0); got != nil {
+		t.Errorf("Recent without history wired = %v, want nil", got)
+	}
+}
