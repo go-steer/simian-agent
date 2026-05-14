@@ -89,9 +89,13 @@ This roadmap lays out v1 in six milestones. Each milestone has a focused deliver
   * Mock agent posts a status update back; it appears in the audit log with timestamps.
   * Take the webhook endpoint offline; dispatch fails after backoff, the failure is logged + counted in metrics, but the fault remains applied (`R-PAGE-04`).
 
-## Milestone 5 — Scenario Data Export & External Harness Integration
+## Milestone 5 — Scenario Data Export & Evaluation Substrate
 
-* **Goal:** Expose the structured inputs/outputs of each chaos cycle so an external evaluation harness can grade SRE agent behavior. Simian does **not** grade.
+* **Goal:** Ship two halves of the evaluation regime: (A) the data contract and sinks an external harness uses to grade SRE agent behavior, and (B) the synthetic-cluster substrate (vCluster + KWOK) that lets evaluations run cheaply at scale and in isolation. Simian still does **not** grade.
+* **Re-scope note (2026-05-14):** Originally scoped to just the export contract. Added the vCluster + KWOK substrate after observing that KWOK pods don't actually break — but the *signal* that they "broke" is exactly what an SRE-agent-under-test responds to, and vCluster's per-arena boundary lets multiple evaluations run in parallel without real-cluster contention. Ships in two PRs that compose: data contract first, virtual-arena substrate on top.
+
+### Part A — Scenario record export (PR 1)
+
 * **What ships:**
   * **`ScenarioRecord` Go type** + JSON schema published as `docs/scenario-record-schema.json` with a `SchemaVersion` field.
   * **Sinks** — `filesystem`, `gcs`, `webhook`, selectable and combinable via Helm values.
@@ -103,6 +107,23 @@ This roadmap lays out v1 in six milestones. Each milestone has a focused deliver
   * Stream the same cycle in real time via `stream_scenario_events`; verify each event arrives at its expected lifecycle phase.
   * Run `simian evaluate --records ./out --harness ./external-harness.sh`; the harness consumes the records, emits its own scoring artifact, and the exit code propagates.
   * Bump `SchemaVersion` to a deliberately-incompatible value; reference consumer fails closed with a clear version-mismatch error.
+
+### Part B — Virtual-arena substrate (PR 2)
+
+* **Composes Part A.** The `ScenarioRecord` gains an `Environment` block fingerprinting the arena (virtual flag, pod backend, KWOK node count if applicable) so downstream graders can interpret the absence of kernel-level signals correctly and normalize across runs.
+* **Design boundary:** Simian does NOT take over vCluster lifecycle as a peer to its own arena CRUD. It shells out to the upstream `vcluster` CLI / Helm chart and *recognizes + exploits* the boundary. Pure-runtime use (point Simian at any vCluster's kubeconfig and it just works) remains supported with no agent code path needed.
+* **What ships:**
+  * **`pkg/vcluster`** — thin wrapper around `vcluster create/delete`. `simian arena create --virtual [--with-kwok] [--kwok-nodes N]` provisions a vCluster and optionally installs KWOK + a configurable fake-node count inside it; symmetric `--virtual` on `arena destroy` tears it down.
+  * **`TargetTopology.Environment`** — new fields `Virtual bool`, `Backend string` (`real` | `kwok` | `kwok-in-vcluster`), `KWOKNodes int`, surfaced via `get_topology` and the planner system prompt so the LLM knows when scale plans are cheap and when kernel-level signals won't be observable.
+  * **Virtual-aware tier policy** — new executor config `PermitHigherTiersWhenVirtual bool`. When set, a virtual arena's `PermittedTiers` may include `node` (and optionally `external`) without operator hand-wringing about real-cluster blast radius. The agent enforces the gate; the LLM is told *why* a higher tier is permitted here when it isn't elsewhere.
+  * **`ScenarioRecord.Environment`** — the fingerprint above propagated into the exported record so harnesses can bucket runs by substrate.
+  * **Reference KWOK SUT** — a synthetic SUT in `pkg/sut/kwok-microservice/` emulating a ~50-pod microservice topology with declared dependencies. Used by the Part A reference harness as a deterministic baseline that exercises Part B end-to-end without real workload cost.
+* **Acceptance demo:**
+  * `simian arena create eval-arena-1 --virtual --with-kwok --kwok-nodes 10` creates a vCluster with 10 KWOK nodes; `kubectl --kubeconfig <vcluster-kubeconfig> get nodes` shows them all Ready.
+  * `simian sut deploy --namespace eval-arena-1 --sut kwok-microservice --use-controller` deploys ~50 fake pods (no real containers); baseline captured in seconds, not minutes.
+  * `simian serve --autonomous --autonomous-namespace eval-arena-1 --max-severity-per-cycle node` runs autonomous cycles where the LLM picks node-tier actions (KernelChaos, severe StressChaos) it would never be permitted in a real arena.
+  * The scenario record's `Environment` block correctly reports `Virtual: true, Backend: "kwok-in-vcluster", KWOKNodes: 10`; the reference harness reads it and tags scores accordingly.
+  * `simian arena destroy eval-arena-1 --virtual` cleanly tears down the vCluster + everything inside it. Pre-existing `--virtual=false` arena CRUD is unchanged.
 
 ## Milestone 6 — Litmus Driver Parity (parity polish)
 
