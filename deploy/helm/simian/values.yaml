@@ -59,6 +59,18 @@ topology:
 sutInController:
   enabled: false
 
+# M3: autonomous-mode planning loop. When enabled the controller runs a
+# tick-driven cycle: health-gate → topology snapshot → LLM plan generation
+# → bounded execution under the executor's safety stage. Plans are always
+# emitted (and audit-logged) before any fault is applied.
+autonomous:
+  enabled: false
+  cycleInterval: 5m
+  namespaces: []           # which arena namespaces the loop targets; required when enabled
+  maxFaultsPerCycle: 3
+  maxSeverityPerCycle: namespace  # highest blast tier the loop will apply: namespace | node | external
+  hypothesisHint: ""       # optional soft preference passed to the LLM each cycle
+
 # MCP server.
 mcp:
   port: 8081

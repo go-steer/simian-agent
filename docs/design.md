@@ -469,13 +469,15 @@ The resulting `Baseline` snapshot — pod readiness map, metric values, replica 
 
 ### 6.4 Health gate
 
-Before each autonomous cycle, the executor checks:
+Before each autonomous cycle, the loop checks:
 
 - All baseline pods still `Ready` (allowing for the post-prior-cycle recovery window).
 - No active Simian fault still leased in the namespace.
 - Metric drift from baseline within a generous tolerance (the chaos cycle will produce drift; here we only care that we're starting from a non-broken state).
 
-A failed gate skips the cycle, logs, and moves on.
+A failed gate skips the cycle (audit `cycle.health_gate_failed` + `cycle.skipped`) and moves on without applying anything.
+
+> **M3 v1 scope (2026-05-14):** The shipped health gate (`pkg/loop.BaselineHealthGate`) checks pod-Ready + no-active-faults via the topology snapshot. The metric-drift check is gated on `get_metrics` having a real backend; the M3 stub returns `{configured:false}`, so adding a metric-drift signal is deferred to whichever milestone wires Prometheus / Cloud Monitoring. The gate's interface accepts new checks without breaking callers.
 
 ### 6.5 Vulnerability ranking
 
