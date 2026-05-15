@@ -198,6 +198,58 @@ func TestSnapshot_PodGroupedByDeployment(t *testing.T) {
 	}
 }
 
+func TestSnapshot_FlagsEnvoyInjectedFromAnnotation(t *testing.T) {
+	ns := "boutique"
+	objs := []any{
+		// Deployment with the annotation → EnvoyInjected=true.
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: ns},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: intptr(1),
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels:      map[string]string{"app": "frontend"},
+						Annotations: map[string]string{"simian.chaos/envoy-injected": "true"},
+					},
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "x"}}},
+				},
+			},
+		},
+		// Deployment without the annotation → EnvoyInjected=false.
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "loadgenerator", Namespace: ns},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: intptr(1),
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "loadgenerator"}},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "x"}}},
+				},
+			},
+		},
+	}
+	client := fake.NewClientset(toRuntimeObjects(objs)...)
+	d := New(client, 0)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	d.Start()
+	d.WaitForSync(ctx)
+	defer d.Stop()
+	snap, err := d.Snapshot(ctx, ns)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	flags := map[string]bool{}
+	for _, w := range snap.Workloads {
+		flags[w.Name] = w.EnvoyInjected
+	}
+	if !flags["frontend"] {
+		t.Error("frontend should be EnvoyInjected=true (has the annotation)")
+	}
+	if flags["loadgenerator"] {
+		t.Error("loadgenerator should be EnvoyInjected=false (no annotation)")
+	}
+}
+
 func toRuntimeObjects(objs []any) []runtime.Object {
 	out := make([]runtime.Object, 0, len(objs))
 	for _, o := range objs {

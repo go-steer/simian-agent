@@ -231,6 +231,39 @@ type simianErr string
 
 func (e simianErr) Error() string { return string(e) }
 
+// TestSummarizeTopologyMarksEnvoyInjected verifies the autonomous-mode
+// prompt's topology section flags envoy-injected workloads with
+// "envoy=true", which is the planner's eligibility hint for the
+// envoy-fault chaos kinds.
+func TestSummarizeTopologyMarksEnvoyInjected(t *testing.T) {
+	t1 := &topology.TargetTopology{
+		Workloads: []topology.Workload{
+			{Kind: "Deployment", Name: "frontend", DesiredReplicas: 1, EnvoyInjected: true},
+			{Kind: "Deployment", Name: "loadgenerator", DesiredReplicas: 1, EnvoyInjected: false},
+		},
+	}
+	out := summarizeTopology(t1)
+	if !strings.Contains(out, "frontend") || !strings.Contains(out, "envoy=true") {
+		t.Errorf("expected frontend with envoy=true; got:\n%s", out)
+	}
+	// The loadgenerator line should NOT carry envoy=true.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "loadgenerator") && strings.Contains(line, "envoy=true") {
+			t.Errorf("loadgenerator should not have envoy=true; got line:\n%s", line)
+		}
+	}
+}
+
+func TestPlanSystemPromptIncludesEnvoyEligibilityRule(t *testing.T) {
+	cat := []simian.CatalogEntry{
+		{Engine: simian.EngineEnvoyFault, ResourceKind: "EnvoyHttpDelay", APIVersion: "simian.io/v1", BlastRadiusTier: simian.TierNamespace},
+	}
+	system := buildPlanSystemPrompt(cat)
+	if !strings.Contains(system, "envoy=true") {
+		t.Errorf("system prompt should reference envoy=true precondition; got:\n%s", system)
+	}
+}
+
 // Sanity check that the JSON we use in tests round-trips through the
 // AttackPlan type without information loss; protects against schema drift.
 func TestSampleJSONRoundTrips(t *testing.T) {

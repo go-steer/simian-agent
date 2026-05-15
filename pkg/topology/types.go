@@ -52,6 +52,13 @@ type Workload struct {
 	Labels          map[string]string  `json:"labels"`
 	DesiredReplicas int32              `json:"desired_replicas"`
 	Containers      []ContainerSummary `json:"containers"`
+	// EnvoyInjected is true when the workload's pod template carries the
+	// simian.chaos/envoy-injected annotation set by the SUT-deploy pipeline
+	// (pkg/sut/envoy). The autonomous planner uses this to decide whether
+	// the workload is eligible for envoy-fault chaos kinds — applying
+	// EnvoyHttpDelay or EnvoyHttpAbort against an uninjected workload
+	// returns driver.failed because the admin port is not reachable.
+	EnvoyInjected bool `json:"envoy_injected"`
 }
 
 // ContainerSummary captures the dependency-relevant slice of a container spec.
