@@ -137,18 +137,20 @@ Rules you MUST follow:
 1. Choose exactly one fault type from the catalog provided. Do not invent fault types.
 2. The "engine" field must match the catalog entry's engine.
 3. The "api_version" and "resource_kind" fields must match the catalog entry exactly.
-4. The "spec" field must be the engine-native spec for the chosen fault type — populated with all REQUIRED fields. NEVER return an empty spec object. Use the canonical examples below as templates.
-5. Always populate "targets" with at least one TargetRef. For "namespace": if the user names one in the intent, use that; otherwise use the default namespace given to you in the user prompt. The same namespace MUST also appear inside the spec selector (e.g. PodChaos.spec.selector.namespaces). NEVER use the literal string "default" as the namespace unless the user's intent text explicitly says "default" — when in doubt, use the default namespace from the user prompt.
+4. The "spec" field must be the engine-native spec for the chosen fault type — populated with all REQUIRED fields. NEVER return an empty spec object. Use the canonical examples below as templates. The spec.action verb MUST be one of the values listed in the template for that CRD; Chaos Mesh's CRD validation rejects anything else.
+5. Every target MUST set "namespace" explicitly — never blank, never the literal string "default". If the user names a namespace in the intent, use that. Otherwise, use the default namespace given to you in the user prompt (the user prompt will tell you which one). The same namespace MUST also appear inside the spec selector (e.g. PodChaos.spec.selector.namespaces).
 6. Set "name" on each target to the workload (Deployment / StatefulSet) name when one is named in the intent.
 7. Set "duration" as a Go duration string (e.g. "30s", "2m", "5m").
 8. Set "rationale" to one sentence explaining what you chose and why.
 9. Output ONLY the JSON object — no commentary, no markdown.
 
+Common confusion to avoid: NetworkChaos uses action "delay" for latency injection. The string "latency" is NOT a NetworkChaos action — it is the IOChaos action. Picking the wrong CRD's verb causes the cluster to reject the manifest at apply time.
+
 Canonical Chaos Mesh spec templates (copy these and adapt to the user's intent):
 
 PodChaos — kill / fail / container-kill:
 {
-  "action": "pod-kill",          // or "pod-failure" or "container-kill"
+  "action": "pod-kill",          // MUST be one of: "pod-kill" | "pod-failure" | "container-kill"
   "mode": "one",                 // or "all" | "fixed" | "fixed-percent" | "random-max-percent"
   "selector": {
     "namespaces": ["<namespace>"],
@@ -156,9 +158,9 @@ PodChaos — kill / fail / container-kill:
   }
 }
 
-NetworkChaos — delay / loss / corrupt / duplicate:
+NetworkChaos — delay / loss / corrupt / duplicate / partition / bandwidth:
 {
-  "action": "delay",             // or "loss" | "corrupt" | "duplicate" | "bandwidth"
+  "action": "delay",             // MUST be one of: "netem" | "delay" | "loss" | "duplicate" | "corrupt" | "partition" | "bandwidth". NEVER "latency" — that belongs to IOChaos.
   "mode": "all",
   "selector": {
     "namespaces": ["<namespace>"],
@@ -184,7 +186,7 @@ StressChaos — CPU or memory stress:
 
 IOChaos — file-system latency / faults:
 {
-  "action": "latency",           // or "fault" | "attrOverride" | "mistake"
+  "action": "latency",           // MUST be one of: "latency" | "fault" | "attrOverride" | "mistake"
   "mode": "one",
   "selector": {
     "namespaces": ["<namespace>"],

@@ -240,11 +240,48 @@ Your response MUST be a single JSON object matching this schema (no markdown, no
 Rules you MUST follow:
 1. Pick fault types only from the catalog provided; do not invent kinds.
 2. Targets MUST name workloads that exist in the topology you were given.
-3. Honor the cycle budget caps — do not emit more steps than max_faults_per_cycle.
-4. Order steps so cause precedes effect; use depends_on to express ordering.
-5. Plans should be small (1–3 steps typical) so observation can be scoped.
-6. Engine-native spec MUST be populated (see translator templates for shapes).
-7. NEVER target a workload tagged as "excluded" via topology.
+3. Each target MUST set "namespace" explicitly to the Target namespace given above; never leave it blank, never use the literal string "default".
+4. Honor the cycle budget caps — do not emit more steps than max_faults_per_cycle.
+5. Order steps so cause precedes effect; use depends_on to express ordering.
+6. Plans should be small (1–3 steps typical) so observation can be scoped.
+7. Engine-native spec MUST be populated. The spec.action verb MUST be one of the values listed below for that CRD — Chaos Mesh's CRD validation rejects anything else.
+8. NEVER target a workload tagged as "excluded" via topology.
+
+Valid spec.action values per Chaos Mesh CRD (these are CRD-enforced — picking outside this list causes driver.failed):
+  PodChaos:     "pod-kill" | "pod-failure" | "container-kill"
+  NetworkChaos: "netem" | "delay" | "loss" | "duplicate" | "corrupt" | "partition" | "bandwidth"
+                  (note: "latency" is NOT a NetworkChaos action — use "delay" instead. "latency" is the IOChaos action.)
+  IOChaos:      "latency" | "fault" | "attrOverride" | "mistake"
+  StressChaos:  no "action" field — use "stressors": {"cpu": {...}} or {"memory": {...}}
+  TimeChaos:    no "action" field — use "timeOffset": "<duration>"
+  HTTPChaos:    "abort" | "delay" | "replace" | "patch"
+  DNSChaos:     "error" | "random"
+
+Canonical spec shapes (copy and adapt — fill the namespace from the Target namespace above):
+
+PodChaos:
+  {"action": "pod-kill", "mode": "one",
+   "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}}}
+
+NetworkChaos (delay):
+  {"action": "delay", "mode": "all",
+   "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}},
+   "delay": {"latency": "250ms", "correlation": "0", "jitter": "0ms"}}
+
+NetworkChaos (loss):
+  {"action": "loss", "mode": "all",
+   "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}},
+   "loss": {"loss": "10", "correlation": "0"}}
+
+StressChaos (CPU):
+  {"mode": "one",
+   "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}},
+   "stressors": {"cpu": {"workers": 2, "load": 80}}}
+
+IOChaos (latency):
+  {"action": "latency", "mode": "one",
+   "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}},
+   "volumePath": "/data", "path": "/data/**", "delay": "100ms", "percent": 100}
 `)
 	return sb.String()
 }
