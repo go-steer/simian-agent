@@ -171,7 +171,7 @@ func TestTranslatePromptIncludesDefaultNamespace(t *testing.T) {
 	}
 	// And the system prompt should carry the same NEVER-default rule.
 	system := calls[0].System
-	if !containsString(system, `NEVER use the literal string "default"`) {
+	if !containsString(system, `never the literal string "default"`) {
 		t.Errorf("system prompt should forbid literal \"default\" namespace.\nGot:\n%s", system)
 	}
 }
