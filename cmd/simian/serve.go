@@ -56,6 +56,8 @@ func newServeCmd() *cobra.Command {
 		llmModel             string
 		eligibleNS           []string
 		durationCap          time.Duration
+		maxConcurrentFaults  int
+		minCooldown          time.Duration
 		reapInterval         time.Duration
 		holderID             string
 		debugLLMPayloads     bool
@@ -106,6 +108,12 @@ func newServeCmd() *cobra.Command {
 			execCfg := executor.DefaultConfig()
 			if durationCap > 0 {
 				execCfg.DurationCeiling = durationCap
+			}
+			if maxConcurrentFaults > 0 {
+				execCfg.MaxConcurrentFaults = maxConcurrentFaults
+			}
+			if minCooldown > 0 {
+				execCfg.MinCooldown = minCooldown
 			}
 			registry := lease.NewRegistry(holderID)
 			history := executor.NewHistory(recentFaultsCapacity)
@@ -247,6 +255,8 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&llmModel, "llm-model", "", "Model override (provider default if empty)")
 	cmd.Flags().StringSliceVar(&eligibleNS, "eligible-namespace", nil, "Namespaces to treat as eligible (overrides annotation lookup; can be repeated)")
 	cmd.Flags().DurationVar(&durationCap, "duration-ceiling", 0, "Override executor duration ceiling (default 15m)")
+	cmd.Flags().IntVar(&maxConcurrentFaults, "max-concurrent-faults", 0, "Cap on total leased faults across all namespaces (0 = no cap). Enforced by the safety stage; rejected applies surface as executor.rejected with reason safety:budget-exceeded.")
+	cmd.Flags().DurationVar(&minCooldown, "min-cooldown", 0, "Minimum gap between consecutive faults applied to the same namespace (0 = disabled)")
 	cmd.Flags().DurationVar(&reapInterval, "reap-interval", 30*time.Second, "Lease reaper sweep interval")
 	cmd.Flags().StringVar(&holderID, "holder-id", os.Getenv("HOSTNAME"), "Holder ID recorded on leases (defaults to HOSTNAME)")
 	cmd.Flags().BoolVar(&debugLLMPayloads, "debug-llm-payloads", false, "Log raw LLM responses (debug only; do not enable in production — see design.md §12.2)")
