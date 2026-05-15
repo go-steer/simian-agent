@@ -15,14 +15,14 @@ import "time"
 // TargetTopology is a point-in-time snapshot of an arena's shape, suitable
 // for handing to the LLM as context for plan generation.
 type TargetTopology struct {
-	Namespace       string                   `json:"namespace"`
-	DiscoveredAt    time.Time                `json:"discovered_at"`
-	Workloads       []Workload               `json:"workloads"`
-	Services        []Service                `json:"services"`
-	DependencyGraph map[string][]string      `json:"dependency_graph"`
-	ReplicaMap      map[string]int32         `json:"replica_map"`
-	PodStatus       map[string][]PodSummary  `json:"pod_status"`
-	RecentEvents    []EventSummary           `json:"recent_events"`
+	Namespace       string                  `json:"namespace"`
+	DiscoveredAt    time.Time               `json:"discovered_at"`
+	Workloads       []Workload              `json:"workloads"`
+	Services        []Service               `json:"services"`
+	DependencyGraph map[string][]string     `json:"dependency_graph"`
+	ReplicaMap      map[string]int32        `json:"replica_map"`
+	PodStatus       map[string][]PodSummary `json:"pod_status"`
+	RecentEvents    []EventSummary          `json:"recent_events"`
 	// EdgeProvenance records, per directed edge "src->dst", which heuristic
 	// produced it ("networkpolicy" or "envvar"). Lets the LLM judge confidence.
 	EdgeProvenance map[string][]string `json:"edge_provenance"`
@@ -42,8 +42,8 @@ type Workload struct {
 
 // ContainerSummary captures the dependency-relevant slice of a container spec.
 type ContainerSummary struct {
-	Name    string         `json:"name"`
-	Image   string         `json:"image"`
+	Name    string          `json:"name"`
+	Image   string          `json:"image"`
 	EnvRefs []EnvServiceRef `json:"env_refs"`
 }
 

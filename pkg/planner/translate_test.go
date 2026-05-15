@@ -23,8 +23,8 @@ func TestTranslateHappyPath(t *testing.T) {
 		"api_version":   "chaos-mesh.org/v1alpha1",
 		"resource_kind": "NetworkChaos",
 		"spec": map[string]any{
-			"action": "delay",
-			"delay":  map[string]any{"latency": "250ms"},
+			"action":   "delay",
+			"delay":    map[string]any{"latency": "250ms"},
 			"selector": map[string]any{"labelSelectors": map[string]any{"app": "paymentservice"}},
 			"mode":     "all",
 		},

@@ -30,11 +30,11 @@ type Budget struct {
 type GenerateInput struct {
 	Namespace    string
 	Topology     *topology.TargetTopology
-	Baseline     *sut.Baseline             // optional; nil if no SUT deployed
+	Baseline     *sut.Baseline // optional; nil if no SUT deployed
 	Catalog      []simian.CatalogEntry
 	RecentFaults []executor.RecentFault
 	Budget       Budget
-	Hypothesis   string                    // optional user-supplied seed
+	Hypothesis   string // optional user-supplied seed
 }
 
 // Generator drafts an AttackPlan by asking the LLM for structured output.
@@ -65,7 +65,7 @@ func (g *Generator) Generate(ctx context.Context, in GenerateInput) (simian.Atta
 		return simian.AttackPlan{}, fmt.Errorf("generator: catalog is empty — no faults are installed or permitted")
 	}
 
-	system := buildPlanSystemPrompt(in)
+	system := buildPlanSystemPrompt()
 	user := buildPlanUserPrompt(in)
 
 	maxRetries := g.MaxRetries
@@ -182,7 +182,7 @@ func parseAttackPlan(raw []byte, in GenerateInput) (simian.AttackPlan, error) {
 	return plan, nil
 }
 
-func buildPlanSystemPrompt(in GenerateInput) string {
+func buildPlanSystemPrompt() string {
 	var sb strings.Builder
 	sb.WriteString(`You are Simian Agent's autonomous-mode plan generator. Your job is to produce a structured AttackPlan: an ordered set of chaos engineering experiments designed to test the resilience of a single arena namespace.
 

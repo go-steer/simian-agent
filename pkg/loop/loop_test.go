@@ -37,8 +37,10 @@ func (r *recordingExecutor) Apply(_ context.Context, m simian.FaultManifest) (st
 	return "f-" + m.ResourceKind, nil
 }
 
-func (r *recordingExecutor) Clear(_ context.Context, _ string) error                          { return nil }
-func (r *recordingExecutor) ListActive(_ context.Context, _ string) ([]simian.ActiveFault, error) { return nil, nil }
+func (r *recordingExecutor) Clear(_ context.Context, _ string) error { return nil }
+func (r *recordingExecutor) ListActive(_ context.Context, _ string) ([]simian.ActiveFault, error) {
+	return nil, nil
+}
 
 func (r *recordingExecutor) AppliedCount() int {
 	r.mu.Lock()
@@ -194,15 +196,15 @@ func TestRunOnce_LLMUnavailableSkipsCleanly(t *testing.T) {
 	l := &Loop{
 		Namespaces: []string{"boutique"},
 		Interval:   time.Second,
-		Generator: planner.NewGenerator(stubFailing{}),
-		Executor:  exec,
-		Topology:  &fakeTopology{snap: goodSnapshot()},
-		Baselines: &fakeBaselines{bl: goodBaseline(), ok: true},
-		Recents:   fakeRecents{},
-		Catalog:   catalogStub{}.gather,
-		Health:    alwaysHealthy{},
-		Budget:    planner.Budget{MaxFaultsPerCycle: 3, MaxConcurrentFaults: 1},
-		Auditor:   au,
+		Generator:  planner.NewGenerator(stubFailing{}),
+		Executor:   exec,
+		Topology:   &fakeTopology{snap: goodSnapshot()},
+		Baselines:  &fakeBaselines{bl: goodBaseline(), ok: true},
+		Recents:    fakeRecents{},
+		Catalog:    catalogStub{}.gather,
+		Health:     alwaysHealthy{},
+		Budget:     planner.Budget{MaxFaultsPerCycle: 3, MaxConcurrentFaults: 1},
+		Auditor:    au,
 	}
 	plan, applied, err := l.RunOnce(context.Background(), "boutique")
 	if err != nil {

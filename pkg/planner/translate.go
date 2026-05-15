@@ -15,20 +15,20 @@ import (
 
 // IntentInput is a directed-mode translation request.
 type IntentInput struct {
-	Intent          string                  // free-text user intent
-	Catalog         []simian.CatalogEntry   // available faults the LLM may target
-	DefaultDuration time.Duration           // used if the LLM does not pick one
+	Intent          string                // free-text user intent
+	Catalog         []simian.CatalogEntry // available faults the LLM may target
+	DefaultDuration time.Duration         // used if the LLM does not pick one
 }
 
 // Translator converts a plain-text intent into a validated FaultManifest by
 // asking the LLM for structured output.
 type Translator struct {
-	LLM           simian.LLMProvider
-	Model         string        // optional model override
-	MaxRetries    int           // schema-invalid retries; default 1
+	LLM        simian.LLMProvider
+	Model      string // optional model override
+	MaxRetries int    // schema-invalid retries; default 1
 	// LogResponses, if set, is invoked with each raw LLM structured response.
 	// Used for debugging; production code should leave nil.
-	LogResponses  func(attempt int, raw []byte)
+	LogResponses func(attempt int, raw []byte)
 }
 
 // New constructs a Translator with the given provider.
@@ -215,15 +215,15 @@ func parseManifest(raw json.RawMessage, defaultDuration time.Duration) (simian.F
 	}
 	// Decode into a permissive intermediate so we can normalize duration.
 	var tmp struct {
-		Engine          string                 `json:"engine"`
-		APIVersion      string                 `json:"api_version"`
-		ResourceKind    string                 `json:"resource_kind"`
-		Kind            string                 `json:"kind"`           // accept "kind" as alias
-		Spec            map[string]any         `json:"spec"`
-		Targets         []simian.TargetRef     `json:"targets"`
-		DurationStr     string                 `json:"duration"`
-		BlastRadiusTier string                 `json:"blast_radius_tier"`
-		Rationale       string                 `json:"rationale"`
+		Engine          string             `json:"engine"`
+		APIVersion      string             `json:"api_version"`
+		ResourceKind    string             `json:"resource_kind"`
+		Kind            string             `json:"kind"` // accept "kind" as alias
+		Spec            map[string]any     `json:"spec"`
+		Targets         []simian.TargetRef `json:"targets"`
+		DurationStr     string             `json:"duration"`
+		BlastRadiusTier string             `json:"blast_radius_tier"`
+		Rationale       string             `json:"rationale"`
 	}
 	if err := json.Unmarshal(raw, &tmp); err != nil {
 		return simian.FaultManifest{}, fmt.Errorf("decode: %w", err)
@@ -263,38 +263,4 @@ func parseManifest(raw json.RawMessage, defaultDuration time.Duration) (simian.F
 		BlastRadiusTier: tier,
 		Rationale:       tmp.Rationale,
 	}, nil
-}
-
-// faultManifestSchema is the JSON Schema handed to the LLM for structured output.
-// Kept inline rather than in a file so the schema travels with the translator
-// it constrains.
-func faultManifestSchema() json.RawMessage {
-	return json.RawMessage(`{
-  "type": "object",
-  "required": ["engine","api_version","resource_kind","spec","targets","duration","rationale"],
-  "properties": {
-    "engine":         {"type":"string","enum":["chaos-mesh","litmus"]},
-    "api_version":    {"type":"string"},
-    "resource_kind":  {"type":"string"},
-    "spec": {
-      "type":"object",
-      "description":"Engine-native spec with all required fields populated. NEVER empty. For Chaos Mesh PodChaos must include action+mode+selector. For NetworkChaos: action+mode+selector+action-specific block (delay/loss/bandwidth/etc). For StressChaos: mode+selector+stressors. See system prompt for canonical templates."
-    },
-    "targets": {
-      "type":"array",
-      "items": {
-        "type":"object",
-        "required":["namespace"],
-        "properties": {
-          "namespace":{"type":"string"},
-          "kind":     {"type":"string"},
-          "name":     {"type":"string"}
-        }
-      }
-    },
-    "duration":           {"type":"string"},
-    "blast_radius_tier": {"type":"string","enum":["namespace","node","external"]},
-    "rationale":          {"type":"string"}
-  }
-}`)
 }

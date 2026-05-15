@@ -99,14 +99,14 @@ type Spec struct {
 
 // State is the current view of an arena, suitable for Describe.
 type State struct {
-	Namespace          string
-	Exists             bool
-	Eligible           bool
-	Annotations        map[string]string
-	ExcludedWorkloads  []string
-	RoleBindingExists  bool
-	ChaosSubjectBound  bool
-	SimianFaultCount   int // count of simian-managed chaos resources discovered
+	Namespace         string
+	Exists            bool
+	Eligible          bool
+	Annotations       map[string]string
+	ExcludedWorkloads []string
+	RoleBindingExists bool
+	ChaosSubjectBound bool
+	SimianFaultCount  int // count of simian-managed chaos resources discovered
 }
 
 // roleRules is the canonical RBAC ruleset granted to the chaos SA inside an

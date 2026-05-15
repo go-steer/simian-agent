@@ -35,24 +35,24 @@ import (
 
 func newServeCmd() *cobra.Command {
 	var (
-		kubeconfig            string
-		mcpAddr               string
-		mcpStdio              bool
-		llmProviderID         string
-		llmModel              string
-		eligibleNS            []string
-		durationCap           time.Duration
-		reapInterval          time.Duration
-		holderID              string
-		debugLLMPayloads      bool
-		recentFaultsCapacity  int
-		topologyResync        time.Duration
-		autonomous            bool
-		cycleInterval         time.Duration
-		autonomousNS          []string
-		maxFaultsPerCycle     int
-		maxSeverityPerCycle   string
-		hypothesisHint        string
+		kubeconfig           string
+		mcpAddr              string
+		mcpStdio             bool
+		llmProviderID        string
+		llmModel             string
+		eligibleNS           []string
+		durationCap          time.Duration
+		reapInterval         time.Duration
+		holderID             string
+		debugLLMPayloads     bool
+		recentFaultsCapacity int
+		topologyResync       time.Duration
+		autonomous           bool
+		cycleInterval        time.Duration
+		autonomousNS         []string
+		maxFaultsPerCycle    int
+		maxSeverityPerCycle  string
+		hypothesisHint       string
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",

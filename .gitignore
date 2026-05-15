@@ -39,3 +39,8 @@ dist/
 
 # Per-developer Claude Code workspace state
 .claude/
+
+# Hugo docs site build output (docs/site/)
+docs/site/public/
+docs/site/resources/
+docs/site/.hugo_build.lock

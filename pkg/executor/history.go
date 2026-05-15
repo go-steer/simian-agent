@@ -17,11 +17,11 @@ const DefaultHistoryCapacity = 100
 // autonomous-mode planner reads these via the get_recent_faults MCP tool
 // so it can avoid pointless repetition and learn from past attempts.
 type RecentFault struct {
-	FaultUID    string                `json:"fault_uid"`
-	Manifest    simian.FaultManifest  `json:"manifest"`
-	AppliedAt   time.Time             `json:"applied_at"`
-	ClearedAt   time.Time             `json:"cleared_at,omitempty"` // zero = still active
-	ClearReason string                `json:"clear_reason,omitempty"`
+	FaultUID    string               `json:"fault_uid"`
+	Manifest    simian.FaultManifest `json:"manifest"`
+	AppliedAt   time.Time            `json:"applied_at"`
+	ClearedAt   time.Time            `json:"cleared_at,omitempty"` // zero = still active
+	ClearReason string               `json:"clear_reason,omitempty"`
 }
 
 // History is a bounded, in-memory record of recently-applied faults. Safe
@@ -30,8 +30,8 @@ type RecentFault struct {
 type History struct {
 	mu       sync.RWMutex
 	capacity int
-	items    []RecentFault           // ring buffer; head is items[0] when len < cap
-	byUID    map[string]int          // index into items by FaultUID for UpdateCleared
+	items    []RecentFault  // ring buffer; head is items[0] when len < cap
+	byUID    map[string]int // index into items by FaultUID for UpdateCleared
 }
 
 // NewHistory constructs a bounded ring with the given capacity. Capacity ≤ 0

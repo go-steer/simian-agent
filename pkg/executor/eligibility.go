@@ -26,8 +26,8 @@ type EligibilityChecker interface {
 // StaticEligibility is an EligibilityChecker backed by a fixed map. Useful for
 // tests and for installations that want to bypass annotation lookup entirely.
 type StaticEligibility struct {
-	Eligible       map[string]bool
-	Exclusions     map[string][]string
+	Eligible   map[string]bool
+	Exclusions map[string][]string
 }
 
 // IsEligible implements EligibilityChecker.

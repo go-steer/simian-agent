@@ -6,11 +6,11 @@ import "fmt"
 type ExecutorStage string
 
 const (
-	StageSchema     ExecutorStage = "schema"
-	StageSafety     ExecutorStage = "safety"
-	StageAudit      ExecutorStage = "audit"
-	StageDriver     ExecutorStage = "driver"
-	StageLease      ExecutorStage = "lease"
+	StageSchema ExecutorStage = "schema"
+	StageSafety ExecutorStage = "safety"
+	StageAudit  ExecutorStage = "audit"
+	StageDriver ExecutorStage = "driver"
+	StageLease  ExecutorStage = "lease"
 )
 
 // RejectionReason is a stable identifier for why a manifest was rejected.
@@ -18,16 +18,16 @@ const (
 type RejectionReason string
 
 const (
-	ReasonUnknownGVK         RejectionReason = "unknown-gvk"
-	ReasonSchemaInvalid      RejectionReason = "schema-invalid"
+	ReasonUnknownGVK           RejectionReason = "unknown-gvk"
+	ReasonSchemaInvalid        RejectionReason = "schema-invalid"
 	ReasonNamespaceNotEligible RejectionReason = "namespace-not-eligible"
-	ReasonWorkloadExcluded   RejectionReason = "workload-excluded"
-	ReasonRBACDenied         RejectionReason = "rbac-denied"
-	ReasonTierNotPermitted   RejectionReason = "tier-not-permitted"
-	ReasonDurationOverCeiling RejectionReason = "duration-over-ceiling"
-	ReasonBudgetExceeded     RejectionReason = "budget-exceeded"
-	ReasonDriverFailed       RejectionReason = "driver-failed"
-	ReasonLeaseFailed        RejectionReason = "lease-failed"
+	ReasonWorkloadExcluded     RejectionReason = "workload-excluded"
+	ReasonRBACDenied           RejectionReason = "rbac-denied"
+	ReasonTierNotPermitted     RejectionReason = "tier-not-permitted"
+	ReasonDurationOverCeiling  RejectionReason = "duration-over-ceiling"
+	ReasonBudgetExceeded       RejectionReason = "budget-exceeded"
+	ReasonDriverFailed         RejectionReason = "driver-failed"
+	ReasonLeaseFailed          RejectionReason = "lease-failed"
 )
 
 // ExecutorError is the typed error returned by FaultExecutor methods. Callers

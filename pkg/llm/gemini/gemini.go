@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 
@@ -126,7 +127,11 @@ func (p *Provider) Complete(ctx context.Context, req simian.CompletionRequest) (
 		gcfg.Temperature = &t
 	}
 	if req.MaxTokens > 0 {
-		gcfg.MaxOutputTokens = int32(req.MaxTokens)
+		maxOut := req.MaxTokens
+		if maxOut > math.MaxInt32 {
+			maxOut = math.MaxInt32
+		}
+		gcfg.MaxOutputTokens = int32(maxOut) //nolint:gosec // bounded above
 	}
 	if len(req.ResponseSchema) > 0 {
 		schema, err := jsonSchemaToGenaiSchema(req.ResponseSchema)

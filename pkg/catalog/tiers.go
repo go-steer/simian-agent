@@ -41,23 +41,22 @@ var chaosMeshBaseTiers = map[string]simian.BlastRadiusTier{
 // and the controller-managed Pod*Chaos manifestations of higher-level faults.
 // IsUserFault returns false for these so they don't pollute the LLM's catalog.
 var chaosMeshNonFaultKinds = map[string]bool{
-	"Workflow":         true,
-	"WorkflowNode":     true,
-	"Schedule":         true,
-	"StatusCheck":      true,
-	"RemoteCluster":    true,
-	"PhysicalMachine":  true,
-	"PodNetworkChaos":  true,
-	"PodIOChaos":       true,
-	"PodHttpChaos":     true,
+	"Workflow":        true,
+	"WorkflowNode":    true,
+	"Schedule":        true,
+	"StatusCheck":     true,
+	"RemoteCluster":   true,
+	"PhysicalMachine": true,
+	"PodNetworkChaos": true,
+	"PodIOChaos":      true,
+	"PodHttpChaos":    true,
 }
 
 // IsUserFault reports whether the given engine+kind is a user-facing fault
 // type the LLM should consider proposing. Drivers should skip non-fault CRDs
 // when building the catalog.
 func IsUserFault(engine simian.Engine, kind string) bool {
-	switch engine {
-	case simian.EngineChaosMesh:
+	if engine == simian.EngineChaosMesh {
 		return !chaosMeshNonFaultKinds[kind]
 	}
 	return true

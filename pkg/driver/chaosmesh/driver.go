@@ -27,9 +27,9 @@ const APIGroup = "chaos-mesh.org"
 
 // Driver implements simian.ChaosDriver for Chaos Mesh.
 type Driver struct {
-	dyn       dynamic.Interface
-	disco     discovery.DiscoveryInterface
-	mapper    *restmapper.DeferredDiscoveryRESTMapper
+	dyn        dynamic.Interface
+	disco      discovery.DiscoveryInterface
+	mapper     *restmapper.DeferredDiscoveryRESTMapper
 	namePrefix string
 }
 

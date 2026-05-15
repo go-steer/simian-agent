@@ -14,19 +14,19 @@ import (
 // Canonical event names. Keep additions backward-compatible; downstream
 // consumers (queries, dashboards) depend on these strings.
 const (
-	EventPlanGenerated      = "plan.generated"
-	EventExecutorReceived   = "executor.received"
-	EventExecutorValidated  = "executor.validated"
-	EventExecutorRejected   = "executor.rejected"
-	EventDriverApplied      = "driver.applied"
-	EventDriverFailed       = "driver.failed"
-	EventLeaseRegistered    = "lease.registered"
-	EventLeaseHeartbeat     = "lease.heartbeat"
-	EventLeaseExpired       = "lease.expired"
-	EventLeaseCleared       = "lease.cleared"
-	EventPageDispatched     = "page.dispatched"
-	EventPageFailed         = "page.failed"
-	EventAgentResponse      = "agent.response_received"
+	EventPlanGenerated     = "plan.generated"
+	EventExecutorReceived  = "executor.received"
+	EventExecutorValidated = "executor.validated"
+	EventExecutorRejected  = "executor.rejected"
+	EventDriverApplied     = "driver.applied"
+	EventDriverFailed      = "driver.failed"
+	EventLeaseRegistered   = "lease.registered"
+	EventLeaseHeartbeat    = "lease.heartbeat"
+	EventLeaseExpired      = "lease.expired"
+	EventLeaseCleared      = "lease.cleared"
+	EventPageDispatched    = "page.dispatched"
+	EventPageFailed        = "page.failed"
+	EventAgentResponse     = "agent.response_received"
 
 	// M3 autonomous-mode cycle events.
 	EventCycleStarted     = "cycle.started"

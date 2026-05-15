@@ -20,7 +20,7 @@ import (
 type stubExecutor struct{}
 
 func (stubExecutor) Apply(context.Context, simian.FaultManifest) (string, error) { return "", nil }
-func (stubExecutor) Clear(context.Context, string) error                          { return nil }
+func (stubExecutor) Clear(context.Context, string) error                         { return nil }
 func (stubExecutor) ListActive(context.Context, string) ([]simian.ActiveFault, error) {
 	return nil, nil
 }
@@ -166,7 +166,7 @@ func TestGetRecentFaults_NoLookupReturnsEmpty(t *testing.T) {
 	s := newServer(t)
 	got := callTool(t, s, "get_recent_faults", map[string]any{"namespace": "ns"})
 	var parsed struct {
-		Enabled bool                    `json:"enabled"`
+		Enabled bool                   `json:"enabled"`
 		Recent  []executor.RecentFault `json:"recent"`
 	}
 	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
@@ -183,7 +183,7 @@ func TestGetRecentFaults_ReturnsList(t *testing.T) {
 	}))
 	got := callTool(t, s, "get_recent_faults", map[string]any{"namespace": "ns", "limit": float64(10)})
 	var parsed struct {
-		Enabled bool                    `json:"enabled"`
+		Enabled bool                   `json:"enabled"`
 		Recent  []executor.RecentFault `json:"recent"`
 	}
 	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
