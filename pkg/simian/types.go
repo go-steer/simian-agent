@@ -226,6 +226,13 @@ type CatalogEntry struct {
 	ResourceKind    string          `json:"resource_kind"`
 	BlastRadiusTier BlastRadiusTier `json:"blast_radius_tier"`
 	Description     string          `json:"description,omitempty"`
+	// SpecTemplate is prompt-ready text shown to the LLM as the canonical
+	// engine-native spec shape for this entry. May include action enums and
+	// example values. Empty means the planner prompt will omit a template
+	// section for this entry. Drivers are the source of truth for their
+	// own templates so adding a new engine doesn't require touching the
+	// planner package.
+	SpecTemplate string `json:"spec_template,omitempty"`
 	// SchemaJSON is the CRD's OpenAPI schema for the spec field, JSON-encoded.
 	// Optional in M1; required for full schema validation.
 	SchemaJSON []byte `json:"schema_json,omitempty"`

@@ -137,7 +137,7 @@ Rules you MUST follow:
 1. Choose exactly one fault type from the catalog provided. Do not invent fault types.
 2. The "engine" field must match the catalog entry's engine.
 3. The "api_version" and "resource_kind" fields must match the catalog entry exactly.
-4. The "spec" field must be the engine-native spec for the chosen fault type — populated with all REQUIRED fields. NEVER return an empty spec object. Use the canonical examples below as templates. The spec.action verb MUST be one of the values listed in the template for that CRD; Chaos Mesh's CRD validation rejects anything else.
+4. The "spec" field must be the engine-native spec for the chosen fault type — populated with all REQUIRED fields. NEVER return an empty spec object. Use the per-kind spec template shown below the catalog entry. Where a template lists "action MUST be one of …", picking outside that list causes the cluster to reject the manifest at apply time.
 5. Every target MUST set "namespace" explicitly — never blank, never the literal string "default". If the user names a namespace in the intent, use that. Otherwise, use the default namespace given to you in the user prompt (the user prompt will tell you which one). The same namespace MUST also appear inside the spec selector (e.g. PodChaos.spec.selector.namespaces).
 6. Set "name" on each target to the workload (Deployment / StatefulSet) name when one is named in the intent.
 7. Set "duration" as a Go duration string (e.g. "30s", "2m", "5m").
@@ -146,77 +146,33 @@ Rules you MUST follow:
 
 Common confusion to avoid: NetworkChaos uses action "delay" for latency injection. The string "latency" is NOT a NetworkChaos action — it is the IOChaos action. Picking the wrong CRD's verb causes the cluster to reject the manifest at apply time.
 
-Canonical Chaos Mesh spec templates (copy these and adapt to the user's intent):
+Available fault catalog (kinds you may choose from). Each entry shows engine + kind + api_version + tier; entries with a spec template include the canonical engine-native spec shape directly under the entry — copy and adapt.
 
-PodChaos — kill / fail / container-kill:
-{
-  "action": "pod-kill",          // MUST be one of: "pod-kill" | "pod-failure" | "container-kill"
-  "mode": "one",                 // or "all" | "fixed" | "fixed-percent" | "random-max-percent"
-  "selector": {
-    "namespaces": ["<namespace>"],
-    "labelSelectors": {"app": "<workload>"}
-  }
-}
-
-NetworkChaos — delay / loss / corrupt / duplicate / partition / bandwidth:
-{
-  "action": "delay",             // MUST be one of: "netem" | "delay" | "loss" | "duplicate" | "corrupt" | "partition" | "bandwidth". NEVER "latency" — that belongs to IOChaos.
-  "mode": "all",
-  "selector": {
-    "namespaces": ["<namespace>"],
-    "labelSelectors": {"app": "<workload>"}
-  },
-  "delay": {"latency": "250ms", "correlation": "0", "jitter": "0ms"}
-  // For "loss": "loss": {"loss": "10", "correlation": "0"}
-  // For "bandwidth": "bandwidth": {"rate": "1mbps", "limit": 20971520, "buffer": 10000}
-}
-
-StressChaos — CPU or memory stress:
-{
-  "mode": "one",
-  "selector": {
-    "namespaces": ["<namespace>"],
-    "labelSelectors": {"app": "<workload>"}
-  },
-  "stressors": {
-    "cpu": {"workers": 2, "load": 80}
-    // or "memory": {"workers": 2, "size": "256MB"}
-  }
-}
-
-IOChaos — file-system latency / faults:
-{
-  "action": "latency",           // MUST be one of: "latency" | "fault" | "attrOverride" | "mistake"
-  "mode": "one",
-  "selector": {
-    "namespaces": ["<namespace>"],
-    "labelSelectors": {"app": "<workload>"}
-  },
-  "volumePath": "/data",
-  "path": "/data/**",
-  "delay": "100ms",
-  "percent": 100
-}
-
-TimeChaos — clock skew:
-{
-  "mode": "one",
-  "selector": {
-    "namespaces": ["<namespace>"],
-    "labelSelectors": {"app": "<workload>"}
-  },
-  "timeOffset": "-10m"
-}
-
-For other fault types not shown, consult chaos-mesh.org docs and use the same shape conventions: a "selector" block, an action verb if applicable, and an action-specific parameter block.
-
-Available fault catalog (kinds you may choose from):
 `)
-	for _, e := range cat {
-		fmt.Fprintf(&sb, "- engine=%s kind=%s api_version=%s tier=%s\n",
-			e.Engine, e.ResourceKind, e.APIVersion, e.BlastRadiusTier)
-	}
+	renderCatalogWithTemplates(&sb, cat)
 	return sb.String()
+}
+
+// renderCatalogWithTemplates writes one block per catalog entry: a header
+// line with engine/kind/api_version/tier, followed (when present) by the
+// entry's SpecTemplate. Blocks are separated by blank lines for readability.
+// Used by both directed-mode (translate.go) and autonomous-mode (generate.go)
+// prompts so adding a new engine only requires the driver to populate
+// SpecTemplate on its CatalogEntry.
+func renderCatalogWithTemplates(sb *strings.Builder, cat []simian.CatalogEntry) {
+	for _, e := range cat {
+		fmt.Fprintf(sb, "- engine=%s kind=%s api_version=%s tier=%s\n",
+			e.Engine, e.ResourceKind, e.APIVersion, e.BlastRadiusTier)
+		if e.SpecTemplate != "" {
+			sb.WriteString("  spec template:\n")
+			for _, line := range strings.Split(e.SpecTemplate, "\n") {
+				sb.WriteString("    ")
+				sb.WriteString(line)
+				sb.WriteByte('\n')
+			}
+		}
+		sb.WriteByte('\n')
+	}
 }
 
 func buildUserPrompt(intent string, defaultDuration time.Duration, defaultNamespace string) string {
