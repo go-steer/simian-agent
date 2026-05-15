@@ -29,8 +29,58 @@ AI-native chaos engineering orchestrator for Kubernetes. **Milestone 1 shipped**
 ### DPv2-compatible chaos engines (post-M3)
 - **`network-policy` engine** — partition chaos via standard `networking.k8s.io/v1` NetworkPolicy. Works on GKE Dataplane V2, where Chaos Mesh's NetworkChaos is silently bypassed. Partition only (deny ingress / egress / both for a labeled pod set); no delay / loss / jitter.
 - **`envoy-fault` engine** — HTTP-layer delay + abort via an Envoy sidecar injected at SUT-deploy time. Two kinds: `EnvoyHttpDelay` and `EnvoyHttpAbort`. The driver pokes each pod's Envoy admin API (port 15000) to flip the fault filter on/off — no Kubernetes resources are created or destroyed at chaos-time.
-- **Envoy injection** — `simian sut deploy` injects the Envoy sidecar + iptables init container by default. Opt out per-deploy with `--no-envoy-faults`; opt out per-workload with the `simian.chaos/no-envoy-injection: "true"` pod-template annotation. The topology snapshot flags injected workloads as `envoy=true` so the autonomous planner only proposes envoy-fault chaos against eligible workloads.
+- **Envoy injection** — `simian sut deploy` injects the Envoy sidecar + iptables init container ONLY when explicitly requested (chart default `sutInjection.envoyFaults: false`; CLI `--no-envoy-faults` is the inverted flag). Opt out per-workload at injection time with the `simian.chaos/no-envoy-injection: "true"` pod-template annotation. The topology snapshot flags injected workloads as `envoy=true` so the autonomous planner only proposes envoy-fault chaos against eligible workloads.
 - **Background:** see [docs/plan-dpv2-chaos-engines.md](docs/plan-dpv2-chaos-engines.md) for the full rationale (chaos-mesh#3302, cilium#19975) and design decisions.
+
+#### Using the new engines (deterministic-control mode)
+
+Both engines accept `simian chaos --engine ... --kind ... --spec '<inline JSON>'`. Examples:
+
+```bash
+# network-policy: 60s ingress+egress partition of cartservice
+simian chaos --engine network-policy \
+  --kind NetworkPolicy --api-version networking.k8s.io/v1 \
+  --namespace boutique-m3 --workload cartservice --duration 60s \
+  --spec '{"labelSelectors":{"app":"cartservice"},"directions":["ingress","egress"]}'
+
+# envoy-fault: 60s 300ms delay on 100% of inbound HTTP/gRPC requests to frontend
+# (requires the workload to have been deployed with --with-envoy-faults
+# AND to be HTTP-probed or TCP-probed — see "Known limitation" below)
+simian chaos --engine envoy-fault \
+  --kind EnvoyHttpDelay --api-version simian.io/v1 \
+  --namespace boutique-m3 --workload frontend --duration 60s \
+  --spec '{"percentage":100,"fixed_delay_ms":300,"labelSelectors":{"app":"frontend"}}'
+
+# envoy-fault: 60s 503 abort on 100% of inbound requests
+simian chaos --engine envoy-fault \
+  --kind EnvoyHttpAbort --api-version simian.io/v1 \
+  --namespace boutique-m3 --workload frontend --duration 60s \
+  --spec '{"percentage":100,"http_status":503,"labelSelectors":{"app":"frontend"}}'
+```
+
+For autonomous mode, the LLM has a strong bias toward Chaos Mesh's larger catalog. To exercise the new engines, pass an explicit hypothesis hint:
+
+```bash
+simian serve --autonomous --autonomous-namespace boutique-m3 \
+  --hypothesis-hint "Verify alternative chaos engines work. Test network-policy
+                     to partition a service, and envoy-fault for HTTP delay/abort
+                     against any workload flagged envoy=true in topology."
+```
+
+#### Known limitation: Envoy injection breaks gRPC kubelet probes
+
+**This is why the chart default is `sutInjection.envoyFaults: false`.** The current Envoy injection model intercepts ALL inbound TCP on the SUT-declared service ports via iptables PREROUTING REDIRECT to Envoy's listener (port 15006). Envoy speaks HTTP at the L7 layer; it does not understand gRPC health-probe payloads. So:
+
+| Workload probe type | Behavior with Envoy injection |
+|---|---|
+| HTTP `httpGet` probes (e.g. Online Boutique `frontend`) | ✅ Works — Envoy responds to the probe |
+| TCP `tcpSocket` probes (e.g. `redis-cart`) | ✅ Works — Envoy accepts the TCP handshake |
+| gRPC `grpc:` probes on a redirected port (most Online Boutique services) | ❌ Probe fails → kubelet kills the container → `CrashLoopBackOff` |
+| gRPC `grpc:` probes on a NON-redirected port | ✅ Works — no interception |
+
+For Online Boutique specifically, `--with-envoy-faults` will leave 9 of 12 deployments crash-looping. Until probe rewriting (Istio's `pilot-agent` style) or an outbound-only redirect mode is implemented, only enable Envoy injection for SUTs whose probes you've audited as HTTP-only or TCP-only.
+
+Workaround for testing envoy-fault against an arbitrary workload: deploy the SUT with `--no-envoy-faults`, then manually inject Envoy into a single test Deployment whose probes you control. See `acceptance-m3b-results.md` § "DPv2 chaos engines acceptance — round 3" for an end-to-end recipe.
 
 ### Directed-mode chaos (M1)
 - **`simian serve`** — runs the Fault Executor + MCP server on port 8081 (default).

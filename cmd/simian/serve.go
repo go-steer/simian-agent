@@ -187,7 +187,9 @@ func newServeCmd() *cobra.Command {
 
 			// Wrap the manager so calls coming through MCP establish_baseline
 			// honor the controller's WithEnvoyFaults policy. The flag default
-			// is true (matches sutInjection.envoyFaults in the chart).
+			// is false (matches sutInjection.envoyFaults in the chart) because
+			// the iptables interception breaks gRPC kubelet probes — see
+			// README.md "Known limitation".
 			establisher := &envoyOptingEstablisher{mgr: sutMgr, withEnvoyFaults: sutInjectEnvoyFault}
 
 			srv := mcp.New(exec, drivers, translator, sutMgr, version,
@@ -288,7 +290,7 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().IntVar(&maxFaultsPerCycle, "max-faults-per-cycle", 3, "Per-cycle cap on faults applied")
 	cmd.Flags().StringVar(&maxSeverityPerCycle, "max-severity-per-cycle", "namespace", "Highest blast-radius tier the autonomous loop will apply (namespace|node|external)")
 	cmd.Flags().StringVar(&hypothesisHint, "hypothesis-hint", "", "Optional hypothesis text passed to the planner as a soft preference")
-	cmd.Flags().BoolVar(&sutInjectEnvoyFault, "sut-inject-envoy-faults", true, "When true, the controller injects an Envoy fault sidecar into each Deployment of any SUT applied via the establish_baseline MCP tool. Required by the envoy-fault chaos engine to deliver HTTP delay/abort on GKE Dataplane V2.")
+	cmd.Flags().BoolVar(&sutInjectEnvoyFault, "sut-inject-envoy-faults", false, "When true, the controller injects an Envoy fault sidecar into each Deployment of any SUT applied via the establish_baseline MCP tool. Required by the envoy-fault chaos engine to deliver HTTP delay/abort on GKE Dataplane V2. DEFAULT is false because the current iptables interception breaks gRPC liveness/readiness probes — see README.md \"Known limitation: Envoy injection breaks gRPC kubelet probes\". Only enable for SUTs whose probes are HTTP-only or TCP-only.")
 	return cmd
 }
 

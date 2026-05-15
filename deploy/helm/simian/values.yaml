@@ -64,18 +64,32 @@ sutInController:
   enabled: false
 
 # Post-M3: SUT-deploy-time injection of the Envoy fault sidecar
-# (pkg/sut/envoy). When the controller's establish_baseline MCP tool
-# applies a SUT, each Deployment is mutated to include an Envoy sidecar
-# + iptables init container so the envoy-fault chaos engine has
+# (pkg/sut/envoy). When enabled, the controller's establish_baseline
+# MCP tool mutates each SUT Deployment to add an Envoy sidecar +
+# iptables init container, so the envoy-fault chaos engine has
 # somewhere to send fault config. Per-workload opt-out is via the
 # pod-template annotation simian.chaos/no-envoy-injection: "true".
 #
-# Enabled by default — works on GKE Dataplane V2 where Chaos Mesh's
-# NetworkChaos is silently bypassed. Disable for installations that
-# don't need HTTP-layer fault injection or that have policies against
-# privileged init containers (the iptables init runs with NET_ADMIN).
+# DEFAULT: false. The current injection model intercepts ALL inbound
+# TCP on the SUT's service ports via iptables PREROUTING REDIRECT.
+# Envoy speaks HTTP at L7 and does NOT understand gRPC health-probe
+# payloads, so workloads with gRPC livenessProbe/readinessProbe on a
+# redirected port will crash-loop after kubelet's probe failures kill
+# the container. Online Boutique falls into this category for 9 of
+# 12 services. Until probe rewriting (Istio's pilot-agent style) or
+# an outbound-only redirect mode is implemented, only flip this to
+# true for SUTs whose probes are HTTP-only or TCP-only.
+#
+# Other gating concerns when flipping to true: the iptables init
+# container needs NET_ADMIN + runAsUser=0, so installations with a
+# Pod Security Standards "restricted" enforcement on the SUT
+# namespace will reject the injected pods.
+#
+# See README.md § "Known limitation: Envoy injection breaks gRPC
+# kubelet probes" and docs/plan-dpv2-chaos-engines.md for the design
+# rationale.
 sutInjection:
-  envoyFaults: true
+  envoyFaults: false
 
 # M3: autonomous-mode planning loop. When enabled the controller runs a
 # tick-driven cycle: health-gate → topology snapshot → LLM plan generation
