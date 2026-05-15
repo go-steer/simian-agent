@@ -186,7 +186,16 @@ func injectDeployment(doc *unstructured.Unstructured, ports []int, opts InjectOp
 // makeIptablesInitContainer returns the init container that redirects
 // inbound TCP for the configured ports to Envoy's inbound listener. Uses
 // the netshoot image (well-known network-debug image with iptables-legacy
-// + iptables-nft both available). Runs with NET_ADMIN.
+// + iptables-nft both available). Runs as root with NET_ADMIN.
+//
+// Why root: modern kernels (nf_tables backend) require uid 0 to modify
+// the rule set even when NET_ADMIN is granted. The Online Boutique
+// upstream manifests set a pod-level securityContext.runAsNonRoot=true
+// + runAsUser=1000, so we explicitly override here to avoid
+// "Could not fetch rule set generation id: Permission denied" at init
+// time. The override only applies to this single init container; the
+// workload containers continue to run under their original
+// non-root context.
 //
 // The redirect is INBOUND: traffic destined for the workload's service
 // ports lands in Envoy first. Envoy applies the fault filter (when
@@ -194,6 +203,8 @@ func injectDeployment(doc *unstructured.Unstructured, ports []int, opts InjectOp
 // (the workload's actual port) via its ORIGINAL_DST cluster.
 func makeIptablesInitContainer(ports []int, image string) corev1.Container {
 	cmd := buildIptablesScript(ports)
+	root := int64(0)
+	noRoot := false
 	return corev1.Container{
 		Name:    InitContainerName,
 		Image:   image,
@@ -202,6 +213,8 @@ func makeIptablesInitContainer(ports []int, image string) corev1.Container {
 			Capabilities: &corev1.Capabilities{
 				Add: []corev1.Capability{"NET_ADMIN"},
 			},
+			RunAsUser:    &root,
+			RunAsNonRoot: &noRoot,
 		},
 	}
 }

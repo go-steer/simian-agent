@@ -143,6 +143,14 @@ func TestInjectAddsSidecarAndInitContainer(t *testing.T) {
 		if !hasNetAdmin {
 			t.Errorf("init container should add NET_ADMIN; got %+v", c.SecurityContext.Capabilities.Add)
 		}
+		// Must run as root: nf_tables ops require uid 0 even with NET_ADMIN,
+		// and the SUT's pod-level runAsNonRoot=true would otherwise apply.
+		if c.SecurityContext.RunAsUser == nil || *c.SecurityContext.RunAsUser != 0 {
+			t.Errorf("init container should set RunAsUser=0 to override pod-level non-root; got %+v", c.SecurityContext.RunAsUser)
+		}
+		if c.SecurityContext.RunAsNonRoot == nil || *c.SecurityContext.RunAsNonRoot != false {
+			t.Errorf("init container should set RunAsNonRoot=false; got %+v", c.SecurityContext.RunAsNonRoot)
+		}
 		// Script should reference both ports.
 		if len(c.Command) < 3 {
 			t.Fatal("init container command should be sh -c <script>")

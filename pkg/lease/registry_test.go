@@ -123,6 +123,90 @@ func TestReaperOnExpireFiresWithDeadlineReason(t *testing.T) {
 	}
 }
 
+// engineDriver is a fakeDriver-equivalent that lets the test pin a
+// specific Engine value. Used to verify the Reaper routes Clear calls
+// to the right driver in multi-engine installs.
+type engineDriver struct {
+	engine  simian.Engine
+	cleared []string
+}
+
+func (d *engineDriver) Apply(context.Context, simian.FaultManifest) (string, error) { return "", nil }
+func (d *engineDriver) Clear(_ context.Context, engineUID string) error {
+	d.cleared = append(d.cleared, engineUID)
+	return nil
+}
+func (d *engineDriver) Catalog(context.Context) ([]simian.CatalogEntry, error) { return nil, nil }
+func (d *engineDriver) Engine() simian.Engine                                  { return d.engine }
+
+func newManifestWithEngine(uid, ns, name string, engine simian.Engine) simian.FaultManifest {
+	m := newManifest(uid, ns, name)
+	m.Engine = engine
+	return m
+}
+
+func TestReaperRoutesClearByEngine(t *testing.T) {
+	r := NewRegistry("holder-1")
+	past := time.Now().Add(-time.Minute)
+	r.Register("f-cm", "cm-engine-uid", newManifestWithEngine("f-cm", "ns-a", "wf", simian.EngineChaosMesh), past)
+	r.Register("f-np", "np-engine-uid", newManifestWithEngine("f-np", "ns-a", "wf", simian.EngineNetworkPolicy), past)
+
+	cmDriver := &engineDriver{engine: simian.EngineChaosMesh}
+	npDriver := &engineDriver{engine: simian.EngineNetworkPolicy}
+	rp := &Reaper{
+		Registry: r,
+		Drivers: map[simian.Engine]simian.ChaosDriver{
+			simian.EngineChaosMesh:     cmDriver,
+			simian.EngineNetworkPolicy: npDriver,
+		},
+		Interval: time.Second,
+		Auditor:  &fakeAuditor{},
+	}
+	rp.Sweep(context.Background())
+
+	if len(cmDriver.cleared) != 1 || cmDriver.cleared[0] != "cm-engine-uid" {
+		t.Errorf("chaos-mesh driver should have received its own engineUID; got %v", cmDriver.cleared)
+	}
+	if len(npDriver.cleared) != 1 || npDriver.cleared[0] != "np-engine-uid" {
+		t.Errorf("network-policy driver should have received its own engineUID; got %v", npDriver.cleared)
+	}
+}
+
+func TestReaperUnknownEngineAuditsButContinues(t *testing.T) {
+	r := NewRegistry("holder-1")
+	past := time.Now().Add(-time.Minute)
+	r.Register("f-mystery", "mystery-uid",
+		newManifestWithEngine("f-mystery", "ns", "wf", simian.Engine("not-registered")), past)
+
+	auditor := &fakeAuditor{}
+	rp := &Reaper{
+		Registry: r,
+		Drivers:  map[simian.Engine]simian.ChaosDriver{simian.EngineChaosMesh: &fakeDriver{}},
+		Interval: time.Second,
+		Auditor:  auditor,
+	}
+	rp.Sweep(context.Background())
+
+	// Should emit a lease.cleared with reason driver-clear-failed and the
+	// engine in the payload. Should NOT call Forget — leaving the lease
+	// in the registry is right because the failure wasn't a partial
+	// clear, just a routing problem; operator inspection can decide.
+	found := false
+	for _, e := range auditor.events {
+		if e.Event == "lease.cleared" && e.Reason == "driver-clear-failed" {
+			if eng, _ := e.Payload["engine"].(string); eng == "not-registered" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected lease.cleared driver-clear-failed event with engine=not-registered; got %+v", auditor.events)
+	}
+	if _, ok := r.Get("f-mystery"); !ok {
+		t.Errorf("unrouted fault should remain in registry for operator inspection")
+	}
+}
+
 func TestReaperOnExpireNilIsSafe(t *testing.T) {
 	r := NewRegistry("holder-1")
 	r.Register("f-1", "e1", newManifest("f-1", "ns", "x"), time.Now().Add(-time.Second))
