@@ -216,6 +216,13 @@ func (d *Discoverer) Snapshot(_ context.Context, ns string) (*TargetTopology, er
 	return out, nil
 }
 
+// envoyInjectedAnnotation is the pod-template-spec annotation set by
+// pkg/sut/envoy.Inject when an Envoy fault sidecar is added to a workload.
+// Duplicated here as a string literal (rather than imported) to avoid a
+// circular dep between topology and sut/envoy — pkg/sut imports topology
+// transitively, and pkg/sut/envoy is part of pkg/sut.
+const envoyInjectedAnnotation = "simian.chaos/envoy-injected"
+
 func workloadFromDeployment(d *appsv1.Deployment) Workload {
 	desired := int32(1)
 	if d.Spec.Replicas != nil {
@@ -226,6 +233,7 @@ func workloadFromDeployment(d *appsv1.Deployment) Workload {
 		Name:            d.Name,
 		Labels:          copyMap(d.Spec.Template.Labels),
 		DesiredReplicas: desired,
+		EnvoyInjected:   d.Spec.Template.Annotations[envoyInjectedAnnotation] == "true",
 	}
 	for _, c := range d.Spec.Template.Spec.Containers {
 		w.Containers = append(w.Containers, ContainerSummary{
@@ -247,6 +255,7 @@ func workloadFromStatefulSet(s *appsv1.StatefulSet) Workload {
 		Name:            s.Name,
 		Labels:          copyMap(s.Spec.Template.Labels),
 		DesiredReplicas: desired,
+		EnvoyInjected:   s.Spec.Template.Annotations[envoyInjectedAnnotation] == "true",
 	}
 	for _, c := range s.Spec.Template.Spec.Containers {
 		w.Containers = append(w.Containers, ContainerSummary{
@@ -264,6 +273,7 @@ func workloadFromDaemonSet(d *appsv1.DaemonSet) Workload {
 		Name:            d.Name,
 		Labels:          copyMap(d.Spec.Template.Labels),
 		DesiredReplicas: d.Status.DesiredNumberScheduled,
+		EnvoyInjected:   d.Spec.Template.Annotations[envoyInjectedAnnotation] == "true",
 	}
 	for _, c := range d.Spec.Template.Spec.Containers {
 		w.Containers = append(w.Containers, ContainerSummary{

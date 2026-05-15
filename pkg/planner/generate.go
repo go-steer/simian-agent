@@ -246,6 +246,7 @@ Rules you MUST follow:
 6. Plans should be small (1–3 steps typical) so observation can be scoped.
 7. Engine-native spec MUST be populated. Where a catalog entry's spec template lists "action MUST be one of …", picking outside that list causes the cluster to reject the manifest at apply time (driver.failed).
 8. NEVER target a workload tagged as "excluded" via topology.
+9. envoy-fault kinds (EnvoyHttpDelay, EnvoyHttpAbort) require the target workload to be flagged envoy=true in the topology snapshot. If the chosen target lacks envoy=true, pick a different workload OR a different fault kind.
 
 Available fault catalog (kinds you may choose). Each entry shows engine + kind + api_version + tier; entries with a spec template include the canonical engine-native spec shape directly under the entry — copy and adapt.
 
@@ -310,9 +311,12 @@ func buildPlanUserPrompt(in GenerateInput) string {
 
 func summarizeTopology(t *topology.TargetTopology) string {
 	var sb strings.Builder
-	sb.WriteString("Workloads:\n")
+	sb.WriteString("Workloads (envoy=true marks workloads with the Envoy fault sidecar; only those are eligible for envoy-fault chaos kinds):\n")
 	for _, w := range t.Workloads {
 		fmt.Fprintf(&sb, "  %s/%s replicas=%d", w.Kind, w.Name, w.DesiredReplicas)
+		if w.EnvoyInjected {
+			sb.WriteString(" envoy=true")
+		}
 		if pods := t.PodStatus[w.Name]; len(pods) > 0 {
 			ready := 0
 			for _, p := range pods {
