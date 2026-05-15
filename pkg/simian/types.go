@@ -47,8 +47,10 @@ const (
 type Engine string
 
 const (
-	EngineChaosMesh Engine = "chaos-mesh"
-	EngineLitmus    Engine = "litmus"
+	EngineChaosMesh     Engine = "chaos-mesh"
+	EngineLitmus        Engine = "litmus"
+	EngineNetworkPolicy Engine = "network-policy"
+	EngineEnvoyFault    Engine = "envoy-fault"
 )
 
 // TargetRef denormalizes the namespace/workload information from the engine's

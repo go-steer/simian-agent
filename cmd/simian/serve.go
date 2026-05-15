@@ -35,6 +35,7 @@ import (
 	"github.com/go-steer/simian-agent/pkg/arena"
 	"github.com/go-steer/simian-agent/pkg/audit"
 	"github.com/go-steer/simian-agent/pkg/driver/chaosmesh"
+	"github.com/go-steer/simian-agent/pkg/driver/networkpolicy"
 	"github.com/go-steer/simian-agent/pkg/executor"
 	"github.com/go-steer/simian-agent/pkg/lease"
 	"github.com/go-steer/simian-agent/pkg/llm/gemini"
@@ -96,14 +97,21 @@ func newServeCmd() *cobra.Command {
 			cached := memory.NewMemCacheClient(disco)
 
 			cmDriver := chaosmesh.New(dyn, cached, "simian-")
-			drivers := map[simian.Engine]simian.ChaosDriver{
-				simian.EngineChaosMesh: cmDriver,
-			}
 
 			clientset, err := kubernetes.NewForConfig(cfg)
 			if err != nil {
 				return fmt.Errorf("kubernetes clientset: %w", err)
 			}
+			// NetworkPolicy partition driver — works on GKE Dataplane V2,
+			// where Chaos Mesh's NetworkChaos is silently bypassed
+			// (see docs/plan-dpv2-chaos-engines.md).
+			npDriver := networkpolicy.New(clientset, "")
+
+			drivers := map[simian.Engine]simian.ChaosDriver{
+				simian.EngineChaosMesh:     cmDriver,
+				simian.EngineNetworkPolicy: npDriver,
+			}
+
 			elig := buildEligibility(clientset, eligibleNS, logger)
 			execCfg := executor.DefaultConfig()
 			if durationCap > 0 {
