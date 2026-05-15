@@ -178,7 +178,7 @@ func TestGenerate_SetsDefaultNamespaceOnTargets(t *testing.T) {
 }`
 	llm := stub.New("stub")
 	llm.AddRule(stub.ResponseRule{
-		Match: func(simian.CompletionRequest) bool { return true },
+		Match:    func(simian.CompletionRequest) bool { return true },
 		Response: simian.CompletionResponse{Text: planJSON},
 	})
 	g := NewGenerator(llm)

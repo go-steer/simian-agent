@@ -25,8 +25,8 @@ type Executor struct {
 	elig     EligibilityChecker
 	history  *History // optional; nil disables get_recent_faults backing
 
-	mu             sync.Mutex
-	lastApplyByNS  map[string]time.Time
+	mu            sync.Mutex
+	lastApplyByNS map[string]time.Time
 }
 
 // Option configures an Executor at construction time.

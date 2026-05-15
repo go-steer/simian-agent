@@ -9,28 +9,28 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
-	mcpsdk "github.com/mark3labs/mcp-go/mcp"
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
+	mcpsdk "github.com/mark3labs/mcp-go/mcp"
+	"github.com/spf13/cobra"
 )
 
 func newChaosCmd() *cobra.Command {
 	var (
-		mcpURL    string
-		intent    string
+		mcpURL       string
+		intent       string
 		manifestPath string
-		kind      string
-		apiVersion string
-		engine    string
-		ns        string
-		workload  string
-		duration  string
-		specJSON  string
-		stdinSpec bool
-		clear     string
-		listActive bool
-		listCatalog bool
+		kind         string
+		apiVersion   string
+		engine       string
+		ns           string
+		workload     string
+		duration     string
+		specJSON     string
+		stdinSpec    bool
+		clear        string
+		listActive   bool
+		listCatalog  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "chaos",
@@ -61,7 +61,7 @@ Examples:
 			if err != nil {
 				return err
 			}
-			defer cli.Close()
+			defer func() { _ = cli.Close() }()
 
 			switch {
 			case clear != "":
@@ -184,13 +184,13 @@ func buildManifestFromFlags(engine, apiVersion, kind, ns, workload, duration, sp
 		target["name"] = workload
 	}
 	return map[string]any{
-		"engine":         engine,
-		"api_version":    apiVersion,
-		"resource_kind":  kind,
-		"spec":           spec,
-		"targets":        []any{target},
-		"duration":       duration,
-		"source":         "directed",
+		"engine":        engine,
+		"api_version":   apiVersion,
+		"resource_kind": kind,
+		"spec":          spec,
+		"targets":       []any{target},
+		"duration":      duration,
+		"source":        "directed",
 	}, nil
 }
 

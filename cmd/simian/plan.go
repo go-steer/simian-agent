@@ -184,5 +184,7 @@ func (d *dryRunExecutor) Apply(_ context.Context, m simian.FaultManifest) (strin
 	d.calls = append(d.calls, m)
 	return "dryrun-" + m.ResourceKind, nil
 }
-func (d *dryRunExecutor) Clear(_ context.Context, _ string) error                          { return nil }
-func (d *dryRunExecutor) ListActive(_ context.Context, _ string) ([]simian.ActiveFault, error) { return nil, nil }
+func (d *dryRunExecutor) Clear(_ context.Context, _ string) error { return nil }
+func (d *dryRunExecutor) ListActive(_ context.Context, _ string) ([]simian.ActiveFault, error) {
+	return nil, nil
+}

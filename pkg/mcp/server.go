@@ -55,10 +55,10 @@ type Server struct {
 	Executor    simian.FaultExecutor
 	Drivers     map[simian.Engine]simian.ChaosDriver
 	Translator  *planner.Translator
-	Baselines   BaselineLookup       // optional
-	Topology    TopologyLookup       // optional
-	Recents     RecentLookup         // optional
-	Establisher BaselineEstablisher  // optional
+	Baselines   BaselineLookup      // optional
+	Topology    TopologyLookup      // optional
+	Recents     RecentLookup        // optional
+	Establisher BaselineEstablisher // optional
 	Version     string
 
 	mcpServer *server.MCPServer
@@ -364,7 +364,7 @@ func (s *Server) handleGetRecentFaults(_ context.Context, req mcpsdk.CallToolReq
 		out = []executor.RecentFault{}
 	}
 	wrapper := struct {
-		Enabled bool                    `json:"enabled"`
+		Enabled bool                   `json:"enabled"`
 		Recent  []executor.RecentFault `json:"recent"`
 	}{Enabled: true, Recent: out}
 	b, _ := json.Marshal(wrapper)

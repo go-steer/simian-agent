@@ -66,7 +66,7 @@ func (p *Provider) AlwaysReturnStructured(value any) error {
 // request.
 func (p *Provider) AlwaysReturnText(text string) {
 	p.AddRule(ResponseRule{
-		Match: func(_ simian.CompletionRequest) bool { return true },
+		Match:    func(_ simian.CompletionRequest) bool { return true },
 		Response: simian.CompletionResponse{Text: text},
 	})
 }

@@ -122,10 +122,10 @@ func TestEnvRefsFromContainer(t *testing.T) {
 
 func TestSplitHostPort(t *testing.T) {
 	cases := []struct {
-		in      string
-		host    string
-		port    string
-		ok      bool
+		in   string
+		host string
+		port string
+		ok   bool
 	}{
 		{"cartservice:7070", "cartservice", "7070", true},
 		{"foo.bar.baz:80", "foo.bar.baz", "80", true},

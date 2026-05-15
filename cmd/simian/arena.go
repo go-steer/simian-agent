@@ -34,11 +34,11 @@ applying faults (with 'simian chaos').`,
 
 func newArenaCreateCmd() *cobra.Command {
 	var (
-		kubeconfig       string
-		chaosSAName      string
-		chaosSANS        string
-		annotations      []string
-		labelsArgs       []string
+		kubeconfig  string
+		chaosSAName string
+		chaosSANS   string
+		annotations []string
+		labelsArgs  []string
 	)
 	cmd := &cobra.Command{
 		Use:   "create <namespace>",

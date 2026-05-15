@@ -223,4 +223,3 @@ func newSutDestroyCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&force, "force", false, "Force arena destroy even with active faults (only with --with-arena)")
 	return cmd
 }
-

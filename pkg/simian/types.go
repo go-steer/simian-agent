@@ -138,8 +138,8 @@ type PlanStep struct {
 // PlanBudget is the LLM-declared budget for an AttackPlan; the executor
 // enforces installation-wide caps on top.
 type PlanBudget struct {
-	MaxConcurrentFaults int           `json:"max_concurrent_faults,omitempty"`
-	MinCooldown         time.Duration `json:"min_cooldown,omitempty"`
+	MaxConcurrentFaults int             `json:"max_concurrent_faults,omitempty"`
+	MinCooldown         time.Duration   `json:"min_cooldown,omitempty"`
 	MaxSeverityTier     BlastRadiusTier `json:"max_severity_tier,omitempty"`
 }
 
@@ -156,13 +156,13 @@ type AttackPlan struct {
 // fault until it is cleared (either by lease expiry, explicit Clear, or
 // crash-recovery reaper).
 type ActiveFault struct {
-	FaultUID    string         `json:"fault_uid"`
-	EngineUID   string         `json:"engine_uid"`
-	Manifest    FaultManifest  `json:"manifest"`
-	AppliedAt   time.Time      `json:"applied_at"`
-	Deadline    time.Time      `json:"deadline"`
-	Holder      string         `json:"holder"` // controller pod ID
-	LastBeat    time.Time      `json:"last_beat"`
+	FaultUID  string        `json:"fault_uid"`
+	EngineUID string        `json:"engine_uid"`
+	Manifest  FaultManifest `json:"manifest"`
+	AppliedAt time.Time     `json:"applied_at"`
+	Deadline  time.Time     `json:"deadline"`
+	Holder    string        `json:"holder"` // controller pod ID
+	LastBeat  time.Time     `json:"last_beat"`
 }
 
 // CatalogEntry describes one fault type the executor will accept. Discovered
@@ -183,11 +183,11 @@ type CatalogEntry struct {
 // IncidentNotification is the Red Phone outbound payload schema (M5).
 // Defined here so packages can reference it without importing redphone.
 type IncidentNotification struct {
-	IncidentID      string            `json:"incident_id"`
-	SourceFault     string            `json:"source_fault_uid"`
-	PlanID          string            `json:"plan_id,omitempty"`
-	PromptPage      string            `json:"prompt_page"`
-	LinguisticStyle string            `json:"linguistic_style"`
-	Telemetry       map[string]any    `json:"telemetry_context"`
-	Timestamp       time.Time         `json:"timestamp"`
+	IncidentID      string         `json:"incident_id"`
+	SourceFault     string         `json:"source_fault_uid"`
+	PlanID          string         `json:"plan_id,omitempty"`
+	PromptPage      string         `json:"prompt_page"`
+	LinguisticStyle string         `json:"linguistic_style"`
+	Telemetry       map[string]any `json:"telemetry_context"`
+	Timestamp       time.Time      `json:"timestamp"`
 }
