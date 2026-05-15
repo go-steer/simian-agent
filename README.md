@@ -26,6 +26,12 @@ AI-native chaos engineering orchestrator for Kubernetes. **Milestone 1 shipped**
 - **LLM-down clean skip** — if the LLM is unreachable or returns schema-invalid output twice, the cycle emits `cycle.llm_unavailable` + `cycle.skipped` and applies nothing.
 - **New read-only MCP tools** — `get_topology(ns)`, `get_recent_faults(ns, limit)`, `establish_baseline(ns, sut)`, plus `get_metrics` (stub until a metrics provider is wired in a later milestone).
 
+### DPv2-compatible chaos engines (post-M3)
+- **`network-policy` engine** — partition chaos via standard `networking.k8s.io/v1` NetworkPolicy. Works on GKE Dataplane V2, where Chaos Mesh's NetworkChaos is silently bypassed. Partition only (deny ingress / egress / both for a labeled pod set); no delay / loss / jitter.
+- **`envoy-fault` engine** — HTTP-layer delay + abort via an Envoy sidecar injected at SUT-deploy time. Two kinds: `EnvoyHttpDelay` and `EnvoyHttpAbort`. The driver pokes each pod's Envoy admin API (port 15000) to flip the fault filter on/off — no Kubernetes resources are created or destroyed at chaos-time.
+- **Envoy injection** — `simian sut deploy` injects the Envoy sidecar + iptables init container by default. Opt out per-deploy with `--no-envoy-faults`; opt out per-workload with the `simian.chaos/no-envoy-injection: "true"` pod-template annotation. The topology snapshot flags injected workloads as `envoy=true` so the autonomous planner only proposes envoy-fault chaos against eligible workloads.
+- **Background:** see [docs/plan-dpv2-chaos-engines.md](docs/plan-dpv2-chaos-engines.md) for the full rationale (chaos-mesh#3302, cilium#19975) and design decisions.
+
 ### Directed-mode chaos (M1)
 - **`simian serve`** — runs the Fault Executor + MCP server on port 8081 (default).
 - **`simian chaos --intent "..."`** — plain-text intent → Gemini translates to a `FaultManifest` → executor validates and applies.
@@ -166,7 +172,7 @@ go test -tags=integration ./pkg/llm/gemini/...
 
 These bit us during M1 verification. Documenting so the next person doesn't lose 30 minutes:
 
-- **GKE Dataplane V2 (Cilium / `anetd`) silently breaks `NetworkChaos`.** Chaos Mesh installs a `netem` qdisc on the pod's `eth0`, which we verified is present at the kernel level. But Dataplane V2 routes pod-to-pod traffic through eBPF maps that bypass the tc qdisc layer, so the latency / loss never gets applied. The `Sent ... pkt` counter on the qdisc stays flat. This is a Chaos Mesh + Cilium incompatibility, not a Simian bug. **For demos requiring observable network chaos on GKE, either provision a non-Dataplane-V2 cluster, or use `PodChaos` / `StressChaos` / `TimeChaos` / `IOChaos` / `JVMChaos` — those work fine on Dataplane V2.**
+- **GKE Dataplane V2 (Cilium / `anetd`) silently breaks `NetworkChaos`.** Chaos Mesh installs a `netem` qdisc on the pod's `eth0`, which we verified is present at the kernel level. But Dataplane V2 routes pod-to-pod traffic through eBPF maps that bypass the tc qdisc layer, so the latency / loss never gets applied. The `Sent ... pkt` counter on the qdisc stays flat. This is a Chaos Mesh + Cilium incompatibility, not a Simian bug. **Workarounds shipped:** the `network-policy` engine handles partition-style chaos (works on DPv2), and the `envoy-fault` engine handles HTTP-layer delay + abort via an injected Envoy sidecar (works on DPv2). For non-network chaos, `PodChaos` / `StressChaos` / `TimeChaos` / `IOChaos` / `JVMChaos` continue to work fine on Dataplane V2. See [docs/plan-dpv2-chaos-engines.md](docs/plan-dpv2-chaos-engines.md).
 - **Chaos Mesh on GKE Standard with Node Auto-Provisioning** needs (a) the `chaos-mesh` namespace to use the `cloud.google.com/default-compute-class-non-daemonset` label (not the bare `default-compute-class` one — it injects a `nodeSelector` into the chaos-daemon DaemonSet that contradicts the per-node-pod affinity), AND (b) the chaos-daemon DaemonSet template to tolerate `cloud.google.com/compute-class:NoSchedule` (operator: Exists) so it lands on every NAP-provisioned node. Without both, the daemon is missing on most nodes and `NetworkChaos`/`IOChaos` reconciliation fails with `cannot find daemonIP on node ...`.
 
 ## What's *not* shipped yet (deferred per `docs/roadmap.md`)
