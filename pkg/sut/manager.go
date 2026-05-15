@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -54,11 +55,19 @@ type Manager struct {
 
 	Registry Registry
 
+	// Store, if set, mirrors baseline writes/deletes to durable storage so the
+	// in-memory cache survives `simian serve` restarts. Defaults to a no-op
+	// store. Set to a real ConfigMapStore (or other implementation) by callers
+	// that need cross-restart durability — typically `simian serve`.
+	Store BaselineStore
+
 	mu        sync.RWMutex
 	baselines map[string]Baseline // keyed by namespace
 }
 
-// NewManager constructs a Manager.
+// NewManager constructs a Manager. Store defaults to noopStore{}; callers that
+// need durable persistence (e.g. simian serve) should assign a real store
+// after construction.
 func NewManager(k8s kubernetes.Interface, dyn dynamic.Interface, disco discovery.CachedDiscoveryInterface, registry Registry) *Manager {
 	if registry == nil {
 		registry = Default
@@ -69,6 +78,7 @@ func NewManager(k8s kubernetes.Interface, dyn dynamic.Interface, disco discovery
 		Disco:     disco,
 		mapper:    restmapper.NewDeferredDiscoveryRESTMapper(disco),
 		Registry:  registry,
+		Store:     noopStore{},
 		baselines: map[string]Baseline{},
 	}
 }
@@ -111,6 +121,14 @@ func (m *Manager) Deploy(ctx context.Context, opts DeployOptions) (*Baseline, er
 	m.mu.Lock()
 	m.baselines[opts.Namespace] = *bl
 	m.mu.Unlock()
+	// Best-effort persistence — a failed Save does not fail the deploy. The
+	// in-memory cache remains authoritative; persistence just makes the next
+	// serve restart cheaper. Failure here typically means missing RBAC for
+	// configmaps in the SUT namespace; surface it to the operator without
+	// rolling back the deploy.
+	if err := m.Store.Save(ctx, *bl); err != nil {
+		fmt.Fprintf(os.Stderr, "sut: warning: persist baseline for %q: %v\n", opts.Namespace, err)
+	}
 	return bl, nil
 }
 
@@ -146,7 +164,38 @@ func (m *Manager) Destroy(ctx context.Context, opts DestroyOptions) error {
 	m.mu.Lock()
 	delete(m.baselines, opts.Namespace)
 	m.mu.Unlock()
+	if err := m.Store.Delete(ctx, opts.Namespace); err != nil {
+		fmt.Fprintf(os.Stderr, "sut: warning: clear persisted baseline for %q: %v\n", opts.Namespace, err)
+	}
 	return nil
+}
+
+// LoadCachedBaselines warms the in-memory baseline map from the configured
+// Store. Intended to be called once at `simian serve` startup so an
+// immediately-following autonomous loop doesn't need a manual establish_baseline
+// before its health gate clears. Returns the count of baselines loaded.
+//
+// A non-nil error from the underlying List does NOT prevent serve from
+// starting — the caller logs it and continues. Stale entries (workloads scaled
+// since persistence) are caught by the next cycle's health gate, same as a
+// fresh deploy.
+func (m *Manager) LoadCachedBaselines(ctx context.Context) (int, error) {
+	if m.Store == nil {
+		return 0, nil
+	}
+	bls, err := m.Store.List(ctx)
+	if err != nil {
+		return 0, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, bl := range bls {
+		if bl.Namespace == "" {
+			continue
+		}
+		m.baselines[bl.Namespace] = bl
+	}
+	return len(bls), nil
 }
 
 // Baseline returns the cached baseline for a namespace, if any.

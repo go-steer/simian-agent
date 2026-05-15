@@ -135,7 +135,12 @@ func newSutDeployCmd() *cobra.Command {
 
 			if useController {
 				fmt.Printf("deploying SUT %q into %q via controller (%s)...\n", sutName, namespace, mcpURL)
-				cli, err := newMCPClient(ctx, mcpURL)
+				// SUT cold-start can take minutes (Online Boutique runs ~3-5min on
+				// a small NAP node pool). Bump the SSE response timeout so the
+				// CLI doesn't return a misleading transport error before the
+				// controller's establish_baseline call returns. Match the outer
+				// context's 15-minute window above.
+				cli, err := newMCPClient(ctx, mcpURL, withResponseTimeout(15*time.Minute))
 				if err != nil {
 					return fmt.Errorf("connect to controller: %w", err)
 				}

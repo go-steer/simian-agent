@@ -135,3 +135,71 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+func TestTranslatePromptIncludesDefaultNamespace(t *testing.T) {
+	provider := stub.New("test")
+	if err := provider.AlwaysReturnStructured(map[string]any{
+		"engine":        "chaos-mesh",
+		"api_version":   "chaos-mesh.org/v1alpha1",
+		"resource_kind": "PodChaos",
+		"spec":          map[string]any{"action": "pod-kill", "mode": "one", "selector": map[string]any{"labelSelectors": map[string]any{"app": "paymentservice"}}},
+		"targets":       []any{map[string]any{"namespace": "boutique-m3", "name": "paymentservice"}},
+		"duration":      "30s",
+		"rationale":     "kill paymentservice",
+	}); err != nil {
+		t.Fatalf("seed stub: %v", err)
+	}
+	tr := New(provider)
+	if _, err := tr.Translate(context.Background(), IntentInput{
+		Intent:           "kill one paymentservice pod for 30 seconds",
+		Catalog:          sampleCatalog(),
+		DefaultDuration:  30 * time.Second,
+		DefaultNamespace: "boutique-m3",
+	}); err != nil {
+		t.Fatalf("Translate: %v", err)
+	}
+	calls := provider.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 LLM call, got %d", len(calls))
+	}
+	user := calls[0].Messages[0].Content
+	if !containsString(user, `default to "boutique-m3"`) {
+		t.Errorf("user prompt should instruct LLM to default to boutique-m3.\nGot:\n%s", user)
+	}
+	if !containsString(user, `NOT "default"`) {
+		t.Errorf("user prompt should warn against using the literal \"default\" namespace.\nGot:\n%s", user)
+	}
+	// And the system prompt should carry the same NEVER-default rule.
+	system := calls[0].System
+	if !containsString(system, `NEVER use the literal string "default"`) {
+		t.Errorf("system prompt should forbid literal \"default\" namespace.\nGot:\n%s", system)
+	}
+}
+
+func TestTranslatePromptOmitsDefaultNamespaceClauseWhenUnset(t *testing.T) {
+	provider := stub.New("test")
+	if err := provider.AlwaysReturnStructured(map[string]any{
+		"engine":        "chaos-mesh",
+		"api_version":   "chaos-mesh.org/v1alpha1",
+		"resource_kind": "PodChaos",
+		"spec":          map[string]any{"action": "pod-kill", "mode": "one", "selector": map[string]any{"labelSelectors": map[string]any{"app": "x"}}},
+		"targets":       []any{map[string]any{"namespace": "ns", "name": "x"}},
+		"duration":      "30s",
+		"rationale":     "x",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	tr := New(provider)
+	if _, err := tr.Translate(context.Background(), IntentInput{
+		Intent:          "kill x in namespace ns",
+		Catalog:         sampleCatalog(),
+		DefaultDuration: 30 * time.Second,
+		// DefaultNamespace deliberately empty — caller didn't pass one.
+	}); err != nil {
+		t.Fatalf("Translate: %v", err)
+	}
+	user := provider.Calls()[0].Messages[0].Content
+	if containsString(user, "If the user did not name a namespace") {
+		t.Errorf("user prompt should not mention default namespace when none provided.\nGot:\n%s", user)
+	}
+}

@@ -218,16 +218,23 @@ func (s *Server) handleSubmitFault(ctx context.Context, req mcpsdk.CallToolReque
 	}
 
 	manifest, err := s.Translator.Translate(ctx, planner.IntentInput{
-		Intent:          intent,
-		Catalog:         cat,
-		DefaultDuration: defaultDur,
+		Intent:           intent,
+		Catalog:          cat,
+		DefaultDuration:  defaultDur,
+		DefaultNamespace: defaultNS,
 	})
 	if err != nil {
 		return mcpsdk.NewToolResultError(fmt.Sprintf("translate: %v", err)), nil
 	}
 	if defaultNS != "" {
+		// Back-fill blank namespaces, AND rewrite "default" → defaultNS. The
+		// LLM is instructed (in translate.go's system prompt) never to pick
+		// "default" when a default namespace is provided, but Gemini still
+		// occasionally bypasses the instruction. Defensive correction here
+		// avoids a downstream "namespace 'default' is not eligible for chaos"
+		// rejection on a request the user clearly meant for `defaultNS`.
 		for i := range manifest.Targets {
-			if manifest.Targets[i].Namespace == "" {
+			if manifest.Targets[i].Namespace == "" || manifest.Targets[i].Namespace == "default" {
 				manifest.Targets[i].Namespace = defaultNS
 			}
 		}
