@@ -71,6 +71,7 @@ func newServeCmd() *cobra.Command {
 		maxFaultsPerCycle    int
 		maxSeverityPerCycle  string
 		hypothesisHint       string
+		sutInjectEnvoyFault  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -184,10 +185,15 @@ func newServeCmd() *cobra.Command {
 				logger.Info("simian serve: baseline cache warmed", slog.Int("namespaces", n))
 			}
 
+			// Wrap the manager so calls coming through MCP establish_baseline
+			// honor the controller's WithEnvoyFaults policy. The flag default
+			// is true (matches sutInjection.envoyFaults in the chart).
+			establisher := &envoyOptingEstablisher{mgr: sutMgr, withEnvoyFaults: sutInjectEnvoyFault}
+
 			srv := mcp.New(exec, drivers, translator, sutMgr, version,
 				mcp.WithTopology(disco2),
 				mcp.WithRecents(exec),
-				mcp.WithBaselineEstablisher(sutMgr),
+				mcp.WithBaselineEstablisher(establisher),
 			)
 
 			if autonomous {
@@ -282,7 +288,23 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().IntVar(&maxFaultsPerCycle, "max-faults-per-cycle", 3, "Per-cycle cap on faults applied")
 	cmd.Flags().StringVar(&maxSeverityPerCycle, "max-severity-per-cycle", "namespace", "Highest blast-radius tier the autonomous loop will apply (namespace|node|external)")
 	cmd.Flags().StringVar(&hypothesisHint, "hypothesis-hint", "", "Optional hypothesis text passed to the planner as a soft preference")
+	cmd.Flags().BoolVar(&sutInjectEnvoyFault, "sut-inject-envoy-faults", true, "When true, the controller injects an Envoy fault sidecar into each Deployment of any SUT applied via the establish_baseline MCP tool. Required by the envoy-fault chaos engine to deliver HTTP delay/abort on GKE Dataplane V2.")
 	return cmd
+}
+
+// envoyOptingEstablisher overlays a fixed WithEnvoyFaults preference on
+// every Deploy() call. Used to wire the controller's --sut-inject-envoy-faults
+// flag through the MCP establish_baseline path: the MCP tool itself is
+// argument-poor (just namespace + sut name), so the policy is set once at
+// controller boot.
+type envoyOptingEstablisher struct {
+	mgr             *sut.Manager
+	withEnvoyFaults bool
+}
+
+func (e *envoyOptingEstablisher) Deploy(ctx context.Context, opts sut.DeployOptions) (*sut.Baseline, error) {
+	opts.WithEnvoyFaults = e.withEnvoyFaults
+	return e.mgr.Deploy(ctx, opts)
 }
 
 func buildKubeConfig(path string) (*rest.Config, error) {

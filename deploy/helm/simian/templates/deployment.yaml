@@ -33,6 +33,7 @@ spec:
             - --max-concurrent-faults={{ .Values.executor.maxConcurrentFaults }}
             - --min-cooldown={{ .Values.executor.minCooldown }}
             - --recent-faults-capacity={{ .Values.executor.recentFaultsCapacity }}
+            - --sut-inject-envoy-faults={{ .Values.sutInjection.envoyFaults }}
             - --topology-resync={{ .Values.topology.resync }}
             {{- range .Values.eligibleNamespaces }}
             - --eligible-namespace={{ . }}
