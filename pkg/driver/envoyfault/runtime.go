@@ -19,11 +19,17 @@ package envoyfault
 // canonical names are what Envoy looks up.
 //
 // Reference: envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/fault_filter
+// (and source/extensions/filters/http/fault/fault_filter.cc in the
+// Envoy source tree, which is the authoritative list of runtime key
+// names — the docs gloss over the _ms suffix).
 const (
 	// runtimeKeyDelayPercent overrides delay.percentage. Integer 0-100.
 	runtimeKeyDelayPercent = "fault.http.delay.fixed_delay_percent"
-	// runtimeKeyDelayDuration overrides delay.fixed_delay. Milliseconds.
-	runtimeKeyDelayDuration = "fault.http.delay.fixed_duration"
+	// runtimeKeyDelayDuration overrides delay.fixed_delay. Integer
+	// milliseconds. The "_ms" suffix is REQUIRED — without it Envoy
+	// silently ignores the override and falls back to the static
+	// fixed_delay duration baked into the bootstrap config.
+	runtimeKeyDelayDuration = "fault.http.delay.fixed_duration_ms"
 	// runtimeKeyAbortPercent overrides abort.percentage. Integer 0-100.
 	runtimeKeyAbortPercent = "fault.http.abort.abort_percent"
 	// runtimeKeyAbortStatus overrides abort.http_status. Integer (e.g. 503).

@@ -136,7 +136,7 @@ func newServeCmd() *cobra.Command {
 
 			reaper := &lease.Reaper{
 				Registry: registry,
-				Driver:   cmDriver,
+				Drivers:  drivers,
 				Interval: reapInterval,
 				Auditor:  auditor,
 				OnExpire: func(af simian.ActiveFault, reason string) {

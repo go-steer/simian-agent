@@ -21,6 +21,7 @@ package lease
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -131,10 +132,21 @@ func (r *Registry) Expired(now time.Time) []simian.ActiveFault {
 // HolderID returns the controller identity recorded on registry entries.
 func (r *Registry) HolderID() string { return r.holder }
 
-// Reaper periodically clears expired faults via the driver. Run in its own
-// goroutine for the controller lifetime.
+// Reaper periodically clears expired faults via the appropriate driver
+// for each fault's engine. Run in its own goroutine for the controller
+// lifetime.
 type Reaper struct {
 	Registry *Registry
+	// Drivers is the engine→driver map the reaper uses to route Clear
+	// calls. The fault's manifest.Engine selects which driver clears it.
+	// Required when the executor has more than one engine registered;
+	// for single-engine installs Driver may be set instead as a
+	// convenience (see Driver below).
+	Drivers map[simian.Engine]simian.ChaosDriver
+	// Driver is a convenience for single-engine installs. When set and
+	// Drivers is nil, the reaper routes every expired fault through it
+	// regardless of engine. New code should use Drivers; this field is
+	// preserved so existing tests + multi-engine wiring don't break.
 	Driver   simian.ChaosDriver
 	Interval time.Duration
 	Auditor  simian.Auditor
@@ -161,17 +173,45 @@ func (rp *Reaper) Run(ctx context.Context) {
 	}
 }
 
+// driverFor selects the correct driver for an active fault. Prefers the
+// engine→driver map when set; falls back to the single-driver convenience
+// field. Returns nil + a clear error if neither is set or the engine is
+// not registered.
+func (rp *Reaper) driverFor(af simian.ActiveFault) (simian.ChaosDriver, error) {
+	if rp.Drivers != nil {
+		d, ok := rp.Drivers[af.Manifest.Engine]
+		if !ok {
+			return nil, fmt.Errorf("no driver registered for engine %q", af.Manifest.Engine)
+		}
+		return d, nil
+	}
+	if rp.Driver != nil {
+		return rp.Driver, nil
+	}
+	return nil, fmt.Errorf("reaper has neither Drivers map nor single Driver configured")
+}
+
 // Sweep clears any expired faults. Errors per-fault are audited but do not
 // abort the sweep.
 func (rp *Reaper) Sweep(ctx context.Context) {
 	now := time.Now().UTC()
 	for _, af := range rp.Registry.Expired(now) {
-		if err := rp.Driver.Clear(ctx, af.EngineUID); err != nil {
+		driver, err := rp.driverFor(af)
+		if err != nil {
 			rp.Auditor.Emit(ctx, simian.AuditEvent{
 				Event:    "lease.cleared",
 				FaultUID: af.FaultUID,
 				Reason:   "driver-clear-failed",
-				Payload:  map[string]any{"error": err.Error()},
+				Payload:  map[string]any{"error": err.Error(), "engine": string(af.Manifest.Engine)},
+			})
+			continue
+		}
+		if err := driver.Clear(ctx, af.EngineUID); err != nil {
+			rp.Auditor.Emit(ctx, simian.AuditEvent{
+				Event:    "lease.cleared",
+				FaultUID: af.FaultUID,
+				Reason:   "driver-clear-failed",
+				Payload:  map[string]any{"error": err.Error(), "engine": string(af.Manifest.Engine)},
 			})
 			continue
 		}
