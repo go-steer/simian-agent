@@ -167,6 +167,7 @@ func (d *Driver) Catalog(ctx context.Context) ([]simian.CatalogEntry, error) {
 			ResourceKind:    r.Kind,
 			BlastRadiusTier: catalog.Classify(simian.EngineChaosMesh, r.Kind),
 			Description:     r.Kind + " (chaos-mesh.org)",
+			SpecTemplate:    specTemplates[r.Kind],
 		})
 	}
 	return out, nil

@@ -79,7 +79,7 @@ func (g *Generator) Generate(ctx context.Context, in GenerateInput) (simian.Atta
 		return simian.AttackPlan{}, fmt.Errorf("generator: catalog is empty — no faults are installed or permitted")
 	}
 
-	system := buildPlanSystemPrompt()
+	system := buildPlanSystemPrompt(in.Catalog)
 	user := buildPlanUserPrompt(in)
 
 	maxRetries := g.MaxRetries
@@ -196,14 +196,14 @@ func parseAttackPlan(raw []byte, in GenerateInput) (simian.AttackPlan, error) {
 	return plan, nil
 }
 
-func buildPlanSystemPrompt() string {
+func buildPlanSystemPrompt(cat []simian.CatalogEntry) string {
 	var sb strings.Builder
 	sb.WriteString(`You are Simian Agent's autonomous-mode plan generator. Your job is to produce a structured AttackPlan: an ordered set of chaos engineering experiments designed to test the resilience of a single arena namespace.
 
 You will be given:
 - Live cluster topology (workloads, services, dependency graph).
 - The current baseline snapshot (what "healthy" looks like).
-- A catalog of fault types installed and permitted by current policy.
+- A catalog of fault types installed and permitted by current policy (each entry below includes its canonical spec template).
 - Recent faults (so you don't repeat the same attack with no observation gap).
 - Per-cycle budget caps (you MUST respect these).
 - An optional hypothesis hint from the operator.
@@ -219,10 +219,10 @@ Your response MUST be a single JSON object matching this schema (no markdown, no
       "rationale": "...",          // why this step, why now
       "depends_on": [],            // optional list of prior step Orders this depends on
       "manifest": {
-        "engine":        "chaos-mesh",
-        "api_version":   "chaos-mesh.org/v1alpha1",
-        "resource_kind": "PodChaos",
-        "spec": { ... },           // engine-native; see translator templates
+        "engine":        "<engine from catalog>",
+        "api_version":   "<api_version from catalog>",
+        "resource_kind": "<resource_kind from catalog>",
+        "spec": { ... },           // engine-native; copy the spec template under the catalog entry and adapt
         "targets": [{"namespace": "<ns>", "name": "<workload>"}],
         "duration": "30s",
         "blast_radius_tier": "namespace",
@@ -244,45 +244,13 @@ Rules you MUST follow:
 4. Honor the cycle budget caps — do not emit more steps than max_faults_per_cycle.
 5. Order steps so cause precedes effect; use depends_on to express ordering.
 6. Plans should be small (1–3 steps typical) so observation can be scoped.
-7. Engine-native spec MUST be populated. The spec.action verb MUST be one of the values listed below for that CRD — Chaos Mesh's CRD validation rejects anything else.
+7. Engine-native spec MUST be populated. Where a catalog entry's spec template lists "action MUST be one of …", picking outside that list causes the cluster to reject the manifest at apply time (driver.failed).
 8. NEVER target a workload tagged as "excluded" via topology.
 
-Valid spec.action values per Chaos Mesh CRD (these are CRD-enforced — picking outside this list causes driver.failed):
-  PodChaos:     "pod-kill" | "pod-failure" | "container-kill"
-  NetworkChaos: "netem" | "delay" | "loss" | "duplicate" | "corrupt" | "partition" | "bandwidth"
-                  (note: "latency" is NOT a NetworkChaos action — use "delay" instead. "latency" is the IOChaos action.)
-  IOChaos:      "latency" | "fault" | "attrOverride" | "mistake"
-  StressChaos:  no "action" field — use "stressors": {"cpu": {...}} or {"memory": {...}}
-  TimeChaos:    no "action" field — use "timeOffset": "<duration>"
-  HTTPChaos:    "abort" | "delay" | "replace" | "patch"
-  DNSChaos:     "error" | "random"
+Available fault catalog (kinds you may choose). Each entry shows engine + kind + api_version + tier; entries with a spec template include the canonical engine-native spec shape directly under the entry — copy and adapt.
 
-Canonical spec shapes (copy and adapt — fill the namespace from the Target namespace above):
-
-PodChaos:
-  {"action": "pod-kill", "mode": "one",
-   "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}}}
-
-NetworkChaos (delay):
-  {"action": "delay", "mode": "all",
-   "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}},
-   "delay": {"latency": "250ms", "correlation": "0", "jitter": "0ms"}}
-
-NetworkChaos (loss):
-  {"action": "loss", "mode": "all",
-   "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}},
-   "loss": {"loss": "10", "correlation": "0"}}
-
-StressChaos (CPU):
-  {"mode": "one",
-   "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}},
-   "stressors": {"cpu": {"workers": 2, "load": 80}}}
-
-IOChaos (latency):
-  {"action": "latency", "mode": "one",
-   "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}},
-   "volumePath": "/data", "path": "/data/**", "delay": "100ms", "percent": 100}
 `)
+	renderCatalogWithTemplates(&sb, cat)
 	return sb.String()
 }
 
@@ -317,13 +285,6 @@ func buildPlanUserPrompt(in GenerateInput) string {
 		}
 		sb.WriteString("\n")
 	}
-
-	sb.WriteString("## Fault catalog (kinds you may choose)\n")
-	for _, e := range in.Catalog {
-		fmt.Fprintf(&sb, "- engine=%s kind=%s api_version=%s tier=%s\n",
-			e.Engine, e.ResourceKind, e.APIVersion, e.BlastRadiusTier)
-	}
-	sb.WriteString("\n")
 
 	if len(in.RecentFaults) > 0 {
 		sb.WriteString("## Recent faults (avoid pointless repetition)\n")

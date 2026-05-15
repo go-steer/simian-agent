@@ -176,6 +176,43 @@ func TestTranslatePromptIncludesDefaultNamespace(t *testing.T) {
 	}
 }
 
+func TestTranslatePromptRendersCatalogSpecTemplate(t *testing.T) {
+	const marker = "FOO_TEMPLATE_MARKER_xyz"
+	provider := stub.New("test")
+	if err := provider.AlwaysReturnStructured(map[string]any{
+		"engine":        "chaos-mesh",
+		"api_version":   "chaos-mesh.org/v1alpha1",
+		"resource_kind": "PodChaos",
+		"spec":          map[string]any{"action": "pod-kill", "mode": "one", "selector": map[string]any{"labelSelectors": map[string]any{"app": "x"}}},
+		"targets":       []any{map[string]any{"namespace": "ns", "name": "x"}},
+		"duration":      "30s",
+		"rationale":     "x",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	tr := New(provider)
+	cat := []simian.CatalogEntry{
+		{
+			Engine:          simian.EngineChaosMesh,
+			APIVersion:      "chaos-mesh.org/v1alpha1",
+			ResourceKind:    "PodChaos",
+			BlastRadiusTier: simian.TierNamespace,
+			SpecTemplate:    marker,
+		},
+	}
+	if _, err := tr.Translate(context.Background(), IntentInput{
+		Intent:          "kill x",
+		Catalog:         cat,
+		DefaultDuration: 30 * time.Second,
+	}); err != nil {
+		t.Fatalf("Translate: %v", err)
+	}
+	system := provider.Calls()[0].System
+	if !containsString(system, marker) {
+		t.Errorf("system prompt should render SpecTemplate %q.\nGot:\n%s", marker, system)
+	}
+}
+
 func TestTranslatePromptOmitsDefaultNamespaceClauseWhenUnset(t *testing.T) {
 	provider := stub.New("test")
 	if err := provider.AlwaysReturnStructured(map[string]any{
