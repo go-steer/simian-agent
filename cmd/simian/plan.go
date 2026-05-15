@@ -32,6 +32,7 @@ import (
 	"github.com/go-steer/simian-agent/pkg/arena"
 	"github.com/go-steer/simian-agent/pkg/audit"
 	"github.com/go-steer/simian-agent/pkg/driver/chaosmesh"
+	"github.com/go-steer/simian-agent/pkg/driver/networkpolicy"
 	"github.com/go-steer/simian-agent/pkg/executor"
 	"github.com/go-steer/simian-agent/pkg/lease"
 	"github.com/go-steer/simian-agent/pkg/loop"
@@ -90,7 +91,11 @@ executor pipeline 'simian serve --autonomous' uses.`,
 			cached := memory.NewMemCacheClient(disco)
 
 			cmDriver := chaosmesh.New(dyn, cached, "simian-")
-			drivers := map[simian.Engine]simian.ChaosDriver{simian.EngineChaosMesh: cmDriver}
+			npDriver := networkpolicy.New(clientset, "")
+			drivers := map[simian.Engine]simian.ChaosDriver{
+				simian.EngineChaosMesh:     cmDriver,
+				simian.EngineNetworkPolicy: npDriver,
+			}
 
 			// Eligibility honors the same annotation lookup serve uses.
 			elig := arena.NewAnnotationEligibility(clientset)

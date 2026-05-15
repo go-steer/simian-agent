@@ -90,6 +90,14 @@ func Classify(engine simian.Engine, kind string) simian.BlastRadiusTier {
 		// Default to namespace for now since most ChaosHub experiments are
 		// pod/workload scoped; refined when the Litmus driver lands.
 		return simian.TierNamespace
+	case simian.EngineNetworkPolicy:
+		// NetworkPolicy partitions live entirely within one namespace —
+		// they cannot affect resources outside it.
+		return simian.TierNamespace
+	case simian.EngineEnvoyFault:
+		// Envoy fault filters operate inside the per-pod sidecar — scoped
+		// to the workload's namespace.
+		return simian.TierNamespace
 	}
 	return simian.TierExternal
 }
