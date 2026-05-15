@@ -3,7 +3,7 @@
 image:
   # Published by .github/workflows/release.yml on each `v*` tag push.
   repository: ghcr.io/go-steer/simian-agent
-  # Empty default falls back to .Chart.AppVersion ("0.1.0-dev") in the
+  # Empty default falls back to .Chart.AppVersion ("0.1.1-dev") in the
   # Deployment template, so chart bumps automatically pick up the matching
   # image tag without flipping this field.
   tag: ""
