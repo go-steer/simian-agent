@@ -45,6 +45,17 @@ type SUT interface {
 	BaselineConfig() BaselineConfig
 }
 
+// EnvoyFaultPortsProvider is an optional add-on interface a SUT may
+// implement to declare the inbound TCP ports its services listen on. Used
+// by the Envoy-fault injection path (pkg/sut/envoy) to install iptables
+// REDIRECT rules that route those ports through the injected Envoy
+// sidecar. SUTs that don't implement this interface fall back to the
+// Manager's default port list, which may not match the workload's actual
+// service ports — Envoy will be injected but won't intercept anything.
+type EnvoyFaultPortsProvider interface {
+	EnvoyFaultPorts() []int
+}
+
 // WorkloadRef identifies a workload by Kind + Name.
 type WorkloadRef struct {
 	Kind string `json:"kind"` // "Deployment" | "StatefulSet"

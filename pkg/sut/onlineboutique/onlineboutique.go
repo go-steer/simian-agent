@@ -70,6 +70,29 @@ func (o *onlineBoutique) BaselineConfig() sut.BaselineConfig {
 	return cfg
 }
 
+// EnvoyFaultPorts implements sut.EnvoyFaultPortsProvider — the inbound
+// TCP ports each Online Boutique service listens on. The Envoy-fault
+// injection path installs iptables REDIRECT rules for these ports so the
+// sidecar can apply HTTP/gRPC fault filters to inter-service traffic.
+//
+// Source: upstream kubernetes-manifests.yaml (release v0.10.2). Ports are
+// the union across all 12 services; iptables rules are namespace-wide and
+// only fire on packets whose dport matches a real listener.
+func (o *onlineBoutique) EnvoyFaultPorts() []int {
+	return []int{
+		80,    // frontend HTTP
+		3550,  // productcatalogservice gRPC
+		5000,  // paymentservice gRPC, currencyservice gRPC, shippingservice gRPC
+		6379,  // redis-cart (raw TCP — Envoy can still intercept; HTTP filter no-ops)
+		7000,  // recommendationservice gRPC
+		7070,  // cartservice gRPC
+		7777,  // checkoutservice gRPC
+		8080,  // emailservice gRPC, frontend health
+		9555,  // adservice gRPC
+		50051, // generic gRPC port used by some services
+	}
+}
+
 // Register adds the Online Boutique SUT to the package-level registry.
 // Imported for side effect from the binary's main package.
 func Register() { sut.Default.MustRegister(&onlineBoutique{}) }
