@@ -93,8 +93,11 @@ type DeployOptions struct {
 	// envoy-injection path: each Deployment gets a sidecar + iptables
 	// init container, and a per-namespace ConfigMap carrying the Envoy
 	// bootstrap is applied alongside. Default in 'simian sut deploy' is
-	// true (opt-out via --no-envoy-faults). Per-workload opt-out is via
-	// the simian.chaos/no-envoy-injection=true pod-template annotation.
+	// false (opt-in via --no-envoy-faults=false) because the iptables
+	// interception breaks gRPC liveness/readiness probes; see README.md
+	// "Known limitation: Envoy injection breaks gRPC kubelet probes".
+	// Per-workload opt-out (when the SUT-level flag is true) is via the
+	// simian.chaos/no-envoy-injection=true pod-template annotation.
 	WithEnvoyFaults bool
 	// EnvoyFaultPorts overrides the SUT's declared port list (or supplies
 	// one for SUTs that don't implement EnvoyFaultPortsProvider). Empty

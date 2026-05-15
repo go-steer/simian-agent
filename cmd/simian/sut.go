@@ -188,7 +188,7 @@ func newSutDeployCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&annotations, "annotation", nil, "Extra namespace annotation key=value (used only with --create-arena)")
 	cmd.Flags().BoolVar(&useController, "use-controller", false, "Trigger the deploy + baseline capture inside a running 'simian serve' via the establish_baseline MCP tool, so the controller's get_baseline cache is populated. Requires --mcp-url to point at the running controller.")
 	cmd.Flags().StringVar(&mcpURL, "mcp-url", "http://localhost:8081/sse", "Simian MCP/SSE endpoint URL (only used with --use-controller)")
-	cmd.Flags().BoolVar(&noEnvoyFaults, "no-envoy-faults", false, "Skip injecting the Envoy fault-injection sidecar into SUT Deployments. Default is to inject (works on GKE Dataplane V2, where Chaos Mesh's NetworkChaos is silently bypassed). Per-workload opt-out via the simian.chaos/no-envoy-injection=true pod-template annotation.")
+	cmd.Flags().BoolVar(&noEnvoyFaults, "no-envoy-faults", true, "Skip injecting the Envoy fault-injection sidecar into SUT Deployments. DEFAULT is true (skip) because the current iptables-based interception breaks gRPC liveness/readiness probes — see README.md \"Known limitation: Envoy injection breaks gRPC kubelet probes\". Set --no-envoy-faults=false to enable injection for SUTs whose probes are HTTP-only or TCP-only. Per-workload opt-out via the simian.chaos/no-envoy-injection=true pod-template annotation.")
 	return cmd
 }
 
