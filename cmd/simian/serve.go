@@ -35,6 +35,7 @@ import (
 	"github.com/go-steer/simian-agent/pkg/arena"
 	"github.com/go-steer/simian-agent/pkg/audit"
 	"github.com/go-steer/simian-agent/pkg/driver/chaosmesh"
+	"github.com/go-steer/simian-agent/pkg/driver/envoyfault"
 	"github.com/go-steer/simian-agent/pkg/driver/networkpolicy"
 	"github.com/go-steer/simian-agent/pkg/executor"
 	"github.com/go-steer/simian-agent/pkg/lease"
@@ -106,10 +107,15 @@ func newServeCmd() *cobra.Command {
 			// where Chaos Mesh's NetworkChaos is silently bypassed
 			// (see docs/plan-dpv2-chaos-engines.md).
 			npDriver := networkpolicy.New(clientset, "")
+			// Envoy fault driver — pokes the per-pod Envoy admin API
+			// installed by pkg/sut/envoy at SUT-deploy time. Works on
+			// DPv2 because faults are applied above the dataplane.
+			envoyDriver := envoyfault.New(clientset)
 
 			drivers := map[simian.Engine]simian.ChaosDriver{
 				simian.EngineChaosMesh:     cmDriver,
 				simian.EngineNetworkPolicy: npDriver,
+				simian.EngineEnvoyFault:    envoyDriver,
 			}
 
 			elig := buildEligibility(clientset, eligibleNS, logger)

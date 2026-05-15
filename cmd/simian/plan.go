@@ -32,6 +32,7 @@ import (
 	"github.com/go-steer/simian-agent/pkg/arena"
 	"github.com/go-steer/simian-agent/pkg/audit"
 	"github.com/go-steer/simian-agent/pkg/driver/chaosmesh"
+	"github.com/go-steer/simian-agent/pkg/driver/envoyfault"
 	"github.com/go-steer/simian-agent/pkg/driver/networkpolicy"
 	"github.com/go-steer/simian-agent/pkg/executor"
 	"github.com/go-steer/simian-agent/pkg/lease"
@@ -92,9 +93,11 @@ executor pipeline 'simian serve --autonomous' uses.`,
 
 			cmDriver := chaosmesh.New(dyn, cached, "simian-")
 			npDriver := networkpolicy.New(clientset, "")
+			envoyDriver := envoyfault.New(clientset)
 			drivers := map[simian.Engine]simian.ChaosDriver{
 				simian.EngineChaosMesh:     cmDriver,
 				simian.EngineNetworkPolicy: npDriver,
+				simian.EngineEnvoyFault:    envoyDriver,
 			}
 
 			// Eligibility honors the same annotation lookup serve uses.
