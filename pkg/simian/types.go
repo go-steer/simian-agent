@@ -157,6 +157,43 @@ type PlanBudget struct {
 	MaxSeverityTier     BlastRadiusTier `json:"max_severity_tier,omitempty"`
 }
 
+// UnmarshalJSON accepts MinCooldown as either a duration string ("30s",
+// "2m") — which is what the LLM emits per the system prompt example —
+// or a raw int64 nanosecond count, which is the default time.Duration
+// JSON encoding. Without this, structured plan output decoding fails
+// because the prompt and the Go decoder disagree on the wire format.
+func (b *PlanBudget) UnmarshalJSON(data []byte) error {
+	type alias PlanBudget
+	var raw struct {
+		alias
+		MinCooldown json.RawMessage `json:"min_cooldown,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*b = PlanBudget(raw.alias)
+	if len(raw.MinCooldown) == 0 || string(raw.MinCooldown) == "null" {
+		return nil
+	}
+	// Try string ("30s") first since that's what the LLM is told to emit.
+	var s string
+	if err := json.Unmarshal(raw.MinCooldown, &s); err == nil {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return fmt.Errorf("PlanBudget.min_cooldown: %w", err)
+		}
+		b.MinCooldown = d
+		return nil
+	}
+	// Fall back to numeric (nanoseconds, native time.Duration encoding).
+	var n int64
+	if err := json.Unmarshal(raw.MinCooldown, &n); err != nil {
+		return fmt.Errorf("PlanBudget.min_cooldown: must be duration string or int64 nanoseconds: %w", err)
+	}
+	b.MinCooldown = time.Duration(n)
+	return nil
+}
+
 // AttackPlan is the autonomous-mode response schema. Always emitted before any
 // fault is applied so the cycle is auditable end-to-end.
 type AttackPlan struct {
