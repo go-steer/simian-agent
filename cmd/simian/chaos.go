@@ -128,8 +128,28 @@ Examples:
 	return cmd
 }
 
-func newMCPClient(ctx context.Context, baseURL string) (*mcpclient.Client, error) {
-	tr, err := transport.NewSSE(baseURL)
+// mcpClientOption tunes a single newMCPClient call. Defaults preserve the
+// mark3labs/mcp-go SSE transport built-ins (60s response timeout). Use
+// withResponseTimeout to extend it for tools that legitimately run minutes
+// (e.g. establish_baseline waiting on a SUT cold-start).
+type mcpClientOption func(*mcpClientOpts)
+
+type mcpClientOpts struct {
+	transportOpts []transport.ClientOption
+}
+
+func withResponseTimeout(d time.Duration) mcpClientOption {
+	return func(o *mcpClientOpts) {
+		o.transportOpts = append(o.transportOpts, transport.WithResponseTimeout(d))
+	}
+}
+
+func newMCPClient(ctx context.Context, baseURL string, opts ...mcpClientOption) (*mcpclient.Client, error) {
+	cfg := mcpClientOpts{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	tr, err := transport.NewSSE(baseURL, cfg.transportOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("mcp transport: %w", err)
 	}

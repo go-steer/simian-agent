@@ -29,9 +29,10 @@ import (
 
 // IntentInput is a directed-mode translation request.
 type IntentInput struct {
-	Intent          string                // free-text user intent
-	Catalog         []simian.CatalogEntry // available faults the LLM may target
-	DefaultDuration time.Duration         // used if the LLM does not pick one
+	Intent           string                // free-text user intent
+	Catalog          []simian.CatalogEntry // available faults the LLM may target
+	DefaultDuration  time.Duration         // used if the LLM does not pick one
+	DefaultNamespace string                // used when the user's intent does not name a namespace
 }
 
 // Translator converts a plain-text intent into a validated FaultManifest by
@@ -62,7 +63,7 @@ func (t *Translator) Translate(ctx context.Context, in IntentInput) (simian.Faul
 	}
 
 	system := buildSystemPrompt(in.Catalog)
-	user := buildUserPrompt(in.Intent, in.DefaultDuration)
+	user := buildUserPrompt(in.Intent, in.DefaultDuration, in.DefaultNamespace)
 
 	var lastErr error
 	for attempt := 0; attempt <= t.MaxRetries; attempt++ {
@@ -137,10 +138,11 @@ Rules you MUST follow:
 2. The "engine" field must match the catalog entry's engine.
 3. The "api_version" and "resource_kind" fields must match the catalog entry exactly.
 4. The "spec" field must be the engine-native spec for the chosen fault type — populated with all REQUIRED fields. NEVER return an empty spec object. Use the canonical examples below as templates.
-5. Always populate "targets" with at least one TargetRef. Set "namespace" to the namespace requested by the user. Set "name" to the workload (Deployment / StatefulSet) name when one is named.
-6. Set "duration" as a Go duration string (e.g. "30s", "2m", "5m").
-7. Set "rationale" to one sentence explaining what you chose and why.
-8. Output ONLY the JSON object — no commentary, no markdown.
+5. Always populate "targets" with at least one TargetRef. For "namespace": if the user names one in the intent, use that; otherwise use the default namespace given to you in the user prompt. The same namespace MUST also appear inside the spec selector (e.g. PodChaos.spec.selector.namespaces). NEVER use the literal string "default" as the namespace unless the user's intent text explicitly says "default" — when in doubt, use the default namespace from the user prompt.
+6. Set "name" on each target to the workload (Deployment / StatefulSet) name when one is named in the intent.
+7. Set "duration" as a Go duration string (e.g. "30s", "2m", "5m").
+8. Set "rationale" to one sentence explaining what you chose and why.
+9. Output ONLY the JSON object — no commentary, no markdown.
 
 Canonical Chaos Mesh spec templates (copy these and adapt to the user's intent):
 
@@ -215,12 +217,17 @@ Available fault catalog (kinds you may choose from):
 	return sb.String()
 }
 
-func buildUserPrompt(intent string, defaultDuration time.Duration) string {
+func buildUserPrompt(intent string, defaultDuration time.Duration, defaultNamespace string) string {
 	dur := "2m"
 	if defaultDuration > 0 {
 		dur = defaultDuration.String()
 	}
-	return fmt.Sprintf("User intent: %q\n\nIf the user did not specify a duration, default to %s.", intent, dur)
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "User intent: %q\n\nIf the user did not specify a duration, default to %s.", intent, dur)
+	if defaultNamespace != "" {
+		fmt.Fprintf(&sb, "\nIf the user did not name a namespace, default to %q (NOT \"default\").", defaultNamespace)
+	}
+	return sb.String()
 }
 
 func parseManifest(raw json.RawMessage, defaultDuration time.Duration) (simian.FaultManifest, error) {

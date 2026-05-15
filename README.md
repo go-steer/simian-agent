@@ -115,6 +115,35 @@ examples/          example FaultManifest + spec JSON
 docs/              requirements, design, roadmap
 ```
 
+## Deploying to a cluster
+
+The Helm chart in `deploy/helm/simian/` runs the controller in-cluster. It pulls the image from `ghcr.io/go-steer/simian-agent`, which is published automatically by `.github/workflows/release.yml` on each `v*` tag push.
+
+```bash
+# Default install (uses Chart.AppVersion as the image tag).
+helm upgrade --install simian deploy/helm/simian -n simian-system --create-namespace
+
+# Pin a specific published tag.
+helm upgrade --install simian deploy/helm/simian -n simian-system \
+    --set image.tag=v0.1.0-dev
+
+# Enable the M3 in-controller SUT path (required for `simian sut deploy --use-controller`).
+helm upgrade --install simian deploy/helm/simian -n simian-system \
+    --set sutInController.enabled=true
+```
+
+For ad-hoc dev builds without cutting a release tag, push your own image:
+
+```bash
+# Build + push to your own ghcr.io path (overrides via env vars).
+echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_USER" --password-stdin
+make image-push VERSION=mybranch IMAGE_NAME=myorg/simian-agent
+
+helm upgrade --install simian deploy/helm/simian -n simian-system \
+    --set image.repository=ghcr.io/myorg/simian-agent \
+    --set image.tag=mybranch
+```
+
 ## Tests
 
 ```bash

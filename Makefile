@@ -17,7 +17,15 @@ GO    := go
 PKGS  := ./...
 BIN   := bin/simian
 
-.PHONY: all build test vet tidy clean run-serve fmt ci
+# Container image publishing — see also .github/workflows/release.yml which
+# auto-publishes on `v*` tag push. The Makefile targets are for ad-hoc dev
+# builds without cutting a release tag (e.g. `make image-push VERSION=mybranch`).
+IMAGE_REGISTRY ?= ghcr.io
+IMAGE_NAME     ?= go-steer/simian-agent
+VERSION        ?= dev
+IMAGE          := $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(VERSION)
+
+.PHONY: all build test vet tidy clean run-serve fmt ci image image-push
 
 all: vet test build
 
@@ -48,3 +56,16 @@ clean:
 
 run-serve: build
 	$(BIN) serve
+
+# Build the container image. Override VERSION (default: dev), IMAGE_REGISTRY
+# (default: ghcr.io), or IMAGE_NAME (default: go-steer/simian-agent) as needed.
+#
+#   make image                          # → ghcr.io/go-steer/simian-agent:dev
+#   make image VERSION=v0.1.0-dev       # → ghcr.io/go-steer/simian-agent:v0.1.0-dev
+image:
+	docker build -t $(IMAGE) .
+
+# Build and push the image. Requires `docker login $(IMAGE_REGISTRY)` first
+# (for ghcr.io: `echo $$GITHUB_TOKEN | docker login ghcr.io -u <user> --password-stdin`).
+image-push: image
+	docker push $(IMAGE)

@@ -1,0 +1,79 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Release
+
+# Builds and publishes the simian-agent container image to GitHub Container
+# Registry on every `v*` tag push (e.g. `git tag v0.1.0-dev && git push --tags`).
+# The Helm chart's default image reference points at the same registry, so
+# `helm install simian deploy/helm/simian` works out-of-the-box for any tag
+# that has been published.
+#
+# Manual / dev builds without a tag: see the `make image` / `make image-push`
+# Makefile targets — they target the same registry path, so a developer can
+# push their own tag (e.g. `make image-push VERSION=mybranch`) and override
+# `image.tag` in their local Helm install.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag to publish (e.g. v0.1.0-dev). Defaults to the workflow ref.'
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}   # go-steer/simian-agent
+
+jobs:
+  publish:
+    name: build + publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # Strip the leading 'v' from semver tags so the image tag matches the
+          # Helm chart's appVersion (which is "0.1.0-dev", not "v0.1.0-dev").
+          # Plus a "latest" floating tag for the most recent release.
+          tags: |
+            type=match,pattern=v(.*),group=1
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

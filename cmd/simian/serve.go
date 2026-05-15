@@ -147,7 +147,20 @@ func newServeCmd() *cobra.Command {
 			// behind establish_baseline (M3). Out-of-process 'simian sut deploy'
 			// callers wanting the controller to know about a baseline pass
 			// --use-controller, which proxies through the new MCP tool.
+			//
+			// ConfigMap-backed persistence: baselines are mirrored to
+			// <sut-namespace>/simian-baseline so they survive a serve restart.
+			// Without this, autonomous mode dies on every restart with
+			// cycle.health_gate_failed until establish_baseline is called by
+			// hand.
 			sutMgr := sut.NewManager(clientset, dyn, cached, sut.Default)
+			sutMgr.Store = sut.NewConfigMapStore(clientset)
+			if n, err := sutMgr.LoadCachedBaselines(cmd.Context()); err != nil {
+				logger.Warn("simian serve: baseline cache warm failed; continuing with empty cache",
+					slog.String("error", err.Error()))
+			} else if n > 0 {
+				logger.Info("simian serve: baseline cache warmed", slog.Int("namespaces", n))
+			}
 
 			srv := mcp.New(exec, drivers, translator, sutMgr, version,
 				mcp.WithTopology(disco2),
