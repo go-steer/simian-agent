@@ -76,6 +76,7 @@ func newSutDeployCmd() *cobra.Command {
 		annotations   []string
 		useController bool
 		mcpURL        string
+		noEnvoyFaults bool
 	)
 	cmd := &cobra.Command{
 		Use:   "deploy",
@@ -156,8 +157,17 @@ func newSutDeployCmd() *cobra.Command {
 
 			cached := memory.NewMemCacheClient(disco)
 			mgr := sut.NewManager(clientset, dyn, cached, sut.Default)
-			fmt.Printf("deploying SUT %q into %q...\n", sutName, namespace)
-			bl, err := mgr.Deploy(ctx, sut.DeployOptions{Namespace: namespace, SUTName: sutName})
+			withEnvoy := !noEnvoyFaults
+			if withEnvoy {
+				fmt.Printf("deploying SUT %q into %q (with Envoy fault sidecars)...\n", sutName, namespace)
+			} else {
+				fmt.Printf("deploying SUT %q into %q (Envoy injection disabled)...\n", sutName, namespace)
+			}
+			bl, err := mgr.Deploy(ctx, sut.DeployOptions{
+				Namespace:       namespace,
+				SUTName:         sutName,
+				WithEnvoyFaults: withEnvoy,
+			})
 			if err != nil {
 				return err
 			}
@@ -178,6 +188,7 @@ func newSutDeployCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&annotations, "annotation", nil, "Extra namespace annotation key=value (used only with --create-arena)")
 	cmd.Flags().BoolVar(&useController, "use-controller", false, "Trigger the deploy + baseline capture inside a running 'simian serve' via the establish_baseline MCP tool, so the controller's get_baseline cache is populated. Requires --mcp-url to point at the running controller.")
 	cmd.Flags().StringVar(&mcpURL, "mcp-url", "http://localhost:8081/sse", "Simian MCP/SSE endpoint URL (only used with --use-controller)")
+	cmd.Flags().BoolVar(&noEnvoyFaults, "no-envoy-faults", false, "Skip injecting the Envoy fault-injection sidecar into SUT Deployments. Default is to inject (works on GKE Dataplane V2, where Chaos Mesh's NetworkChaos is silently bypassed). Per-workload opt-out via the simian.chaos/no-envoy-injection=true pod-template annotation.")
 	return cmd
 }
 

@@ -37,6 +37,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/restmapper"
+
+	"github.com/go-steer/simian-agent/pkg/sut/envoy"
 )
 
 // FieldManager is the server-side-apply field manager string used for all
@@ -87,6 +89,17 @@ func NewManager(k8s kubernetes.Interface, dyn dynamic.Interface, disco discovery
 type DeployOptions struct {
 	Namespace string
 	SUTName   string
+	// WithEnvoyFaults, when true, runs the SUT manifests through the
+	// envoy-injection path: each Deployment gets a sidecar + iptables
+	// init container, and a per-namespace ConfigMap carrying the Envoy
+	// bootstrap is applied alongside. Default in 'simian sut deploy' is
+	// true (opt-out via --no-envoy-faults). Per-workload opt-out is via
+	// the simian.chaos/no-envoy-injection=true pod-template annotation.
+	WithEnvoyFaults bool
+	// EnvoyFaultPorts overrides the SUT's declared port list (or supplies
+	// one for SUTs that don't implement EnvoyFaultPortsProvider). Empty
+	// means use the SUT-provided list.
+	EnvoyFaultPorts []int
 }
 
 // Deploy applies a SUT into the given namespace, waits for the declared
@@ -105,6 +118,18 @@ func (m *Manager) Deploy(ctx context.Context, opts DeployOptions) (*Baseline, er
 	docs, err := splitYAML(s.Manifests())
 	if err != nil {
 		return nil, fmt.Errorf("sut: parse manifests: %w", err)
+	}
+	if opts.WithEnvoyFaults {
+		ports := opts.EnvoyFaultPorts
+		if len(ports) == 0 {
+			if p, ok := s.(EnvoyFaultPortsProvider); ok {
+				ports = p.EnvoyFaultPorts()
+			}
+		}
+		docs, err = envoy.Inject(docs, envoy.InjectOptions{Ports: ports})
+		if err != nil {
+			return nil, fmt.Errorf("sut: envoy injection: %w", err)
+		}
 	}
 	for _, doc := range docs {
 		doc.SetNamespace(opts.Namespace)
