@@ -44,10 +44,7 @@ linters:
     - gocritic       # opinionated extra rules; many useful, low false-positive
 
     # Compliance.
-    # goheader is intentionally disabled until the bulk-header PR lands —
-    # see chore/license-headers. The template block below stays in place so
-    # re-enabling is a one-line uncomment.
-    # - goheader       # enforces the Apache 2.0 boilerplate on every .go file
+    - goheader       # enforces the Apache 2.0 boilerplate on every .go file
 
     # Security.
     - gosec          # OWASP-style checks (nosec via // #nosec)
