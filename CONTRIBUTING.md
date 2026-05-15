@@ -89,6 +89,16 @@ Every source file carries the full Apache 2.0 header attributed to Google LLC:
 - End-to-end acceptance plans live at the repo root as `acceptance-mN.md`. Each milestone gets its own plan; the plan is written before the work starts and verified before tagging.
 - A new feature without a test is not done. A new bug fix without a regression test makes it easy for the bug to come back.
 
+### Keep `examples/values-baked-defaults.yaml` honest
+
+On the way to v1, `examples/values-baked-defaults.yaml` is the single source of truth for "what should I turn on in production right now?". Every PR that:
+
+1. Adds a new chart value or CLI flag, OR
+2. Hardens an experimental feature so it's safe to leave on, OR
+3. Surfaces a regression / footgun that warrants flipping a previously-on feature off
+
+MUST update this overlay in the same PR. The "Hardening log" comment block at the bottom of the overlay tracks each major decision and the chart version that hardened (or un-hardened) it; append to that log when you touch the corresponding value. Goal: when v1 ships, this overlay should look like a near-empty file.
+
 ## Project layout
 
 - `cmd/simian/` — CLI binary (`simian arena`, `simian sut`, `simian chaos`, `simian plan`, `simian serve`).

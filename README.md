@@ -186,6 +186,15 @@ helm upgrade --install simian deploy/helm/simian -n simian-system \
 # Enable the M3 in-controller SUT path (required for `simian sut deploy --use-controller`).
 helm upgrade --install simian deploy/helm/simian -n simian-system \
     --set sutInController.enabled=true
+
+# Recommended starting point: layer the "fully-baked-defaults"
+# overlay on top of the chart defaults. Pins a known-verified image
+# tag, tightens the executor safety policy, leaves experimental
+# features off. See examples/values-baked-defaults.yaml for what
+# each value is doing and the maintenance contract.
+helm upgrade --install simian deploy/helm/simian -n simian-system \
+    --create-namespace \
+    -f examples/values-baked-defaults.yaml
 ```
 
 For ad-hoc dev builds without cutting a release tag, push your own image:

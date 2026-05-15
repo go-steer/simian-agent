@@ -1,0 +1,195 @@
+# Recommended Helm values for Simian Agent installs that want only
+# what is FULLY BAKED — i.e., the parts of the system that have been
+# verified end-to-end against a real cluster and are safe to leave on
+# unattended. Everything experimental is explicitly disabled here.
+#
+# How to use:
+#   helm install simian deploy/helm/simian -n simian-system \
+#     --create-namespace \
+#     -f examples/values-baked-defaults.yaml
+#
+# Then layer your install-specific tweaks (LLM project, eligible
+# namespaces, etc.) on top with a second `-f my-overrides.yaml` or
+# inline `--set`.
+#
+# ============================================================
+# MAINTENANCE CONTRACT (read this before editing)
+# ============================================================
+#
+# This file is the single source of truth for "what should I turn on
+# in production right now?". On the way to v1, every PR that:
+#
+#   1. Adds a new chart value or CLI flag, OR
+#   2. Hardens an experimental feature so it's safe to leave on, OR
+#   3. Surfaces a regression / footgun that warrants flipping a
+#      previously-on feature off
+#
+# MUST update this file in the same PR. The header comment block at
+# the bottom of this file lists each major decision and the version
+# that hardened (or un-hardened) it; append to that log when you
+# touch the corresponding value.
+#
+# Goal: when v1 ships, this file should look like a near-empty
+# overlay (almost everything in the chart default already safe).
+# Until then, treat any divergence between this file and the chart
+# defaults as documentation of "what we know works vs what we ship
+# as a default for various reasons".
+#
+# ============================================================
+
+image:
+  # Pin explicitly for production. Bump on each verified release;
+  # the chart's empty-tag default tracks the chart's appVersion,
+  # which is fine for dev but exposes prod to chart upgrades that
+  # silently change the running binary.
+  tag: "0.1.3-dev"
+  # IfNotPresent matches the chart default; explicit for clarity.
+  pullPolicy: IfNotPresent
+
+# Fully baked: provisioner subsystem + ValidatingAdmissionPolicy
+# backstop. Verified in M2 acceptance. Enable.
+provisioner:
+  enabled: true
+
+# Fully baked: in-controller SUT lifecycle. Enable so the
+# `establish_baseline` MCP tool can apply SUTs from the controller's
+# own RBAC, which is the path `simian sut deploy --use-controller`
+# expects. Verified in M3 acceptance.
+sutInController:
+  enabled: true
+
+# LLM provider. Vertex/ADC is the prod-recommended path because:
+#   - No long-lived API key in a Kubernetes Secret.
+#   - Workload Identity binding to a GCP service account with
+#     roles/aiplatform.user is auditable and revokable per pod.
+#
+# Fill `project` and `location` for your install before applying
+# this overlay. The `gke-demos-345619` value below is a placeholder
+# matching the simian-test cluster used during development.
+llm:
+  provider: gemini
+  model: ""              # default gemini-2.5-pro
+  vertex:
+    enabled: true
+    project: gke-demos-345619     # REPLACE with your GCP project
+    location: us-central1
+  apiKey:
+    enabled: false       # prefer Vertex/WI; flip if your cluster lacks WI
+
+# Executor safety policy: tighter than chart defaults for prod.
+#
+# - durationCeiling: 5m vs chart 15m. Five minutes is enough for
+#   any single fault to demonstrate impact + recover; the 15m
+#   default is fine for autonomous-mode exploration but too lax
+#   for a directed-mode operator who might fat-finger a longer
+#   duration.
+# - permittedTiers: namespace ONLY for prod. The chart default
+#   permits node tier too (KernelChaos, PhysicalMachineChaos);
+#   those have higher blast radius and are best opted into per
+#   install once the operator is confident.
+# - maxConcurrentFaults: 1. Hard serialize. Chart default 0 (no
+#   cap) is right for the executor's expressiveness but
+#   surprises operators when the autonomous loop picks 3 parallel
+#   faults from a single plan.
+# - minCooldown: 60s. At least one minute between consecutive
+#   faults applied to the same namespace, so SLO dashboards have
+#   a clean per-fault window.
+# - recentFaultsCapacity: 200 vs chart 100. Doubled because at
+#   1 fault/minute that's only ~3 hours of history; 200 gives 6+
+#   hours which usually covers an oncall shift.
+executor:
+  durationCeiling: 5m
+  permittedTiers:
+    - namespace
+  maxConcurrentFaults: 1
+  minCooldown: 60s
+  recentFaultsCapacity: 200
+
+# Fully baked: topology informer. 60s resync vs chart 30s — prod
+# clusters change slowly; the planner doesn't need a fresh snapshot
+# every 30s. Halves the API server load from this controller.
+topology:
+  resync: 60s
+
+# EXPERIMENTAL: Envoy fault injection. Leave OFF.
+#
+# The current iptables PREROUTING-REDIRECT model breaks gRPC
+# liveness/readiness probes on most Online Boutique services.
+# Until the probe-rewriting follow-up lands, this should stay
+# false. See README.md § "Known limitation: Envoy injection
+# breaks gRPC kubelet probes".
+sutInjection:
+  envoyFaults: false
+
+# Autonomous mode: keep DISABLED in this overlay. Operators
+# should opt in per-arena once they have a baseline SLO and
+# alerting in place. When you flip `enabled: true`, also fill
+# `namespaces` with the arena names the loop should target.
+#
+# When enabled, the per-cycle caps below are the recommended
+# starting point — half the chart defaults so the first few
+# cycles are very low-impact. Tune up after you've watched a
+# few cycles in your environment.
+autonomous:
+  enabled: false
+  cycleInterval: 10m       # vs chart 5m — slower; gives time to observe
+  namespaces: []
+  maxFaultsPerCycle: 1     # vs chart 3 — one fault per cycle to start
+  maxSeverityPerCycle: namespace
+  hypothesisHint: ""
+
+# MCP server: chart defaults are correct for in-cluster use.
+mcp:
+  port: 8081
+  serviceType: ClusterIP
+
+# Resource requests/limits: bumped from chart defaults. The chart's
+# 100m/128Mi requests are fine for a quiet controller, but during
+# autonomous cycles the LLM call can briefly spike memory above the
+# 512Mi limit. Doubling both prevents the OOM-kill that otherwise
+# shows up as an audit gap.
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# Pod security context: chart defaults already match restricted
+# Pod Security Standards. No override needed.
+# podSecurityContext: {}  # inherit chart default
+
+# ============================================================
+# Hardening log — what is "baked" and as of when
+# ============================================================
+#
+# 2026-05-15 (chart 0.1.3-dev):
+#   - chaos-mesh engine: PodChaos / StressChaos / IOChaos /
+#     TimeChaos / DNSChaos verified end-to-end on GKE Standard +
+#     Chaos Mesh 2.7.x. NetworkChaos is silently bypassed on
+#     GKE Dataplane V2 — operators on DPv2 should remove
+#     NetworkChaos from their installation's tier policy or
+#     accept that it will produce zero network impact.
+#   - network-policy engine: verified end-to-end (PR #24
+#     in-cluster acceptance round 3). Partition-only — no
+#     delay / loss / jitter. Safe to leave on.
+#   - Reaper multi-driver routing: shipped in PR #24 after
+#     in-cluster acceptance surfaced the orphaned-resource bug.
+#     Verified clean lease.expired across all 3 engines.
+#   - SpecTemplate refactor (PR #17): drivers now ship their
+#     own LLM prompt templates. Stable interface for adding
+#     future engines without touching the planner package.
+#
+# EXPERIMENTAL — not in this overlay:
+#   - envoy-fault engine + Envoy SUT injection: works against
+#     HTTP-only and TCP-only workloads but breaks gRPC kubelet
+#     probes. Probe-rewriting is the next milestone before this
+#     can flip to on-by-default.
+#   - autonomous mode: works, but the LLM has a strong bias
+#     toward Chaos Mesh's larger catalog. Operators who want to
+#     exercise newer engines need an explicit hypothesis hint.
+#     Revisit when the planner has per-engine weighting OR a
+#     tier-policy mechanism for excluding engines globally.
+#
+# ============================================================
