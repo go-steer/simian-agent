@@ -15,6 +15,7 @@
 package envoy
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -414,6 +415,167 @@ func TestParseExcludePortsAnnotation(t *testing.T) {
 				t.Errorf("parse(%q)[%d] = %d, want %d", tc.in, i, got[i], tc.want[i])
 			}
 		}
+	}
+}
+
+// makeDeploymentWithProbe builds a Deployment whose single container
+// has the named kind of probe. Used by probe-rewrite tests.
+func makeDeploymentWithProbe(name string, kind ProbeKind, probe *corev1.Probe) *unstructured.Unstructured {
+	tpl := corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": name}},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "server", Image: "ghcr.io/example/" + name + ":1.0"}},
+		},
+	}
+	switch kind {
+	case ProbeLiveness:
+		tpl.Spec.Containers[0].LivenessProbe = probe
+	case ProbeReadiness:
+		tpl.Spec.Containers[0].ReadinessProbe = probe
+	case ProbeStartup:
+		tpl.Spec.Containers[0].StartupProbe = probe
+	}
+	tplMap, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(&tpl)
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata":   map[string]any{"name": name},
+			"spec":       map[string]any{"replicas": int64(1), "template": tplMap},
+		},
+	}
+}
+
+// TestInjectRewritesGRPCProbeAndAddsAgentSidecar is the core end-to-end
+// regression: a Deployment with a gRPC probe goes through the injector
+// and comes out with (a) the probe rewritten to httpGet against the
+// agent port, (b) the original spec stashed as a pod annotation, (c)
+// the agent sidecar added, (d) the downward-API annotations volume
+// mounted, (e) the agent's listener port in the iptables exclude list.
+func TestInjectRewritesGRPCProbeAndAddsAgentSidecar(t *testing.T) {
+	docs := []*unstructured.Unstructured{
+		makeDeploymentWithProbe("cartservice", ProbeLiveness, &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				GRPC: &corev1.GRPCAction{Port: 7070},
+			},
+			TimeoutSeconds: 2,
+		}),
+	}
+	out, err := Inject(docs, InjectOptions{Ports: []int{7070}})
+	if err != nil {
+		t.Fatalf("Inject: %v", err)
+	}
+	tpl := decodeTemplate(t, out[1])
+
+	// (a) Probe rewritten to httpGet against the agent.
+	c := &tpl.Spec.Containers[0]
+	if c.LivenessProbe == nil || c.LivenessProbe.HTTPGet == nil {
+		t.Fatalf("probe not rewritten to httpGet: %+v", c.LivenessProbe)
+	}
+	if c.LivenessProbe.GRPC != nil {
+		t.Errorf("original gRPC probe should have been cleared after rewrite")
+	}
+	if c.LivenessProbe.HTTPGet.Port.IntVal != ProbeRewriterPort {
+		t.Errorf("rewritten probe port = %d, want %d", c.LivenessProbe.HTTPGet.Port.IntVal, ProbeRewriterPort)
+	}
+	if c.LivenessProbe.HTTPGet.Path != "/app-health/server/liveness" {
+		t.Errorf("rewritten probe path = %q, want /app-health/server/liveness", c.LivenessProbe.HTTPGet.Path)
+	}
+	if c.LivenessProbe.TimeoutSeconds != 2 {
+		t.Errorf("timing fields should be preserved on rewrite; got TimeoutSeconds=%d", c.LivenessProbe.TimeoutSeconds)
+	}
+
+	// (b) Original spec stashed as annotation.
+	stashed, ok := tpl.Annotations[ProbeAnnotationKey("server", ProbeLiveness)]
+	if !ok {
+		t.Fatalf("stashed probe annotation missing; got annotations %v", tpl.Annotations)
+	}
+	decoded, err := UnmarshalStashedProbe(stashed)
+	if err != nil {
+		t.Fatalf("decode stashed probe: %v", err)
+	}
+	if decoded.GRPC == nil || decoded.GRPC.Port != 7070 {
+		t.Errorf("stashed probe lost gRPC port: %+v", decoded)
+	}
+
+	// (c) Agent sidecar added.
+	if !hasContainer(tpl.Spec.Containers, AgentContainerName) {
+		t.Error("simian-envoy-agent sidecar missing")
+	}
+
+	// (d) Downward-API annotations volume mounted.
+	hasAnnVol := false
+	for _, v := range tpl.Spec.Volumes {
+		if v.Name == AnnotationsVolumeName {
+			if v.DownwardAPI == nil || len(v.DownwardAPI.Items) == 0 {
+				t.Errorf("annotations volume should use DownwardAPI; got %+v", v.VolumeSource)
+			}
+			hasAnnVol = true
+		}
+	}
+	if !hasAnnVol {
+		t.Error("downward-API annotations volume missing")
+	}
+
+	// (e) Agent's listener port excluded from iptables redirect.
+	for _, ic := range tpl.Spec.InitContainers {
+		if ic.Name != InitContainerName {
+			continue
+		}
+		script := ic.Command[2]
+		excludeRule := strconv.Itoa(ProbeRewriterPort) + " -j RETURN"
+		if !strings.Contains(script, excludeRule) {
+			t.Errorf("iptables script should exempt agent port %d; got:\n%s", ProbeRewriterPort, script)
+		}
+	}
+}
+
+// TestInjectDisableProbeRewriteSkipsAgent guards the opt-out: when
+// DisableProbeRewrite is set, probes pass through untouched and no
+// agent sidecar / downward-API volume is added.
+func TestInjectDisableProbeRewriteSkipsAgent(t *testing.T) {
+	docs := []*unstructured.Unstructured{
+		makeDeploymentWithProbe("cartservice", ProbeLiveness, &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				GRPC: &corev1.GRPCAction{Port: 7070},
+			},
+		}),
+	}
+	out, err := Inject(docs, InjectOptions{Ports: []int{7070}, DisableProbeRewrite: true})
+	if err != nil {
+		t.Fatalf("Inject: %v", err)
+	}
+	tpl := decodeTemplate(t, out[1])
+	if tpl.Spec.Containers[0].LivenessProbe.GRPC == nil {
+		t.Error("DisableProbeRewrite should leave gRPC probe in place")
+	}
+	if hasContainer(tpl.Spec.Containers, AgentContainerName) {
+		t.Error("DisableProbeRewrite should NOT add the agent sidecar")
+	}
+}
+
+// TestInjectSkipsProbeRewriteForUnsupportedKinds — exec probes can't
+// be reconstituted by the agent, so the injector should leave them in
+// place. If a container has ONLY an exec probe, the agent sidecar
+// shouldn't be added (nothing for it to serve).
+func TestInjectSkipsProbeRewriteForExecProbe(t *testing.T) {
+	docs := []*unstructured.Unstructured{
+		makeDeploymentWithProbe("worker", ProbeLiveness, &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				Exec: &corev1.ExecAction{Command: []string{"healthcheck.sh"}},
+			},
+		}),
+	}
+	out, err := Inject(docs, InjectOptions{Ports: []int{8080}})
+	if err != nil {
+		t.Fatalf("Inject: %v", err)
+	}
+	tpl := decodeTemplate(t, out[1])
+	if tpl.Spec.Containers[0].LivenessProbe.Exec == nil {
+		t.Error("exec probe should be left in place (agent doesn't support exec)")
+	}
+	if hasContainer(tpl.Spec.Containers, AgentContainerName) {
+		t.Error("agent sidecar should NOT be added when no probes were rewritten")
 	}
 }
 

@@ -43,6 +43,25 @@ const SidecarContainerName = "simian-envoy-fault"
 // InitContainerName is the canonical name of the iptables init container.
 const InitContainerName = "simian-envoy-iptables"
 
+// AgentContainerName is the canonical name of the probe-rewriter agent
+// sidecar (cmd/simian-envoy-agent). Only injected when at least one
+// container in the Deployment has a probe to rewrite.
+const AgentContainerName = "simian-envoy-agent"
+
+// AnnotationsVolumeName is the in-pod volume that mounts the
+// downward-API rendering of the pod's annotations, which the agent
+// reads at startup to populate its probe registry.
+const AnnotationsVolumeName = "simian-envoy-agent-annotations"
+
+// AnnotationsMountPath is where the agent looks for the downward-API
+// annotations file. Must match the env-var default in
+// cmd/simian-envoy-agent/main.go.
+const AnnotationsMountPath = "/etc/simian-envoy-agent"
+
+// AnnotationsFileName is the file name the downward API renders inside
+// AnnotationsMountPath.
+const AnnotationsFileName = "annotations"
+
 // InjectedAnnotation is set on the pod template of injected Deployments
 // so the topology discoverer can flag the workload as envoy-fault-eligible
 // for the planner.

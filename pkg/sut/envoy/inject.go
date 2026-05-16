@@ -43,6 +43,13 @@ import (
 const (
 	DefaultEnvoyImage    = "envoyproxy/envoy:v1.31-latest"
 	DefaultIptablesImage = "nicolaka/netshoot:latest"
+	// DefaultAgentImage is the image carrying the simian-envoy-agent
+	// binary (cmd/simian-envoy-agent). The agent binary ships in the
+	// same image as the controller — the simian and simian-envoy-agent
+	// binaries are both built into ghcr.io/go-steer/simian-agent and
+	// invoked via different entrypoints. Production installs should
+	// pin this to a verified tag rather than the floating "latest".
+	DefaultAgentImage = "ghcr.io/go-steer/simian-agent:latest"
 )
 
 // volumeName is the name of the in-pod volume that mounts the Envoy
@@ -86,6 +93,18 @@ type InjectOptions struct {
 
 	// IptablesImage overrides DefaultIptablesImage.
 	IptablesImage string
+
+	// AgentImage overrides DefaultAgentImage. The image carries the
+	// simian-envoy-agent binary that translates kubelet's HTTP probes
+	// back into the workload's original gRPC/HTTP/TCP probe.
+	AgentImage string
+
+	// DisableProbeRewrite, when true, skips probe rewriting + the
+	// simian-envoy-agent sidecar. Use for SUTs with no kubelet probes
+	// (or only probes the operator has audited as compatible with the
+	// Envoy intercept), to avoid the extra sidecar overhead. Default
+	// false: probe rewriting is on whenever Envoy injection is on.
+	DisableProbeRewrite bool
 }
 
 // Inject mutates the docs slice: for each Deployment that does not carry
@@ -107,6 +126,9 @@ func Inject(docs []*unstructured.Unstructured, opts InjectOptions) ([]*unstructu
 	}
 	if opts.IptablesImage == "" {
 		opts.IptablesImage = DefaultIptablesImage
+	}
+	if opts.AgentImage == "" {
+		opts.AgentImage = DefaultAgentImage
 	}
 	// Sort+dedupe ports for stable iptables command + tests.
 	ports := uniqueSortedPorts(opts.Ports)
@@ -180,13 +202,28 @@ func injectDeployment(doc *unstructured.Unstructured, ports, globalExcludes []in
 	// Merge SUT-wide excludes with the per-workload exclude annotation
 	// (if any). De-dupe + sort for stable script generation.
 	perWorkloadExcludes := parseExcludePortsAnnotation(tpl.Annotations[ExcludePortsAnnotation])
-	excludes := uniqueSortedPorts(append(append([]int{}, globalExcludes...), perWorkloadExcludes...))
+	excludes := append(append([]int{}, globalExcludes...), perWorkloadExcludes...)
 
 	// Annotation flag for the topology discoverer.
 	if tpl.Annotations == nil {
 		tpl.Annotations = map[string]string{}
 	}
 	tpl.Annotations[InjectedAnnotation] = "true"
+
+	// Probe rewriting: replace each workload container's probes with
+	// httpGet against the agent on ProbeRewriterPort, and stash the
+	// original spec as an annotation the agent reads at startup.
+	probeRewriteUsed := false
+	if !opts.DisableProbeRewrite {
+		probeRewriteUsed = rewriteProbes(&tpl)
+		if probeRewriteUsed {
+			// The agent listener must NOT be PREROUTING-REDIRECTed to
+			// Envoy — otherwise the rewritten probes loop forever. Add
+			// to the exclude list before iptables script generation.
+			excludes = append(excludes, ProbeRewriterPort)
+		}
+	}
+	excludes = uniqueSortedPorts(excludes)
 
 	// Mount the bootstrap ConfigMap.
 	tpl.Spec.Volumes = appendVolumeIfMissing(tpl.Spec.Volumes, corev1.Volume{
@@ -197,12 +234,22 @@ func injectDeployment(doc *unstructured.Unstructured, ports, globalExcludes []in
 			},
 		},
 	})
+	// Mount the downward-API annotations file the agent reads at
+	// startup (only relevant when probe rewriting is in play; cheap to
+	// always include).
+	if probeRewriteUsed {
+		tpl.Spec.Volumes = appendVolumeIfMissing(tpl.Spec.Volumes, makeAnnotationsVolume())
+	}
 
 	// Init container that installs the iptables redirect rules.
 	tpl.Spec.InitContainers = appendContainerIfMissing(tpl.Spec.InitContainers, makeIptablesInitContainer(ports, excludes, opts.IptablesImage))
 
-	// Sidecar.
+	// Envoy sidecar.
 	tpl.Spec.Containers = append(tpl.Spec.Containers, makeEnvoySidecar(opts.EnvoyImage))
+	// Probe-rewriter sidecar, if any container had a probe to rewrite.
+	if probeRewriteUsed {
+		tpl.Spec.Containers = append(tpl.Spec.Containers, makeAgentSidecar(opts.AgentImage))
+	}
 
 	// Encode back into the doc.
 	encoded, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&tpl)
@@ -370,6 +417,152 @@ func appendVolumeIfMissing(list []corev1.Volume, v corev1.Volume) []corev1.Volum
 		}
 	}
 	return append(list, v)
+}
+
+// rewriteProbes walks every container in the pod template, replaces
+// any liveness/readiness/startup probe with an httpGet against the
+// agent sidecar on ProbeRewriterPort, and stashes the original probe
+// spec as a pod-template annotation the agent reads at startup.
+//
+// Returns true if at least one probe was rewritten (signal to the
+// caller that the agent sidecar + downward-API volume need to be
+// added). Returns false if no probe in any container was rewritable
+// (e.g. all containers had exec probes, which v1 doesn't support).
+//
+// Probes the agent can't reconstitute (currently exec) are left in
+// place unchanged — better to fail with an unrewritten exec probe
+// than a missing one.
+func rewriteProbes(tpl *corev1.PodTemplateSpec) bool {
+	rewrote := false
+	for i := range tpl.Spec.Containers {
+		c := &tpl.Spec.Containers[i]
+		// Skip our own sidecars — never rewrite their probes (would
+		// loop if the agent ever gets a probe of its own).
+		if c.Name == SidecarContainerName || c.Name == AgentContainerName {
+			continue
+		}
+		for _, kind := range []ProbeKind{ProbeLiveness, ProbeReadiness, ProbeStartup} {
+			probe := getProbe(c, kind)
+			if probe == nil {
+				continue
+			}
+			stashed, ok := StashProbe(probe)
+			if !ok {
+				// Unsupported probe type — leave the original in place
+				// rather than break the workload by rewriting to a path
+				// the agent can't serve.
+				continue
+			}
+			value, err := MarshalStashedProbe(stashed)
+			if err != nil {
+				// Shouldn't happen with our struct shapes; if it does,
+				// skip rather than fail the whole inject.
+				continue
+			}
+			if tpl.Annotations == nil {
+				tpl.Annotations = map[string]string{}
+			}
+			tpl.Annotations[ProbeAnnotationKey(c.Name, kind)] = value
+			setProbe(c, kind, makeRewrittenProbe(c.Name, kind, probe))
+			rewrote = true
+		}
+	}
+	return rewrote
+}
+
+// getProbe returns the address of the named probe slot on the
+// container, or nil if not set.
+func getProbe(c *corev1.Container, kind ProbeKind) *corev1.Probe {
+	switch kind {
+	case ProbeLiveness:
+		return c.LivenessProbe
+	case ProbeReadiness:
+		return c.ReadinessProbe
+	case ProbeStartup:
+		return c.StartupProbe
+	}
+	return nil
+}
+
+// setProbe assigns the named probe slot on the container.
+func setProbe(c *corev1.Container, kind ProbeKind, p *corev1.Probe) {
+	switch kind {
+	case ProbeLiveness:
+		c.LivenessProbe = p
+	case ProbeReadiness:
+		c.ReadinessProbe = p
+	case ProbeStartup:
+		c.StartupProbe = p
+	}
+}
+
+// makeRewrittenProbe returns the httpGet probe that replaces the
+// original. The timing/threshold fields (initialDelaySeconds,
+// periodSeconds, failureThreshold, etc.) on the original are
+// preserved — they apply to the synthetic HTTP probe between kubelet
+// and the agent, which is the right semantic.
+func makeRewrittenProbe(containerName string, kind ProbeKind, original *corev1.Probe) *corev1.Probe {
+	out := original.DeepCopy()
+	// Clear the union — only one of the four action types is valid at
+	// a time, and the original may have set HTTPGet, GRPC, TCPSocket,
+	// or Exec. We're replacing it with our HTTPGet.
+	out.HTTPGet = &corev1.HTTPGetAction{
+		Path: ProbeRewriterPath + "/" + containerName + "/" + string(kind),
+		Port: intstr.FromInt(ProbeRewriterPort),
+	}
+	out.GRPC = nil
+	out.TCPSocket = nil
+	out.Exec = nil
+	return out
+}
+
+// makeAnnotationsVolume returns the downward-API volume the agent
+// reads at startup. The volume renders the pod's metadata.annotations
+// as a key=value text file (one annotation per line, value
+// double-quoted with the standard escape sequences).
+func makeAnnotationsVolume() corev1.Volume {
+	return corev1.Volume{
+		Name: AnnotationsVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			DownwardAPI: &corev1.DownwardAPIVolumeSource{
+				Items: []corev1.DownwardAPIVolumeFile{
+					{
+						Path: AnnotationsFileName,
+						FieldRef: &corev1.ObjectFieldSelector{
+							FieldPath: "metadata.annotations",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// makeAgentSidecar returns the simian-envoy-agent container. Uses the
+// image carrying the simian-envoy-agent binary. Mounts the
+// downward-API annotations volume read-only.
+func makeAgentSidecar(image string) corev1.Container {
+	return corev1.Container{
+		Name:    AgentContainerName,
+		Image:   image,
+		Command: []string{"/usr/local/bin/simian-envoy-agent"},
+		Ports: []corev1.ContainerPort{
+			{Name: "probe", ContainerPort: ProbeRewriterPort, Protocol: corev1.ProtocolTCP},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: AnnotationsVolumeName, MountPath: AnnotationsMountPath, ReadOnly: true},
+		},
+		ReadinessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: "/healthz",
+					Port: intstr.FromInt(ProbeRewriterPort),
+				},
+			},
+			InitialDelaySeconds: 1,
+			PeriodSeconds:       5,
+		},
+	}
 }
 
 func uniqueSortedPorts(in []int) []int {
