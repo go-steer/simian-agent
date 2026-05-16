@@ -1,0 +1,10 @@
+# PostCSS / autoprefixer install artifacts (Docsy CSS pipeline).
+node_modules/
+package-lock.json
+
+# Hugo build output.
+public/
+resources/
+
+# Hugo module cache.
+.hugo_build.lock

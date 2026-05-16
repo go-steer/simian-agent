@@ -14,13 +14,18 @@
 
 # Hugo configuration for the simian-agent documentation site.
 #
-# Theme is the Hextra Hugo module — pulled in via go.mod. Build with:
+# Theme is Docsy (github.com/google/docsy) pulled in as a Hugo module
+# via go.mod. Docsy itself pulls Bootstrap + FontAwesome as Hugo
+# modules transitively via its own go.mod — there is NO separate
+# `dependencies` module to import (that path was retired in v0.15.0).
 #
 #   cd docs/site
+#   npm install   # PostCSS + autoprefixer for the SCSS pipeline
 #   hugo server   # local preview at http://localhost:1313/simian-agent/
 #   hugo          # production build into ./public
 #
-# Deployed to https://go-steer.github.io/simian-agent/ via .github/workflows/docs.yml.
+# Deployed to https://go-steer.github.io/simian-agent/ via
+# .github/workflows/docs.yml.
 
 baseURL: "https://go-steer.github.io/simian-agent/"
 title: "simian-agent"
@@ -30,71 +35,91 @@ enableRobotsTXT: true
 enableGitInfo: true
 enableEmoji: true
 
+# Docsy theme module. Docsy itself pulls Bootstrap + FontAwesome as
+# Hugo modules transitively via its own go.mod — no separate
+# `dependencies` module to import.
 module:
+  proxy: direct
+  hugoVersion:
+    extended: true
+    min: "0.146.0"
   imports:
-    - path: github.com/imfing/hextra
+    - path: github.com/google/docsy
 
 markup:
   goldmark:
+    parser:
+      attribute:
+        block: true
     renderer:
       unsafe: true
   highlight:
     noClasses: false
     style: github-dark
 
+# Top navbar links beyond the content-driven ones. The Documentation
+# entry comes from docs/_index.md's frontmatter `menu.main` directive
+# (Docsy's preferred pattern for content pages). External links go
+# here.
 menu:
   main:
-    - name: Documentation
-      pageRef: /docs
-      weight: 1
     - name: GitHub
       url: https://github.com/go-steer/simian-agent
-      weight: 99
-      params:
-        icon: github
-
-  sidebar:
-    - identifier: more
-      name: More
-      params:
-        type: separator
-      weight: 1
-    - name: "Releases ↗"
-      url: "https://github.com/go-steer/simian-agent/releases"
-      weight: 2
-    - name: "Issues ↗"
-      url: "https://github.com/go-steer/simian-agent/issues"
-      weight: 3
+      weight: 50
+    - name: Releases
+      url: https://github.com/go-steer/simian-agent/releases
+      weight: 60
 
 params:
-  description: "An autonomous chaos-engineering agent for Kubernetes — directed and autonomous fault injection via Chaos Mesh, with arena provisioning and SUT lifecycle management."
+  copyright:
+    authors: "simian-agent contributors"
+    from_year: 2026
 
-  navbar:
-    displayTitle: true
-    displayLogo: false
+  description: "An autonomous chaos-engineering agent for Kubernetes — directed and autonomous fault injection via Chaos Mesh, network-policy partitions, and HTTP-layer faults via Envoy. Arena provisioning and SUT lifecycle management included."
 
-  theme:
-    default: system
-    displayToggle: true
+  # Default-on UI elements. Sidebar is on; breadcrumb is on
+  # (Docsy's default behavior — listed explicitly here for clarity).
+  ui:
+    breadcrumb_disable: false
+    sidebar_menu_compact: false
+    sidebar_menu_foldable: true
+    sidebar_search_disable: false
+    navbar_logo: false
+    navbar_translucent_over_cover_disable: true
+    footer_about_enable: true
+    # Three-state toggle in the navbar: light / dark / auto. The
+    # "auto" state follows the user's OS preference via
+    # window.matchMedia('(prefers-color-scheme: dark)'); explicit
+    # picks persist in localStorage. Implementation lives in
+    # Docsy's assets/js/dark-mode.js.
+    showLightDarkModeMenu: true
+    feedback:
+      enable: false
 
-  footer:
-    enable: true
-    displayCopyright: true
-    displayPoweredBy: false
+  # GitHub edit links per page ("Edit this page" at the top right).
+  github_repo: "https://github.com/go-steer/simian-agent"
+  github_branch: "main"
+  github_subdir: "docs/site"
 
-  page:
-    width: normal
-
+  # Right-side "On this page" TOC built from H2/H3 headings.
   toc:
-    displayTags: true
+    enabled: true
 
-  editURL:
-    enable: true
-    base: "https://github.com/go-steer/simian-agent/edit/main/docs/site/content"
+  # Built-in search via offline Lunr index (no external service).
+  offlineSearch: true
 
-  search:
-    enable: true
-    type: flexsearch
-    flexsearch:
-      index: content
-      tokenize: forward
+  links:
+    user:
+      - name: "GitHub Discussions"
+        url: "https://github.com/go-steer/simian-agent/discussions"
+        icon: "fa-brands fa-github"
+        desc: "Ask questions, share what you're building."
+    developer:
+      - name: "GitHub"
+        url: "https://github.com/go-steer/simian-agent"
+        icon: "fa-brands fa-github"
+        desc: "Source code, issue tracker, releases."
+
+  taxonomy:
+    taxonomyCloud: []
+    taxonomyPageHeader: []
