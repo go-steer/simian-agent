@@ -1,12 +1,11 @@
 ---
 title: Documentation
+linkTitle: Documentation
 weight: 1
-toc: false
-sidebar:
-  open: true
+menu:
+  main:
+    weight: 10
 ---
-
-# Documentation
 
 The full docs are still being written. In the meantime, see:
 
