@@ -1,8 +1,14 @@
-# Simian Agent — Requirements
+---
+title: "Requirements"
+linkTitle: "Requirements"
+weight: 30
+description: "Scope, operating modes, deployment postures, and the R-* requirements catalog."
+---
+
 
 > **Status:** Draft, v1 scope.
-> **Related:** [`design.md`](./design.md), [`roadmap.md`](./roadmap.md).
-> Supersedes the requirements portion of [`simian-agent.md`](./simian-agent.md).
+> **Related:** [`design.md`]({{< relref "design.md" >}}), [`roadmap.md`]({{< relref "roadmap.md" >}}).
+> Supersedes the requirements portion of `simian-agent.md`.
 
 ## 1. Objective & Scope
 

@@ -7,7 +7,7 @@ By participating in this project you agree to abide by the [Code of Conduct](./C
 ## Reporting bugs and requesting features
 
 - **Bugs:** [open an issue](https://github.com/go-steer/simian-agent/issues/new) and include your OS / Go version, the cluster context (GKE / kind / k3d / etc.), the chaos engine in use (Chaos Mesh version), and the smallest set of steps that reproduces the problem. If the bug shows up against a specific cluster type or Chaos Mesh feature, mention which acceptance test (`acceptance-mN.md`) it relates to if any.
-- **Feature requests:** check the [roadmap](./docs/roadmap.md) and the [open milestones](https://github.com/go-steer/simian-agent/milestones) first — your idea may already be planned. If not, file an issue with the use case (what you're trying to do) before the proposed solution.
+- **Feature requests:** check the [roadmap](https://go-steer.github.io/simian-agent/docs/roadmap/) and the [open milestones](https://github.com/go-steer/simian-agent/milestones) first — your idea may already be planned. If not, file an issue with the use case (what you're trying to do) before the proposed solution.
 - **Questions / discussion:** [GitHub Discussions](https://github.com/go-steer/simian-agent/discussions).
 
 ## Pull requests
@@ -16,7 +16,7 @@ By participating in this project you agree to abide by the [Code of Conduct](./C
 
 For anything beyond a typo fix or one-line bug, open an issue first so we can agree on the approach. PRs that are aligned upfront merge faster than ones that surface a design disagreement at review time.
 
-For substantive features, the project follows a milestone-based development model — each milestone gets an `acceptance-mN.md` plan written before the work starts, and an entry added to the [roadmap](./docs/roadmap.md) when it lands. If your change is large enough to warrant a milestone, propose the scope in an issue first.
+For substantive features, the project follows a milestone-based development model — each milestone gets an `acceptance-mN.md` plan written before the work starts, and an entry added to the [roadmap](https://go-steer.github.io/simian-agent/docs/roadmap/) when it lands. If your change is large enough to warrant a milestone, propose the scope in an issue first.
 
 ### Workflow
 
@@ -108,8 +108,7 @@ MUST update this overlay in the same PR. The "Hardening log" comment block at th
 - `deploy/` — Kubernetes manifests + Helm chart (`deploy/helm/simian/`).
 - `examples/` — minimal usage / driver examples.
 - `dev/` — local + CI tooling (run from here, don't reinvent).
-- `docs/` — design notes (`design.md`, `requirements.md`, `roadmap.md`, `simian-agent.md`).
-- `docs/site/` — Hugo source for the published documentation site.
+- `docs/site/` — Hugo + Docsy source for the published documentation site at <https://go-steer.github.io/simian-agent/>. All design notes live here as content pages; the site is the single source of truth.
 - `.github/workflows/` — thin delegators to `dev/ci/presubmits/`.
 
 For deeper context on conventions and gotchas, read the project [README.md](./README.md).

@@ -1,8 +1,14 @@
-# Simian Agent — Design
+---
+title: "Design"
+linkTitle: "Design"
+weight: 20
+description: "Architecture: Fault Executor chokepoint, LLM Provider contract, chaos drivers, MCP surface."
+---
+
 
 > **Status:** Draft, v1 scope.
-> **Related:** [`requirements.md`](./requirements.md), [`roadmap.md`](./roadmap.md).
-> Supersedes the design portion of [`simian-agent.md`](./simian-agent.md).
+> **Related:** [`requirements.md`]({{< relref "requirements.md" >}}), [`roadmap.md`]({{< relref "roadmap.md" >}}).
+> Supersedes the design portion of `simian-agent.md`.
 > Requirement IDs (`R-FOO-NN`) reference `requirements.md`.
 
 ## 1. Architectural Overview
