@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
@@ -41,6 +40,7 @@ func newChaosCmd() *cobra.Command {
 		workload     string
 		duration     string
 		specJSON     string
+		specFile     string
 		stdinSpec    bool
 		clear        string
 		listActive   bool
@@ -100,7 +100,7 @@ Examples:
 				}
 				return callTool(ctx, cli, "submit_fault", args)
 			case kind != "" || apiVersion != "":
-				m, err := buildManifestFromFlags(engine, apiVersion, kind, ns, workload, duration, specJSON, stdinSpec)
+				m, err := buildManifestFromFlags(engine, apiVersion, kind, ns, workload, duration, specJSON, specFile, stdinSpec)
 				if err != nil {
 					return err
 				}
@@ -113,14 +113,14 @@ Examples:
 	cmd.Flags().StringVar(&mcpURL, "mcp-url", "http://localhost:8081/sse", "Simian MCP/SSE endpoint URL")
 	cmd.Flags().StringVar(&intent, "intent", "", "Plain-text chaos intent (LLM-translated)")
 	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Path to a JSON FaultManifest to submit verbatim")
-	cmd.Flags().StringVar(&engine, "engine", "chaos-mesh", "Chaos engine (chaos-mesh|litmus)")
-	cmd.Flags().StringVar(&kind, "kind", "", "ResourceKind (e.g. NetworkChaos, PodChaos, IOChaos)")
-	cmd.Flags().StringVar(&apiVersion, "api-version", "chaos-mesh.org/v1alpha1", "CRD apiVersion")
+	cmd.Flags().StringVar(&engine, "engine", "chaos-mesh", "Chaos engine (chaos-mesh|network-policy|envoy-fault)")
+	cmd.Flags().StringVar(&kind, "kind", "", "ResourceKind (e.g. PodChaos, NetworkChaos, NetworkPolicy, EnvoyHttpDelay)")
+	cmd.Flags().StringVar(&apiVersion, "api-version", "chaos-mesh.org/v1alpha1", "CRD apiVersion. Override for non-chaos-mesh engines: networking.k8s.io/v1 for network-policy, simian.io/v1 for envoy-fault.")
 	cmd.Flags().StringVar(&ns, "namespace", "", "Target namespace")
 	cmd.Flags().StringVar(&workload, "workload", "", "Target workload name")
 	cmd.Flags().StringVar(&duration, "duration", "2m", "Fault duration (Go duration string)")
-	cmd.Flags().StringVar(&specJSON, "spec", "", "Inline JSON spec for the fault (use --spec-file or --stdin-spec for larger specs)")
-	cmd.Flags().StringVar(&specJSON, "spec-file", "", "Path to a JSON file containing the fault spec")
+	cmd.Flags().StringVar(&specJSON, "spec", "", "Inline JSON spec for the fault. Use --spec-file for larger specs read from disk, or --stdin-spec to read from stdin.")
+	cmd.Flags().StringVar(&specFile, "spec-file", "", "Path to a JSON file containing the fault spec. Mutually exclusive with --spec and --stdin-spec.")
 	cmd.Flags().BoolVar(&stdinSpec, "stdin-spec", false, "Read fault spec JSON from stdin")
 	cmd.Flags().StringVar(&clear, "clear", "", "Clear the fault with this UID")
 	cmd.Flags().BoolVar(&listActive, "list-active", false, "List active faults")
@@ -199,14 +199,14 @@ func loadManifest(path string) (map[string]any, error) {
 	return m, nil
 }
 
-func buildManifestFromFlags(engine, apiVersion, kind, ns, workload, duration, specJSON string, stdinSpec bool) (map[string]any, error) {
+func buildManifestFromFlags(engine, apiVersion, kind, ns, workload, duration, specJSON, specFile string, stdinSpec bool) (map[string]any, error) {
 	if kind == "" {
 		return nil, fmt.Errorf("--kind is required")
 	}
 	if ns == "" {
 		return nil, fmt.Errorf("--namespace is required")
 	}
-	spec, err := loadSpec(specJSON, stdinSpec)
+	spec, err := loadSpec(specJSON, specFile, stdinSpec)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +228,28 @@ func buildManifestFromFlags(engine, apiVersion, kind, ns, workload, duration, sp
 	}, nil
 }
 
-func loadSpec(spec string, fromStdin bool) (map[string]any, error) {
+// loadSpec resolves the manifest spec from one of three mutually-exclusive
+// sources: inline JSON (--spec), a file path (--spec-file), or stdin
+// (--stdin-spec). Returns an empty map when all three are empty (the
+// catalog-only path where the LLM-translated body comes via a different
+// CLI shape).
+func loadSpec(specJSON, specFile string, fromStdin bool) (map[string]any, error) {
+	// Reject overlapping inputs early — silently picking one over another
+	// hid the original --spec-file binding bug for too long.
+	set := 0
+	if specJSON != "" {
+		set++
+	}
+	if specFile != "" {
+		set++
+	}
+	if fromStdin {
+		set++
+	}
+	if set > 1 {
+		return nil, fmt.Errorf("at most one of --spec, --spec-file, --stdin-spec may be set")
+	}
+
 	var raw []byte
 	switch {
 	case fromStdin:
@@ -237,17 +258,16 @@ func loadSpec(spec string, fromStdin bool) (map[string]any, error) {
 			return nil, fmt.Errorf("read stdin: %w", err)
 		}
 		raw = b
-	case strings.HasPrefix(spec, "@"):
-		path := spec[1:]
-		b, err := os.ReadFile(path)
+	case specFile != "":
+		b, err := os.ReadFile(specFile)
 		if err != nil {
-			return nil, fmt.Errorf("read spec file: %w", err)
+			return nil, fmt.Errorf("read spec file %q: %w", specFile, err)
 		}
 		raw = b
-	case spec == "":
+	case specJSON == "":
 		return map[string]any{}, nil
 	default:
-		raw = []byte(spec)
+		raw = []byte(specJSON)
 	}
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
