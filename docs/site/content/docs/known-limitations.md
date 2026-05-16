@@ -35,7 +35,7 @@ The current Envoy injection model intercepts ALL inbound TCP on the SUT-declared
 
 For Online Boutique specifically, `--no-envoy-faults=false` (i.e. injection on) leaves 9 of 12 deployments crash-looping. Until probe rewriting (Istio's `pilot-agent` style) or an outbound-only redirect mode is implemented, only enable Envoy injection for SUTs whose probes you've audited as HTTP-only or TCP-only.
 
-Workaround for testing envoy-fault against an arbitrary workload: deploy the SUT with the default (`--no-envoy-faults=true`), then manually inject Envoy into a single test Deployment whose probes you control. The DPv2 acceptance results (in the repo root as `acceptance-m3b-results.md`, untracked) include an end-to-end recipe under "DPv2 chaos engines acceptance — round 3".
+Workaround for testing envoy-fault against an arbitrary workload: deploy the SUT with the default (`--no-envoy-faults=true`), then hand-author a small Deployment whose probes you control (HTTP `httpGet` or TCP `tcpSocket`), add the Envoy sidecar + iptables init + bootstrap ConfigMap from `pkg/sut/envoy/` to it, apply the `EnvoyHttpDelay` / `EnvoyHttpAbort` chaos against that pod's label selector, and measure with `curl` through the Envoy listener port (15006). See [Using the chaos engines]({{< relref "chaos-engines.md" >}}) for the `simian chaos` invocation pattern.
 
 ## Chaos Mesh on GKE Standard with Node Auto-Provisioning
 
