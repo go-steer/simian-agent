@@ -33,9 +33,34 @@ The current Envoy injection model intercepts ALL inbound TCP on the SUT-declared
 | gRPC `grpc:` probes on a redirected port (most Online Boutique services) | ❌ Probe fails → kubelet kills the container → `CrashLoopBackOff` |
 | gRPC `grpc:` probes on a NON-redirected port | ✅ Works — no interception |
 
-For Online Boutique specifically, `--no-envoy-faults=false` (i.e. injection on) leaves 9 of 12 deployments crash-looping. Until probe rewriting (Istio's `pilot-agent` style) or an outbound-only redirect mode is implemented, only enable Envoy injection for SUTs whose probes you've audited as HTTP-only or TCP-only.
+For Online Boutique specifically, `--no-envoy-faults=false` (i.e. injection on) leaves 9 of 12 deployments crash-looping. Until probe rewriting (Istio's `pilot-agent` style) or an outbound-only redirect mode is implemented, the rule of thumb is: only enable Envoy injection for SUTs whose probes you've audited as HTTP-only or TCP-only.
 
-Workaround for testing envoy-fault against an arbitrary workload: deploy the SUT with the default (`--no-envoy-faults=true`), then hand-author a small Deployment whose probes you control (HTTP `httpGet` or TCP `tcpSocket`), add the Envoy sidecar + iptables init + bootstrap ConfigMap from `pkg/sut/envoy/` to it, apply the `EnvoyHttpDelay` / `EnvoyHttpAbort` chaos against that pod's label selector, and measure with `curl` through the Envoy listener port (15006). See [Using the chaos engines]({{< relref "chaos-engines.md" >}}) for the `simian chaos` invocation pattern.
+### Cheap-escape-hatch: exclude probe ports from interception
+
+If a workload's probe port is *different* from its service port (e.g. a service on 8080 with a probe on 8081), you can exempt the probe port from the iptables redirect — kubelet's probe traffic bypasses Envoy entirely while service traffic still goes through:
+
+```bash
+# SUT-wide: exclude port 8081 from interception for every Deployment
+simian sut deploy --namespace boutique-1 --no-envoy-faults=false \
+                  --envoy-exclude-port=8081
+```
+
+```yaml
+# Per-workload: only this Deployment exempts the listed ports
+metadata:
+  template:
+    metadata:
+      annotations:
+        simian.chaos/envoy-exclude-ports: "8081,9090"
+```
+
+Or declare it on the SUT itself by implementing the `EnvoyExcludePortsProvider` interface (see `pkg/sut/sut.go`). The three layers merge.
+
+**Caveat:** when probe port equals service port (Online Boutique's situation for most workloads), exempting the port also disables fault injection against that workload. Trade-off: "no CrashLoopBackOff" vs "no fault injection on this workload." For SUTs that need both, the full probe-rewriter (forthcoming) is the proper fix.
+
+### Workaround for arbitrary workloads
+
+Deploy the SUT with the default (`--no-envoy-faults=true`), then hand-author a small Deployment whose probes you control (HTTP `httpGet` or TCP `tcpSocket`), add the Envoy sidecar + iptables init + bootstrap ConfigMap from `pkg/sut/envoy/` to it, apply the `EnvoyHttpDelay` / `EnvoyHttpAbort` chaos against that pod's label selector, and measure with `curl` through the Envoy listener port (15006). See [Using the chaos engines]({{< relref "chaos-engines.md" >}}) for the `simian chaos` invocation pattern.
 
 ## Chaos Mesh on GKE Standard with Node Auto-Provisioning
 

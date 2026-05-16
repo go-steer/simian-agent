@@ -103,6 +103,15 @@ type DeployOptions struct {
 	// one for SUTs that don't implement EnvoyFaultPortsProvider). Empty
 	// means use the SUT-provided list.
 	EnvoyFaultPorts []int
+	// EnvoyExcludePorts is the SUT-wide list of TCP destination ports
+	// that should be EXEMPTED from the Envoy iptables PREROUTING REDIRECT.
+	// Useful for workloads whose kubelet probe port differs from their
+	// service port — declaring the probe port here lets probes bypass
+	// Envoy entirely. Overrides the SUT's declared exclude list (or
+	// supplies one for SUTs that don't implement EnvoyExcludePortsProvider).
+	// Empty means use the SUT-provided list. Merged with any per-workload
+	// simian.chaos/envoy-exclude-ports annotation inside the injector.
+	EnvoyExcludePorts []int
 }
 
 // Deploy applies a SUT into the given namespace, waits for the declared
@@ -129,7 +138,13 @@ func (m *Manager) Deploy(ctx context.Context, opts DeployOptions) (*Baseline, er
 				ports = p.EnvoyFaultPorts()
 			}
 		}
-		docs, err = envoy.Inject(docs, envoy.InjectOptions{Ports: ports})
+		excludes := opts.EnvoyExcludePorts
+		if len(excludes) == 0 {
+			if p, ok := s.(EnvoyExcludePortsProvider); ok {
+				excludes = p.EnvoyExcludePorts()
+			}
+		}
+		docs, err = envoy.Inject(docs, envoy.InjectOptions{Ports: ports, ExcludePorts: excludes})
 		if err != nil {
 			return nil, fmt.Errorf("sut: envoy injection: %w", err)
 		}

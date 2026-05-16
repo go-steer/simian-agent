@@ -55,6 +55,20 @@ const InjectedAnnotation = "simian.chaos/envoy-injected"
 // run a sidecar (e.g. a load generator that needs raw socket behavior).
 const SkipInjectionAnnotation = "simian.chaos/no-envoy-injection"
 
+// ExcludePortsAnnotation is a comma-separated list of TCP destination
+// ports to EXEMPT from iptables PREROUTING REDIRECT on the annotated
+// Deployment's pods. Useful when a workload uses a separate port for
+// its kubelet probe than for its service traffic — the probe port can
+// be excluded so kubelet's probes bypass Envoy entirely.
+//
+// Per-workload supplement to InjectOptions.ExcludePorts (which applies
+// globally to every injected Deployment in the SUT). The two lists are
+// merged and deduplicated.
+//
+// Format: "<port>[,<port>...]". Whitespace tolerated. Invalid entries
+// are silently skipped to avoid breaking a deploy over a typo.
+const ExcludePortsAnnotation = "simian.chaos/envoy-exclude-ports"
+
 // Bootstrap renders the Envoy bootstrap YAML for our fault-injection
 // sidecar. The config is intentionally minimal:
 //

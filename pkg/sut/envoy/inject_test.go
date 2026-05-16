@@ -303,6 +303,120 @@ func TestInjectEmptyPortListSkipsRedirect(t *testing.T) {
 	}
 }
 
+// TestInjectExcludePortsEmitsReturnRulesFirst verifies that excluded
+// ports get RETURN rules emitted BEFORE the REDIRECT rules — order
+// matters in PREROUTING because nf_tables walks the chain in order
+// and short-circuits on the first matching rule.
+func TestInjectExcludePortsEmitsReturnRulesFirst(t *testing.T) {
+	docs := []*unstructured.Unstructured{makeDeployment("x", nil)}
+	out, err := Inject(docs, InjectOptions{
+		Ports:        []int{80, 8080},
+		ExcludePorts: []int{5050},
+	})
+	if err != nil {
+		t.Fatalf("Inject: %v", err)
+	}
+	tpl := decodeTemplate(t, out[1])
+	for _, c := range tpl.Spec.InitContainers {
+		if c.Name != InitContainerName {
+			continue
+		}
+		script := c.Command[2]
+		returnIdx := strings.Index(script, "--dport 5050 -j RETURN")
+		redirect80Idx := strings.Index(script, "--dport 80 -j REDIRECT")
+		if returnIdx < 0 || redirect80Idx < 0 {
+			t.Fatalf("missing expected rules in script:\n%s", script)
+		}
+		if returnIdx > redirect80Idx {
+			t.Errorf("RETURN rule for excluded port must come before REDIRECT rules; got:\n%s", script)
+		}
+	}
+}
+
+// TestInjectMergesPerWorkloadExcludeAnnotation verifies that the
+// per-Deployment exclude annotation is added to the global exclude list.
+func TestInjectMergesPerWorkloadExcludeAnnotation(t *testing.T) {
+	docs := []*unstructured.Unstructured{
+		makeDeployment("x", map[string]string{ExcludePortsAnnotation: "9090, 9091"}),
+	}
+	out, err := Inject(docs, InjectOptions{
+		Ports:        []int{80},
+		ExcludePorts: []int{5050},
+	})
+	if err != nil {
+		t.Fatalf("Inject: %v", err)
+	}
+	tpl := decodeTemplate(t, out[1])
+	for _, c := range tpl.Spec.InitContainers {
+		if c.Name != InitContainerName {
+			continue
+		}
+		script := c.Command[2]
+		for _, want := range []string{
+			"--dport 5050 -j RETURN", // global
+			"--dport 9090 -j RETURN", // per-workload
+			"--dport 9091 -j RETURN", // per-workload, whitespace-tolerant parse
+			"--dport 80 -j REDIRECT", // service traffic still intercepted
+		} {
+			if !strings.Contains(script, want) {
+				t.Errorf("script missing %q:\n%s", want, script)
+			}
+		}
+	}
+}
+
+// TestInjectExcludeOnlySkipsIptablesEntirely is a regression guard:
+// when only ExcludePorts is set (no Ports), there's nothing to
+// intercept — the script should still emit the RETURN rules but the
+// no-op short-circuit at the top of buildIptablesScript shouldn't
+// fire (it only fires when BOTH lists are empty).
+func TestInjectExcludeOnlyStillEmitsRules(t *testing.T) {
+	docs := []*unstructured.Unstructured{makeDeployment("x", nil)}
+	out, err := Inject(docs, InjectOptions{ExcludePorts: []int{5050}})
+	if err != nil {
+		t.Fatalf("Inject: %v", err)
+	}
+	tpl := decodeTemplate(t, out[1])
+	for _, c := range tpl.Spec.InitContainers {
+		if c.Name != InitContainerName {
+			continue
+		}
+		script := c.Command[2]
+		if !strings.Contains(script, "--dport 5050 -j RETURN") {
+			t.Errorf("exclude-only config should emit the RETURN rule; got:\n%s", script)
+		}
+		if strings.Contains(script, "iptables redirect skipped") {
+			t.Errorf("exclude-only config should NOT short-circuit to skipped; got:\n%s", script)
+		}
+	}
+}
+
+func TestParseExcludePortsAnnotation(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []int
+	}{
+		{"", nil},
+		{"5050", []int{5050}},
+		{"5050,8080", []int{5050, 8080}},
+		{" 5050 , 8080 ", []int{5050, 8080}}, // whitespace tolerated
+		{"5050,abc,8080", []int{5050, 8080}}, // invalid silently skipped
+		{",,5050,,", []int{5050}},            // empty entries skipped
+	}
+	for _, tc := range cases {
+		got := parseExcludePortsAnnotation(tc.in)
+		if len(got) != len(tc.want) {
+			t.Errorf("parse(%q) = %v, want %v", tc.in, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("parse(%q)[%d] = %d, want %d", tc.in, i, got[i], tc.want[i])
+			}
+		}
+	}
+}
+
 func TestBootstrapHasFaultFilter(t *testing.T) {
 	bs := Bootstrap()
 	if !strings.Contains(bs, "envoy.filters.http.fault") {

@@ -67,16 +67,17 @@ func newSutListCmd() *cobra.Command {
 
 func newSutDeployCmd() *cobra.Command {
 	var (
-		kubeconfig    string
-		namespace     string
-		sutName       string
-		createArena   bool
-		chaosSAName   string
-		chaosSANS     string
-		annotations   []string
-		useController bool
-		mcpURL        string
-		noEnvoyFaults bool
+		kubeconfig        string
+		namespace         string
+		sutName           string
+		createArena       bool
+		chaosSAName       string
+		chaosSANS         string
+		annotations       []string
+		useController     bool
+		mcpURL            string
+		noEnvoyFaults     bool
+		envoyExcludePorts []int
 	)
 	cmd := &cobra.Command{
 		Use:   "deploy",
@@ -164,9 +165,10 @@ func newSutDeployCmd() *cobra.Command {
 				fmt.Printf("deploying SUT %q into %q (Envoy injection disabled)...\n", sutName, namespace)
 			}
 			bl, err := mgr.Deploy(ctx, sut.DeployOptions{
-				Namespace:       namespace,
-				SUTName:         sutName,
-				WithEnvoyFaults: withEnvoy,
+				Namespace:         namespace,
+				SUTName:           sutName,
+				WithEnvoyFaults:   withEnvoy,
+				EnvoyExcludePorts: envoyExcludePorts,
 			})
 			if err != nil {
 				return err
@@ -189,6 +191,7 @@ func newSutDeployCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&useController, "use-controller", false, "Trigger the deploy + baseline capture inside a running 'simian serve' via the establish_baseline MCP tool, so the controller's get_baseline cache is populated. Requires --mcp-url to point at the running controller.")
 	cmd.Flags().StringVar(&mcpURL, "mcp-url", "http://localhost:8081/sse", "Simian MCP/SSE endpoint URL (only used with --use-controller)")
 	cmd.Flags().BoolVar(&noEnvoyFaults, "no-envoy-faults", true, "Skip injecting the Envoy fault-injection sidecar into SUT Deployments. DEFAULT is true (skip) because the current iptables-based interception breaks gRPC liveness/readiness probes — see README.md \"Known limitation: Envoy injection breaks gRPC kubelet probes\". Set --no-envoy-faults=false to enable injection for SUTs whose probes are HTTP-only or TCP-only. Per-workload opt-out via the simian.chaos/no-envoy-injection=true pod-template annotation.")
+	cmd.Flags().IntSliceVar(&envoyExcludePorts, "envoy-exclude-port", nil, "Repeatable. TCP destination port to EXEMPT from the Envoy iptables PREROUTING REDIRECT. Use for SUTs whose kubelet probe port differs from their service port — declaring the probe port here lets kubelet probes bypass Envoy (avoiding the gRPC-probe crash-loop) while Envoy still intercepts the remaining service traffic. Merged with the SUT's declared exclude list (EnvoyExcludePortsProvider) and any per-workload simian.chaos/envoy-exclude-ports annotation. Only meaningful with --no-envoy-faults=false.")
 	return cmd
 }
 

@@ -27,6 +27,7 @@ package envoy
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -61,6 +62,25 @@ type InjectOptions struct {
 	// has somewhere to send fault config) but no traffic is intercepted.
 	Ports []int
 
+	// ExcludePorts is the list of TCP destination ports the iptables
+	// init container should EXEMPT from redirection. This is the cheap
+	// workaround for the gRPC-kubelet-probe interaction: workloads
+	// whose probe port differs from their service port can declare the
+	// probe port here, kubelet's probes bypass Envoy entirely (passing
+	// straight to the original destination), and Envoy still intercepts
+	// the rest of the service traffic.
+	//
+	// Limitation: when probe port == service port (e.g. most Online
+	// Boutique workloads use the same gRPC port for both probes and
+	// service traffic), excluding the port also disables fault injection
+	// against that workload. For those SUTs, the full probe-rewriter is
+	// the proper fix.
+	//
+	// Order in the generated iptables script: RETURN rules for excluded
+	// ports are emitted BEFORE the REDIRECT rules, so nf_tables walks
+	// them first and short-circuits on a match.
+	ExcludePorts []int
+
 	// EnvoyImage overrides DefaultEnvoyImage.
 	EnvoyImage string
 
@@ -90,13 +110,16 @@ func Inject(docs []*unstructured.Unstructured, opts InjectOptions) ([]*unstructu
 	}
 	// Sort+dedupe ports for stable iptables command + tests.
 	ports := uniqueSortedPorts(opts.Ports)
+	// The SUT-wide exclude list; each Deployment may add to it via
+	// the ExcludePortsAnnotation, merged inside injectDeployment.
+	globalExcludes := uniqueSortedPorts(opts.ExcludePorts)
 
 	injectedAny := false
 	for _, doc := range docs {
 		if doc.GetKind() != "Deployment" {
 			continue
 		}
-		mutated, err := injectDeployment(doc, ports, opts)
+		mutated, err := injectDeployment(doc, ports, globalExcludes, opts)
 		if err != nil {
 			return nil, fmt.Errorf("envoy inject %s: %w", doc.GetName(), err)
 		}
@@ -123,7 +146,11 @@ func Inject(docs []*unstructured.Unstructured, opts InjectOptions) ([]*unstructu
 // injectDeployment mutates doc's pod template in place. Returns true if
 // injection happened, false if the Deployment was skipped (already
 // injected, or carries SkipInjectionAnnotation).
-func injectDeployment(doc *unstructured.Unstructured, ports []int, opts InjectOptions) (bool, error) {
+//
+// globalExcludes is the SUT-wide list from InjectOptions.ExcludePorts;
+// the per-Deployment ExcludePortsAnnotation is parsed inside this
+// function and merged.
+func injectDeployment(doc *unstructured.Unstructured, ports, globalExcludes []int, opts InjectOptions) (bool, error) {
 	// Decode the pod template to typed core/v1 for ergonomics.
 	rawTemplate, found, err := unstructured.NestedMap(doc.Object, "spec", "template")
 	if err != nil {
@@ -150,6 +177,11 @@ func injectDeployment(doc *unstructured.Unstructured, ports []int, opts InjectOp
 		}
 	}
 
+	// Merge SUT-wide excludes with the per-workload exclude annotation
+	// (if any). De-dupe + sort for stable script generation.
+	perWorkloadExcludes := parseExcludePortsAnnotation(tpl.Annotations[ExcludePortsAnnotation])
+	excludes := uniqueSortedPorts(append(append([]int{}, globalExcludes...), perWorkloadExcludes...))
+
 	// Annotation flag for the topology discoverer.
 	if tpl.Annotations == nil {
 		tpl.Annotations = map[string]string{}
@@ -167,7 +199,7 @@ func injectDeployment(doc *unstructured.Unstructured, ports []int, opts InjectOp
 	})
 
 	// Init container that installs the iptables redirect rules.
-	tpl.Spec.InitContainers = appendContainerIfMissing(tpl.Spec.InitContainers, makeIptablesInitContainer(ports, opts.IptablesImage))
+	tpl.Spec.InitContainers = appendContainerIfMissing(tpl.Spec.InitContainers, makeIptablesInitContainer(ports, excludes, opts.IptablesImage))
 
 	// Sidecar.
 	tpl.Spec.Containers = append(tpl.Spec.Containers, makeEnvoySidecar(opts.EnvoyImage))
@@ -201,8 +233,8 @@ func injectDeployment(doc *unstructured.Unstructured, ports []int, opts InjectOp
 // ports lands in Envoy first. Envoy applies the fault filter (when
 // runtime overrides it) and then forwards to the original destination
 // (the workload's actual port) via its ORIGINAL_DST cluster.
-func makeIptablesInitContainer(ports []int, image string) corev1.Container {
-	cmd := buildIptablesScript(ports)
+func makeIptablesInitContainer(ports, excludePorts []int, image string) corev1.Container {
+	cmd := buildIptablesScript(ports, excludePorts)
 	root := int64(0)
 	noRoot := false
 	return corev1.Container{
@@ -219,19 +251,52 @@ func makeIptablesInitContainer(ports []int, image string) corev1.Container {
 	}
 }
 
-// buildIptablesScript renders the iptables commands. One -j REDIRECT per
-// port; if no ports are given the script is a no-op (Envoy still injected
-// but nothing intercepted — useful for testing the injection path).
-func buildIptablesScript(ports []int) string {
-	if len(ports) == 0 {
+// buildIptablesScript renders the iptables commands. RETURN rules for
+// excludePorts come FIRST so nf_tables walks them before the REDIRECT
+// rules — matching destination ports short-circuit on the RETURN and
+// bypass interception entirely. The REDIRECT rules then catch
+// everything else in the configured port list.
+//
+// If no ports are given the script is a no-op (Envoy still injected but
+// nothing intercepted — useful for testing the injection path).
+func buildIptablesScript(ports, excludePorts []int) string {
+	if len(ports) == 0 && len(excludePorts) == 0 {
 		return "echo 'simian-envoy: no ports configured; iptables redirect skipped'"
 	}
 	var sb strings.Builder
 	sb.WriteString("set -eux\n")
+	// Exemptions first — order matters in the PREROUTING chain.
+	for _, p := range excludePorts {
+		fmt.Fprintf(&sb, "iptables -t nat -A PREROUTING -p tcp --dport %d -j RETURN\n", p)
+	}
 	for _, p := range ports {
 		fmt.Fprintf(&sb, "iptables -t nat -A PREROUTING -p tcp --dport %d -j REDIRECT --to-port %d\n", p, InboundListenerPort)
 	}
 	return sb.String()
+}
+
+// parseExcludePortsAnnotation reads the per-workload exclude-ports
+// annotation value: "<port>[,<port>...]". Whitespace tolerated;
+// invalid entries silently skipped (deploy shouldn't fail over a
+// typo in this annotation). Out-of-range entries (≤0 or >65535)
+// are dropped by uniqueSortedPorts downstream.
+func parseExcludePortsAnnotation(v string) []int {
+	if v == "" {
+		return nil
+	}
+	out := make([]int, 0)
+	for _, tok := range strings.Split(v, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		n, err := strconv.Atoi(tok)
+		if err != nil {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 // makeEnvoySidecar returns the Envoy container spec. Reads its bootstrap
