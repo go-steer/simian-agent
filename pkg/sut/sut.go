@@ -56,6 +56,27 @@ type EnvoyFaultPortsProvider interface {
 	EnvoyFaultPorts() []int
 }
 
+// EnvoyExcludePortsProvider is an optional add-on interface a SUT may
+// implement to declare TCP destination ports that should be EXEMPTED
+// from the Envoy iptables PREROUTING REDIRECT. The injector emits
+// `iptables -j RETURN` rules for these before the REDIRECT rules, so
+// nf_tables short-circuits on a matching port and the packet bypasses
+// Envoy entirely.
+//
+// Use case: SUTs whose kubelet probe port differs from their service
+// port. Declaring the probe port here lets kubelet probes pass through
+// (HTTP/gRPC/TCP probes all go straight to the workload) while Envoy
+// still intercepts service traffic on the other ports.
+//
+// Note: when probe port equals service port (Online Boutique's
+// situation for most workloads), excluding the port also disables
+// fault injection against that workload — the trade-off is "no
+// CrashLoopBackOff" vs "no fault injection". For SUTs that need both,
+// the full probe-rewriter is the proper fix.
+type EnvoyExcludePortsProvider interface {
+	EnvoyExcludePorts() []int
+}
+
 // WorkloadRef identifies a workload by Kind + Name.
 type WorkloadRef struct {
 	Kind string `json:"kind"` // "Deployment" | "StatefulSet"
