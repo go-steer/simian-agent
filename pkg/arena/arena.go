@@ -20,7 +20,7 @@
 //
 // This package is engine-agnostic — it does not know about Chaos Mesh, Litmus,
 // or the Fault Executor. It only knows the eligibility model defined in
-// docs/design.md §10.3.
+// the Design doc (https://go-steer.github.io/simian-agent/docs/design/).
 package arena
 
 import (

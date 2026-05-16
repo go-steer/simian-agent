@@ -16,7 +16,8 @@
 // networking.k8s.io/v1 NetworkPolicy resources to simulate network
 // partitions. It exists because Chaos Mesh's NetworkChaos is silently
 // bypassed on GKE Dataplane V2 (eBPF/Cilium); see
-// docs/plan-dpv2-chaos-engines.md for the full rationale.
+// https://go-steer.github.io/simian-agent/docs/dpv2-chaos-engines/
+// for the full rationale.
 //
 // The engine only supports partition-style chaos — it can deny ingress,
 // egress, or both for a labeled set of pods. It does NOT implement delay,

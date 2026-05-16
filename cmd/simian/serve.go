@@ -106,7 +106,7 @@ func newServeCmd() *cobra.Command {
 			}
 			// NetworkPolicy partition driver — works on GKE Dataplane V2,
 			// where Chaos Mesh's NetworkChaos is silently bypassed
-			// (see docs/plan-dpv2-chaos-engines.md).
+			// (see https://go-steer.github.io/simian-agent/docs/dpv2-chaos-engines/).
 			npDriver := networkpolicy.New(clientset, "")
 			// Envoy fault driver — pokes the per-pod Envoy admin API
 			// installed by pkg/sut/envoy at SUT-deploy time. Works on

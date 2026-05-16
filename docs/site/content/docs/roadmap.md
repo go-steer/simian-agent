@@ -1,8 +1,14 @@
-# Simian Agent — Phased Development Roadmap
+---
+title: "Roadmap"
+linkTitle: "Roadmap"
+weight: 40
+description: "Phased development roadmap — what's shipped, what's next."
+---
+
 
 > **Status:** Draft, v1 plan. M1 shipped 2026-05-12 (PR #1). M2 shipped 2026-05-12/14 (PRs #2, #5). M3 shipped 2026-05-14 (PRs #7, #8).
-> **Related:** [`requirements.md`](./requirements.md), [`design.md`](./design.md).
-> Supersedes the roadmap portion of [`simian-agent.md`](./simian-agent.md).
+> **Related:** [`requirements.md`]({{< relref "requirements.md" >}}), [`design.md`]({{< relref "design.md" >}}).
+> Supersedes the roadmap portion of `simian-agent.md`.
 
 This roadmap lays out v1 in six milestones. Each milestone has a focused deliverable, a small set of public Go entrypoints, and a concrete acceptance demo. Milestones are sequenced as a vertical slice first (Milestone 1) then breadth and depth — every milestone produces a demoable system on top of the previous one. Cross-cutting work (observability, Helm chart) is interleaved — see the closing section.
 

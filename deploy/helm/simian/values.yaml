@@ -85,9 +85,9 @@ sutInController:
 # Pod Security Standards "restricted" enforcement on the SUT
 # namespace will reject the injected pods.
 #
-# See README.md § "Known limitation: Envoy injection breaks gRPC
-# kubelet probes" and docs/plan-dpv2-chaos-engines.md for the design
-# rationale.
+# See https://go-steer.github.io/simian-agent/docs/known-limitations/
+# and https://go-steer.github.io/simian-agent/docs/dpv2-chaos-engines/
+# for the design rationale.
 sutInjection:
   envoyFaults: false
 
