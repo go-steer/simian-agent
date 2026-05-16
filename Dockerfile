@@ -19,9 +19,15 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/simian ./cmd/simian
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/simian-envoy-agent ./cmd/simian-envoy-agent
 
+# The image carries two binaries: the simian controller (ENTRYPOINT)
+# and the simian-envoy-agent probe-rewriter sidecar. Injected
+# Deployments override Command to /usr/local/bin/simian-envoy-agent;
+# the chart's controller install uses the default ENTRYPOINT.
 FROM gcr.io/distroless/static
 COPY --from=build /out/simian /usr/local/bin/simian
+COPY --from=build /out/simian-envoy-agent /usr/local/bin/simian-envoy-agent
 EXPOSE 8081
 ENTRYPOINT ["/usr/local/bin/simian"]
 CMD ["serve"]
