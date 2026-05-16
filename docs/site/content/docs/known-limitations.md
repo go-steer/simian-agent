@@ -43,10 +43,6 @@ The chaos-daemon DaemonSet won't land on NAP-provisioned nodes without (a) the r
 
 This is an install-time concern, not a Simian bug — but it affects every chaos-mesh-using install on GKE NAP. Documented in the README's "Known cluster-side gotchas" section.
 
-## `--spec-file` CLI flag binding bug
-
-Both `--spec` and `--spec-file` on `simian chaos` bind to the same variable, so `--spec-file=/tmp/x.json` puts the path string into the spec field and JSON-decode fails on the leading `/`. Workaround: use `--spec '<inline JSON>'` or `--stdin-spec`. Cosmetic fix; tracked.
-
 ## Autonomous LLM bias toward chaos-mesh
 
 Without `--hypothesis-hint`, the LLM almost never picks the new `network-policy` or `envoy-fault` engines because chaos-mesh has 12+ catalog entries vs 1+2. Possible mitigations: (a) tier-policy filtering, (b) explicit per-engine "weight" in the catalog, (c) prompt rule that encourages cross-engine plans. Not blocking; the hypothesis-hint workaround is reliable.

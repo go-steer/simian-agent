@@ -96,7 +96,7 @@ simian chaos --list-catalog    # catalog the LLM sees (all engines)
 simian chaos --clear f-<UID>   # clear before lease expiry
 ```
 
-⚠️ **Known CLI bug:** `--spec-file <path>` is bound to the same variable as `--spec`, so passing a file path JSON-decode-fails. Workaround: use `--spec '<inline JSON>'` or `--stdin-spec`. Tracked for fix.
+`--spec`, `--spec-file`, and `--stdin-spec` are mutually exclusive — set at most one. The CLI rejects overlapping inputs upfront rather than silently picking one.
 
 ### Tearing down
 
