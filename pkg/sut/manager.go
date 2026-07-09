@@ -258,6 +258,68 @@ func (m *Manager) LoadCachedBaselines(ctx context.Context) (int, error) {
 }
 
 // Baseline returns the cached baseline for a namespace, if any.
+// EstablishBaselineFromTopology captures a baseline for whatever
+// Deployments + StatefulSets currently exist in the namespace, without
+// deploying a SUT. Use when the workloads under test weren't shipped by
+// Simian's SUT registry (any team's app in an eligible namespace).
+//
+// The returned Baseline has SUT="" to distinguish it from
+// registry-driven baselines. It is cached in-memory and persisted via
+// the configured Store, same as SUT baselines — the autonomous loop's
+// health gate treats both identically. Zero-value BaselineConfig fields
+// fall back to DefaultBaselineConfig at the polling layer.
+func (m *Manager) EstablishBaselineFromTopology(ctx context.Context, namespace string, cfg BaselineConfig) (*Baseline, error) {
+	if namespace == "" {
+		return nil, fmt.Errorf("sut: namespace is required")
+	}
+	refs, err := m.listNamespaceWorkloads(ctx, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("sut: enumerate workloads in %q: %w", namespace, err)
+	}
+	if len(refs) == 0 {
+		return nil, fmt.Errorf("sut: no Deployments or StatefulSets found in namespace %q", namespace)
+	}
+	bl, err := m.waitForBaselineOnRefs(ctx, namespace, refs, "", cfg)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	m.baselines[namespace] = *bl
+	m.mu.Unlock()
+	if err := m.Store.Save(ctx, *bl); err != nil {
+		fmt.Fprintf(os.Stderr, "sut: warning: persist baseline for %q: %v\n", namespace, err)
+	}
+	return bl, nil
+}
+
+// listNamespaceWorkloads enumerates the Deployments and StatefulSets
+// in a namespace as WorkloadRefs suitable for the baseline poller.
+// Sorted by (Kind,Name) for stable output.
+func (m *Manager) listNamespaceWorkloads(ctx context.Context, namespace string) ([]WorkloadRef, error) {
+	out := []WorkloadRef{}
+	deps, err := m.K8s.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list deployments: %w", err)
+	}
+	for _, d := range deps.Items {
+		out = append(out, WorkloadRef{Kind: "Deployment", Name: d.Name})
+	}
+	sts, err := m.K8s.AppsV1().StatefulSets(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list statefulsets: %w", err)
+	}
+	for _, s := range sts.Items {
+		out = append(out, WorkloadRef{Kind: "StatefulSet", Name: s.Name})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
 func (m *Manager) Baseline(namespace string) (Baseline, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -300,7 +362,21 @@ func (m *Manager) gvrFor(gvk schema.GroupVersionKind) (schema.GroupVersionResour
 
 // waitForBaseline polls workload status until all expected workloads are
 // Ready, then holds the stability window before declaring baseline.
+// Thin wrapper over waitForBaselineOnRefs that pulls the workload set
+// and BaselineConfig from a registered SUT.
 func (m *Manager) waitForBaseline(ctx context.Context, namespace string, s SUT, cfg BaselineConfig) (*Baseline, error) {
+	return m.waitForBaselineOnRefs(ctx, namespace, s.ExpectedWorkloads(), s.Name(), cfg)
+}
+
+// waitForBaselineOnRefs is the underlying polling loop used by both the
+// SUT-driven path (waitForBaseline) and the topology-driven path
+// (EstablishBaselineFromTopology). sutName is stamped into the returned
+// Baseline; pass "" for topology-derived baselines that aren't backed
+// by a registered SUT.
+func (m *Manager) waitForBaselineOnRefs(ctx context.Context, namespace string, refs []WorkloadRef, sutName string, cfg BaselineConfig) (*Baseline, error) {
+	if len(refs) == 0 {
+		return nil, fmt.Errorf("sut: no workloads to baseline in namespace %q", namespace)
+	}
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 3 * time.Second
 	}
@@ -308,11 +384,10 @@ func (m *Manager) waitForBaseline(ctx context.Context, namespace string, s SUT, 
 		cfg.ReadyTimeout = 5 * time.Minute
 	}
 	deadline := time.Now().Add(cfg.ReadyTimeout)
-	expected := s.ExpectedWorkloads()
 
 	var firstReadyAt time.Time
 	for {
-		statuses, allReady, err := m.workloadStatuses(ctx, namespace, expected)
+		statuses, allReady, err := m.workloadStatuses(ctx, namespace, refs)
 		if err != nil {
 			return nil, fmt.Errorf("sut: workload status: %w", err)
 		}
@@ -323,7 +398,7 @@ func (m *Manager) waitForBaseline(ctx context.Context, namespace string, s SUT, 
 			if time.Since(firstReadyAt) >= cfg.StabilityWindow {
 				return &Baseline{
 					Namespace:       namespace,
-					SUT:             s.Name(),
+					SUT:             sutName,
 					EstablishedAt:   time.Now().UTC(),
 					StabilityWindow: cfg.StabilityWindow,
 					Workloads:       statuses,
@@ -336,7 +411,7 @@ func (m *Manager) waitForBaseline(ctx context.Context, namespace string, s SUT, 
 		if time.Now().After(deadline) {
 			return nil, &BaselineTimeoutError{
 				Namespace: namespace,
-				SUT:       s.Name(),
+				SUT:       sutName,
 				Statuses:  statuses,
 				Elapsed:   cfg.ReadyTimeout,
 			}

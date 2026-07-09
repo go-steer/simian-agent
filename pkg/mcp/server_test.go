@@ -81,6 +81,16 @@ func (f *fakeEstablisher) Deploy(_ context.Context, opts sut.DeployOptions) (*su
 	return f.returnBL, nil
 }
 
+func (f *fakeEstablisher) EstablishBaselineFromTopology(_ context.Context, namespace string, _ sut.BaselineConfig) (*sut.Baseline, error) {
+	f.called++
+	f.gotNS = namespace
+	f.gotSUT = "" // topology path has no SUT
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.returnBL, nil
+}
+
 func newServer(t *testing.T, opts ...Option) *Server {
 	t.Helper()
 	return New(stubExecutor{}, map[simian.Engine]simian.ChaosDriver{}, nil, nil, "test", opts...)
@@ -233,5 +243,38 @@ func TestEstablishBaseline_DelegatesToManager(t *testing.T) {
 	}
 	if !parsed.Established || parsed.Baseline.Namespace != "ns" {
 		t.Errorf("got %+v, want established=true ns=ns", parsed)
+	}
+}
+
+func TestEstablishBaseline_TopologyPathWhenSUTOmitted(t *testing.T) {
+	bl := &sut.Baseline{Namespace: "payments", SUT: ""}
+	fe := &fakeEstablisher{returnBL: bl}
+	s := newServer(t, WithBaselineEstablisher(fe))
+	got := callTool(t, s, "establish_baseline", map[string]any{"namespace": "payments"})
+	if fe.called != 1 || fe.gotNS != "payments" || fe.gotSUT != "" {
+		t.Errorf("EstablishBaselineFromTopology called=%d ns=%q sut=%q (want called=1 ns=payments sut=\"\")", fe.called, fe.gotNS, fe.gotSUT)
+	}
+	var parsed struct {
+		Established bool         `json:"established"`
+		Baseline    sut.Baseline `json:"baseline"`
+	}
+	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v; raw=%q", err, got)
+	}
+	if !parsed.Established || parsed.Baseline.Namespace != "payments" || parsed.Baseline.SUT != "" {
+		t.Errorf("got %+v, want established=true ns=payments sut=\"\"", parsed)
+	}
+}
+
+func TestEstablishBaseline_NamespaceRequired(t *testing.T) {
+	bl := &sut.Baseline{}
+	fe := &fakeEstablisher{returnBL: bl}
+	s := newServer(t, WithBaselineEstablisher(fe))
+	got := callTool(t, s, "establish_baseline", map[string]any{})
+	if got == "" {
+		t.Fatal("expected error text about missing namespace")
+	}
+	if fe.called != 0 {
+		t.Errorf("establisher should not have been called; got called=%d", fe.called)
 	}
 }

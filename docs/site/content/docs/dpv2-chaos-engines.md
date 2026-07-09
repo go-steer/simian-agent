@@ -172,33 +172,79 @@ The driver translates this into a real K8s NetworkPolicy at apply time (the LLM 
 After all phases land:
 
 ```bash
-# Build + deploy SUT with Envoy injection (default on)
 make build
-bin/simian arena create boutique-m3
-bin/simian sut deploy --namespace boutique-m3 --sut online-boutique
-# Verify sidecars present:
-kubectl get pods -n boutique-m3 -o jsonpath='{.items[*].spec.containers[*].name}' | tr ' ' '\n' | grep simian-envoy-fault | wc -l
-# Expect: 12 (one per Online Boutique workload)
+source ~/scripts/gemini.sh   # or export GOOGLE_CLOUD_PROJECT + GEMINI creds
 
-# Start autonomous serve and let it run 5+ cycles
-source ~/scripts/gemini.sh
+# 1) Create the arena.
+bin/simian arena create boutique-m3
+
+# 2) Deploy the SUT with Envoy injection ON. Online Boutique's SUT
+#    registers loadgenerator + redis-cart in NoEnvoyInjectionWorkloads,
+#    so those two run un-injected; the other 10 workloads get the
+#    Envoy fault sidecar + the probe-rewriter sidecar.
+bin/simian sut deploy --namespace boutique-m3 --sut online-boutique --no-envoy-faults=false
+
+# 3) Verify sidecar counts.
+kubectl get pods -n boutique-m3 -o jsonpath='{.items[*].spec.containers[*].name}' \
+  | tr ' ' '\n' | grep -c simian-envoy-fault   # expect 10
+kubectl get pods -n boutique-m3 -o jsonpath='{.items[*].spec.containers[*].name}' \
+  | tr ' ' '\n' | grep -c simian-envoy-agent   # expect 10 (probe rewriter)
+
+# 4) Start the autonomous controller. --sut-inject-envoy-faults so any
+#    subsequent controller-driven establish_baseline preserves the
+#    Envoy injection posture.
 bin/simian serve --eligible-namespace boutique-m3 \
   --autonomous --autonomous-namespace boutique-m3 \
-  --cycle-interval 90s --max-faults-per-cycle 3 2>&1 | tee /tmp/dpv2-engines.log
+  --cycle-interval 90s --max-faults-per-cycle 3 \
+  --sut-inject-envoy-faults 2>&1 | tee /tmp/dpv2-engines.log &
 
-# In another shell, after baseline established + 3+ cycles:
-grep -E '"event":"plan.generated"' /tmp/dpv2-engines.log \
-  | jq -r '.payload.steps[].manifest.engine' | sort | uniq -c
-# Expect: chaos-mesh, network-policy, and/or envoy-fault all present
+# 5) Ask the controller to establish a baseline. The CLI 'sut deploy' in
+#    step 2 caches its baseline in the CLI process, which has already
+#    exited — the running controller has its own empty cache. This
+#    step re-runs the SUT deploy path idempotently via MCP and caches
+#    the baseline in the controller so the health gate can clear.
+#    (Topology-driven form omits --sut for arbitrary workloads not
+#    shipped by Simian's SUT registry.)
+bin/simian baseline establish --namespace boutique-m3 --sut online-boutique
 
-# Verify a network-policy fault actually fires:
-kubectl get networkpolicies -n boutique-m3
-# When one is active, exec into another pod and confirm traffic to the partitioned workload fails
+# 6) Wait ~4-5 cycles at 90s each. Grep the audit log for engines picked.
+grep '"event":"driver.applied"' /tmp/dpv2-engines.log \
+  | jq -r '.payload.engine_uid' \
+  | while read u; do
+      case "$u" in
+        eyJ*) echo envoy-fault;;
+        *simian-np-*) echo network-policy;;
+        *) echo chaos-mesh;;
+      esac
+    done | sort | uniq -c
+# Expect: envoy-fault + chaos-mesh + at least one network-policy pick
+# across a few cycles. No driver.failed events.
 
-# Verify an envoy-fault actually fires:
-# When EnvoyHttpDelay is active against e.g. frontend, exec into loadgenerator and curl frontend
-# Confirm response latency increased by the configured delay
+# 7) Verify network-policy fault actually fires (fire directly for a
+#    deterministic check):
+bin/simian chaos --engine network-policy \
+  --kind NetworkPolicy --api-version networking.k8s.io/v1 \
+  --namespace boutique-m3 --workload cartservice --duration 30s \
+  --spec '{"labelSelectors":{"app":"cartservice"},"directions":["ingress","egress"]}'
+kubectl get networkpolicies -n boutique-m3   # simian-np-<ulid> should be present
+
+# 8) Verify envoy-fault fault actually fires (measurable latency change):
+kubectl -n boutique-m3 run probe --rm -it --restart=Never \
+  --image=curlimages/curl:latest --command -- \
+  sh -c 'for i in 1 2 3; do curl -s -o /dev/null -w "trial %{time_total}s\n" http://frontend/; done'
+# baseline ~40ms; then:
+bin/simian chaos --engine envoy-fault \
+  --kind EnvoyHttpDelay --api-version simian.io/v1 \
+  --namespace boutique-m3 --workload frontend --duration 45s \
+  --spec '{"percentage":100,"fixed_delay_ms":300,"labelSelectors":{"app":"frontend"}}'
+# Re-run the curl loop within 45s; expect ~340ms per request.
 ```
+
+Reaper timing note: leases expire on their deadline, but the reaper
+poll cadence adds ~30s before the underlying resource (NetworkPolicy /
+Envoy runtime override) is torn down. This is expected — resources
+persist a bit past `lease.expired`; use `kubectl get networkpolicies`
+after ~60s to confirm removal.
 
 **Unit-test verification (per phase):**
 ```bash

@@ -58,10 +58,14 @@ type RecentLookup interface {
 }
 
 // BaselineEstablisher is the write-side interface backing establish_baseline.
-// *sut.Manager satisfies it via its existing Deploy method. nil disables the
-// tool with a clear error.
+// *sut.Manager satisfies both methods: Deploy for the SUT-driven path
+// (apply manifests + wait + baseline), and EstablishBaselineFromTopology
+// for the topology-driven path (enumerate whatever workloads exist in the
+// namespace, no manifests applied). nil disables the tool with a clear
+// error.
 type BaselineEstablisher interface {
 	Deploy(ctx context.Context, opts sut.DeployOptions) (*sut.Baseline, error)
+	EstablishBaselineFromTopology(ctx context.Context, namespace string, cfg sut.BaselineConfig) (*sut.Baseline, error)
 }
 
 // Server bundles the Simian dependencies the tools need.
@@ -191,9 +195,9 @@ func (s *Server) registerTools() {
 	), s.handleGetRecentFaults)
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("establish_baseline",
-		mcpsdk.WithDescription("Deploy a SUT into the given arena namespace and capture its baseline in the controller's in-memory cache. Once captured, get_baseline returns the snapshot. The arena (eligibility annotation + chaos-SA RoleBinding) must already exist."),
+		mcpsdk.WithDescription("Capture a healthy-state baseline for a namespace so autonomous mode's health gate can clear. Two paths: (a) pass 'sut' to deploy a registered SUT into the arena AND baseline it (SUT-driven), (b) omit 'sut' to baseline whatever Deployments + StatefulSets currently exist in the namespace without touching them (topology-driven — for arbitrary workloads not shipped by Simian's SUT registry). Either way the arena must already exist (eligibility annotation + chaos-SA RoleBinding)."),
 		mcpsdk.WithString("namespace", mcpsdk.Required()),
-		mcpsdk.WithString("sut", mcpsdk.Required()),
+		mcpsdk.WithString("sut"),
 	), s.handleEstablishBaseline)
 }
 
@@ -396,13 +400,21 @@ func (s *Server) handleEstablishBaseline(ctx context.Context, req mcpsdk.CallToo
 	args := req.GetArguments()
 	ns, _ := args["namespace"].(string)
 	sutName, _ := args["sut"].(string)
-	if ns == "" || sutName == "" {
-		return mcpsdk.NewToolResultError("namespace and sut are required"), nil
+	if ns == "" {
+		return mcpsdk.NewToolResultError("namespace is required"), nil
 	}
 	if s.Establisher == nil {
 		return mcpsdk.NewToolResultError("establish_baseline: SUT manager not enabled in this controller"), nil
 	}
-	bl, err := s.Establisher.Deploy(ctx, sut.DeployOptions{Namespace: ns, SUTName: sutName})
+	var (
+		bl  *sut.Baseline
+		err error
+	)
+	if sutName == "" {
+		bl, err = s.Establisher.EstablishBaselineFromTopology(ctx, ns, sut.DefaultBaselineConfig())
+	} else {
+		bl, err = s.Establisher.Deploy(ctx, sut.DeployOptions{Namespace: ns, SUTName: sutName})
+	}
 	if err != nil {
 		return mcpsdk.NewToolResultError(fmt.Sprintf("establish_baseline: %v", err)), nil
 	}

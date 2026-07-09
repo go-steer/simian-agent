@@ -204,6 +204,91 @@ func TestWaitForBaselineTimesOutWhenNotReady(t *testing.T) {
 	}
 }
 
+func newStatefulSet(ns, name string, desired, ready int32) *appsv1.StatefulSet {
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec:       appsv1.StatefulSetSpec{Replicas: &desired},
+		Status:     appsv1.StatefulSetStatus{ReadyReplicas: ready, Replicas: desired},
+	}
+}
+
+func TestListNamespaceWorkloadsEnumeratesBothKinds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	k8s := fake.NewClientset(
+		newDeployment("payments", "api", 1, 1),
+		newDeployment("payments", "worker", 2, 2),
+		newDeployment("other-ns", "should-not-appear", 1, 1),
+		newStatefulSet("payments", "queue", 3, 3),
+	)
+	m := &Manager{K8s: k8s, Store: noopStore{}, baselines: map[string]Baseline{}}
+	refs, err := m.listNamespaceWorkloads(ctx, "payments")
+	if err != nil {
+		t.Fatalf("listNamespaceWorkloads: %v", err)
+	}
+	// Expect Deployment/api, Deployment/worker, StatefulSet/queue —
+	// sorted by (Kind,Name).
+	want := []WorkloadRef{
+		{Kind: "Deployment", Name: "api"},
+		{Kind: "Deployment", Name: "worker"},
+		{Kind: "StatefulSet", Name: "queue"},
+	}
+	if len(refs) != len(want) {
+		t.Fatalf("expected %d workloads, got %d: %+v", len(want), len(refs), refs)
+	}
+	for i := range want {
+		if refs[i] != want[i] {
+			t.Errorf("refs[%d] = %+v, want %+v", i, refs[i], want[i])
+		}
+	}
+}
+
+func TestEstablishBaselineFromTopologyCapturesWorkloads(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	k8s := fake.NewClientset(
+		newDeployment("payments", "api", 1, 1),
+		newStatefulSet("payments", "queue", 3, 3),
+	)
+	m := &Manager{K8s: k8s, Store: noopStore{}, baselines: map[string]Baseline{}}
+	bl, err := m.EstablishBaselineFromTopology(ctx, "payments", BaselineConfig{
+		ReadyTimeout:    2 * time.Second,
+		StabilityWindow: 0,
+		PollInterval:    50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("EstablishBaselineFromTopology: %v", err)
+	}
+	if bl.SUT != "" {
+		t.Errorf("topology-derived baseline should have SUT=\"\", got %q", bl.SUT)
+	}
+	if bl.Namespace != "payments" {
+		t.Errorf("baseline namespace = %q, want \"payments\"", bl.Namespace)
+	}
+	if len(bl.Workloads) != 2 {
+		t.Fatalf("expected 2 workloads in baseline, got %d: %+v", len(bl.Workloads), bl.Workloads)
+	}
+	// Cached in-memory + retrievable via Baseline().
+	cached, ok := m.Baseline("payments")
+	if !ok {
+		t.Fatal("baseline should have been cached")
+	}
+	if cached.SUT != "" || len(cached.Workloads) != 2 {
+		t.Errorf("cached baseline mismatch: %+v", cached)
+	}
+}
+
+func TestEstablishBaselineFromTopologyFailsWhenNamespaceEmpty(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	k8s := fake.NewClientset() // no workloads
+	m := &Manager{K8s: k8s, Store: noopStore{}, baselines: map[string]Baseline{}}
+	_, err := m.EstablishBaselineFromTopology(ctx, "empty-ns", DefaultBaselineConfig())
+	if err == nil {
+		t.Fatal("expected error when namespace has no Deployments or StatefulSets")
+	}
+}
+
 func TestRegistryRoundTrip(t *testing.T) {
 	r := NewMemoryRegistry()
 	if err := r.Register(&fakeSUT{name: "a"}); err != nil {
