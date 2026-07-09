@@ -112,6 +112,13 @@ const ExcludePortsAnnotation = "simian.chaos/envoy-exclude-ports"
 //
 // HTTP/2 + websocket upgrades are enabled so the filter applies to gRPC
 // (Online Boutique services) as well as plain HTTP.
+//
+// The upstream cluster's typed_extension_protocol_options uses
+// use_downstream_protocol_config: whatever protocol the downstream
+// (caller-to-Envoy) speaks is what Envoy speaks to the app on 127.0.0.1.
+// Without this, Envoy defaults to HTTP/1.1 upstream, which makes gRPC
+// (HTTP/2-only) services reject with "protocol error" and return 503 to
+// the caller.
 func Bootstrap() string {
 	return `admin:
   address:
@@ -173,5 +180,11 @@ static_resources:
       lb_policy: CLUSTER_PROVIDED
       original_dst_lb_config:
         use_http_header: false
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          use_downstream_protocol_config:
+            http_protocol_options: {}
+            http2_protocol_options: {}
 `
 }
