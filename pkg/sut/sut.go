@@ -77,6 +77,32 @@ type EnvoyExcludePortsProvider interface {
 	EnvoyExcludePorts() []int
 }
 
+// NoEnvoyInjectionWorkloadsProvider is an optional add-on interface a
+// SUT may implement to declare workloads (by Deployment name) that
+// should be skipped ENTIRELY from Envoy injection when
+// DeployOptions.WithEnvoyFaults is true. Equivalent to setting the
+// per-pod simian.chaos/no-envoy-injection="true" annotation, but the
+// design intent lives in code alongside the SUT definition rather than
+// scattered across yaml annotations a future SUT maintainer might not
+// think to add.
+//
+// Use cases:
+//   - Client-only workloads (e.g. locust load generators) whose only
+//     traffic is outbound to other SUT services — there is nothing on
+//     the server side to fault-inject.
+//   - Raw-TCP services (e.g. Redis) that speak binary protocols the
+//     Envoy HTTP Connection Manager can't parse. Injecting Envoy on
+//     them mangles the byte stream and takes them down; use
+//     network-policy for IP-layer chaos on these workloads instead.
+//
+// The Manager unions the SUT-provider list with
+// DeployOptions.NoEnvoyInjectionWorkloads before passing them to the
+// injector — an operator supplying additional names via CLI never
+// loses the SUT's declared defaults.
+type NoEnvoyInjectionWorkloadsProvider interface {
+	NoEnvoyInjectionWorkloads() []string
+}
+
 // WorkloadRef identifies a workload by Kind + Name.
 type WorkloadRef struct {
 	Kind string `json:"kind"` // "Deployment" | "StatefulSet"

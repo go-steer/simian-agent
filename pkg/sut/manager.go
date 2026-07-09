@@ -112,6 +112,14 @@ type DeployOptions struct {
 	// Empty means use the SUT-provided list. Merged with any per-workload
 	// simian.chaos/envoy-exclude-ports annotation inside the injector.
 	EnvoyExcludePorts []int
+	// NoEnvoyInjectionWorkloads is the SUT-wide list of workload names
+	// (Deployment names) that should be skipped entirely from Envoy
+	// injection. Additive with the SUT's declared list (via
+	// NoEnvoyInjectionWorkloadsProvider) — an operator-supplied name never
+	// drops SUT-declared defaults. Equivalent to setting the per-pod
+	// simian.chaos/no-envoy-injection="true" annotation on each named
+	// workload.
+	NoEnvoyInjectionWorkloads []string
 }
 
 // Deploy applies a SUT into the given namespace, waits for the declared
@@ -144,7 +152,15 @@ func (m *Manager) Deploy(ctx context.Context, opts DeployOptions) (*Baseline, er
 				excludes = p.EnvoyExcludePorts()
 			}
 		}
-		docs, err = envoy.Inject(docs, envoy.InjectOptions{Ports: ports, ExcludePorts: excludes})
+		noInject := append([]string{}, opts.NoEnvoyInjectionWorkloads...)
+		if p, ok := s.(NoEnvoyInjectionWorkloadsProvider); ok {
+			noInject = append(noInject, p.NoEnvoyInjectionWorkloads()...)
+		}
+		docs, err = envoy.Inject(docs, envoy.InjectOptions{
+			Ports:             ports,
+			ExcludePorts:      excludes,
+			NoInjectWorkloads: noInject,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("sut: envoy injection: %w", err)
 		}

@@ -71,19 +71,22 @@ func (o *onlineBoutique) BaselineConfig() sut.BaselineConfig {
 }
 
 // EnvoyFaultPorts implements sut.EnvoyFaultPortsProvider — the inbound
-// TCP ports each Online Boutique service listens on. The Envoy-fault
-// injection path installs iptables REDIRECT rules for these ports so the
-// sidecar can apply HTTP/gRPC fault filters to inter-service traffic.
+// TCP ports Online Boutique's HTTP/gRPC services listen on. The
+// Envoy-fault injection path installs iptables REDIRECT rules for
+// these ports so the sidecar can apply HTTP/gRPC fault filters to
+// inter-service traffic.
 //
-// Source: upstream kubernetes-manifests.yaml (release v0.10.2). Ports are
-// the union across all 12 services; iptables rules are namespace-wide and
-// only fire on packets whose dport matches a real listener.
+// Source: upstream kubernetes-manifests.yaml (release v0.10.2). Ports
+// are the union of HTTP/gRPC listeners across the injected services;
+// redis-cart (6379) is intentionally NOT listed — Redis is raw TCP,
+// which Envoy's HTTP Connection Manager cannot parse; redis-cart is
+// declared in NoEnvoyInjectionWorkloads and skipped from injection
+// entirely.
 func (o *onlineBoutique) EnvoyFaultPorts() []int {
 	return []int{
 		80,    // frontend HTTP
 		3550,  // productcatalogservice gRPC
 		5000,  // paymentservice gRPC, currencyservice gRPC, shippingservice gRPC
-		6379,  // redis-cart (raw TCP — Envoy can still intercept; HTTP filter no-ops)
 		7000,  // recommendationservice gRPC
 		7070,  // cartservice gRPC
 		7777,  // checkoutservice gRPC
@@ -91,6 +94,21 @@ func (o *onlineBoutique) EnvoyFaultPorts() []int {
 		9555,  // adservice gRPC
 		50051, // generic gRPC port used by some services
 	}
+}
+
+// NoEnvoyInjectionWorkloads implements
+// sut.NoEnvoyInjectionWorkloadsProvider — workloads that must not be
+// injected with the Envoy sidecar because injecting them either breaks
+// the workload or provides no benefit:
+//
+//   - loadgenerator: locust client that generates outbound traffic to
+//     the frontend. No server surface; nothing to fault-inject.
+//   - redis-cart: raw-TCP Redis protocol that Envoy's HTTP Connection
+//     Manager cannot parse. Injecting Envoy mangles the byte stream
+//     and cartservice can no longer talk to Redis. Use the
+//     network-policy engine for IP-layer chaos on Redis instead.
+func (o *onlineBoutique) NoEnvoyInjectionWorkloads() []string {
+	return []string{"loadgenerator", "redis-cart"}
 }
 
 // Register adds the Online Boutique SUT to the package-level registry.

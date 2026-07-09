@@ -248,6 +248,47 @@ func TestInjectHonorsPerWorkloadSkipAnnotation(t *testing.T) {
 	}
 }
 
+func TestInjectSkipsNoInjectWorkloads(t *testing.T) {
+	docs := []*unstructured.Unstructured{
+		makeDeployment("loadgenerator", nil),
+		makeDeployment("redis-cart", nil),
+		makeDeployment("cartservice", nil),
+	}
+	out, err := Inject(docs, InjectOptions{
+		Ports:             []int{80},
+		NoInjectWorkloads: []string{"loadgenerator", "redis-cart"},
+	})
+	if err != nil {
+		t.Fatalf("Inject: %v", err)
+	}
+	// cm + 3 deployments. loadgenerator + redis-cart are skipped
+	// (pod template unmodified), only cartservice gets the sidecar.
+	if len(out) != 4 {
+		t.Fatalf("expected 4 docs (cm + 3 deployments); got %d", len(out))
+	}
+	for _, name := range []string{"loadgenerator", "redis-cart"} {
+		d := findDeployment(out, name)
+		if d == nil {
+			t.Fatalf("%s Deployment missing from output", name)
+		}
+		tpl := decodeTemplate(t, d)
+		if hasContainer(tpl.Spec.Containers, SidecarContainerName) {
+			t.Errorf("%s was in NoInjectWorkloads; should not have Envoy sidecar", name)
+		}
+		if _, ok := tpl.Annotations[InjectedAnnotation]; ok {
+			t.Errorf("%s was in NoInjectWorkloads; should not carry the injected annotation", name)
+		}
+	}
+	cart := findDeployment(out, "cartservice")
+	if cart == nil {
+		t.Fatal("cartservice Deployment missing from output")
+	}
+	cartTpl := decodeTemplate(t, cart)
+	if !hasContainer(cartTpl.Spec.Containers, SidecarContainerName) {
+		t.Error("cartservice was not in NoInjectWorkloads; should have been injected")
+	}
+}
+
 func TestInjectSkipsNonDeploymentDocs(t *testing.T) {
 	docs := []*unstructured.Unstructured{
 		makeService("redis"),
