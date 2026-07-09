@@ -593,6 +593,12 @@ func TestBootstrapHasFaultFilter(t *testing.T) {
 	if !strings.Contains(bs, "http2_protocol_options") {
 		t.Error("bootstrap should enable HTTP/2 (gRPC support)")
 	}
+	if !strings.Contains(bs, "use_downstream_protocol_config") {
+		t.Error("bootstrap should configure upstream protocol via use_downstream_protocol_config so gRPC (HTTP/2) callers get HTTP/2 upstream instead of a silent downgrade to HTTP/1.1")
+	}
+	if !strings.Contains(bs, "envoy.extensions.upstreams.http.v3.HttpProtocolOptions") {
+		t.Error("bootstrap's ORIGINAL_DST cluster should carry typed_extension_protocol_options for HttpProtocolOptions")
+	}
 }
 
 func hasContainer(list []corev1.Container, name string) bool {
