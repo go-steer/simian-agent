@@ -309,6 +309,15 @@ func (e *envoyOptingEstablisher) Deploy(ctx context.Context, opts sut.DeployOpti
 	return e.mgr.Deploy(ctx, opts)
 }
 
+// EstablishBaselineFromTopology is a straight pass-through — the
+// WithEnvoyFaults preference is only meaningful when Simian applies a
+// SUT (Deploy path). Topology-derived baselines observe whatever
+// workloads already exist; the operator picked the injection posture
+// when they deployed those workloads.
+func (e *envoyOptingEstablisher) EstablishBaselineFromTopology(ctx context.Context, namespace string, cfg sut.BaselineConfig) (*sut.Baseline, error) {
+	return e.mgr.EstablishBaselineFromTopology(ctx, namespace, cfg)
+}
+
 func buildKubeConfig(path string) (*rest.Config, error) {
 	if path == "" {
 		if cfg, err := rest.InClusterConfig(); err == nil {

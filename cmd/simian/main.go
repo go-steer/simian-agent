@@ -42,6 +42,7 @@ func main() {
 	root.AddCommand(newArenaCmd())
 	root.AddCommand(newSutCmd())
 	root.AddCommand(newPlanCmd())
+	root.AddCommand(newBaselineCmd())
 	root.AddCommand(newProvisionCmd())
 	root.AddCommand(newEvaluateCmd())
 
