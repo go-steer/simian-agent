@@ -105,6 +105,17 @@ type InjectOptions struct {
 	// Envoy intercept), to avoid the extra sidecar overhead. Default
 	// false: probe rewriting is on whenever Envoy injection is on.
 	DisableProbeRewrite bool
+
+	// NoInjectWorkloads is the set of Deployment names to skip entirely
+	// from injection. Equivalent to the pod-template
+	// SkipInjectionAnnotation, but expressed at the injector-invocation
+	// level so a SUT (or CLI operator) can declare "these workloads are
+	// not Envoy-eligible" without editing pod-template yaml.
+	//
+	// Typical entries: client-only workloads with no server surface to
+	// fault, and raw-TCP services (e.g. Redis) that Envoy's HTTP
+	// Connection Manager cannot parse.
+	NoInjectWorkloads []string
 }
 
 // Inject mutates the docs slice: for each Deployment that does not carry
@@ -135,10 +146,18 @@ func Inject(docs []*unstructured.Unstructured, opts InjectOptions) ([]*unstructu
 	// The SUT-wide exclude list; each Deployment may add to it via
 	// the ExcludePortsAnnotation, merged inside injectDeployment.
 	globalExcludes := uniqueSortedPorts(opts.ExcludePorts)
+	// Named workloads to skip entirely — set for O(1) lookup in the loop.
+	noInject := make(map[string]struct{}, len(opts.NoInjectWorkloads))
+	for _, name := range opts.NoInjectWorkloads {
+		noInject[name] = struct{}{}
+	}
 
 	injectedAny := false
 	for _, doc := range docs {
 		if doc.GetKind() != "Deployment" {
+			continue
+		}
+		if _, skip := noInject[doc.GetName()]; skip {
 			continue
 		}
 		mutated, err := injectDeployment(doc, ports, globalExcludes, opts)
