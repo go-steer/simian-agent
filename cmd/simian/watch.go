@@ -100,10 +100,10 @@ Examples:
 // pieces of state we render — plus the wall-clock time we captured it,
 // used for the deadline countdown math.
 type watchSnapshot struct {
-	Namespace string
+	Namespace  string
 	CapturedAt time.Time
-	Active    []activeFault
-	Recent    []recentFault
+	Active     []activeFault
+	Recent     []recentFault
 }
 
 // activeFault mirrors simian.ActiveFault but is redeclared locally so
