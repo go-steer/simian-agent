@@ -43,6 +43,7 @@ func main() {
 	root.AddCommand(newSutCmd())
 	root.AddCommand(newPlanCmd())
 	root.AddCommand(newBaselineCmd())
+	root.AddCommand(newWatchCmd())
 	root.AddCommand(newProvisionCmd())
 	root.AddCommand(newEvaluateCmd())
 
