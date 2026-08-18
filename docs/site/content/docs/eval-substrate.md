@@ -578,7 +578,7 @@ within a group is independent of its siblings.
 | #70 | Adversarial curriculum — generate against measured blind spots | L | #69 |
 | **Phase 6 — the demo** |
 | #71 | Multi-cluster, driven by `kube-agent-demo-e2e`'s two-cluster fleet | L | #63 |
-| #72 | The scorecard dashboard — scenarios × subjects × detected/diagnosed/fixed | L | #64 |
+| #72 | Scorecard view in the web UI (#45) — archive mode over a run artifact | L | #64, #45 |
 | #73 | Decide Litmus: implement or remove the surface (§11.4) | S | — |
 
 **Critical path:** #54 → #56 → #60 → #62 → #63 → #64. Everything in Phase 0 is off
@@ -606,6 +606,19 @@ That table is the deliverable. Everything in this document exists to make it
 trustworthy: §5 so a row is not silently measuring nothing, §6.1 so the
 columns can be joined, §6.7 so the first column is a floor rather than another
 opinion.
+
+It renders in the browser as a view of the **existing** web UI (#45), not a
+second application — see [`web-ui-design.md`]({{< relref "web-ui-design.md" >}}),
+"One site, two data sources". That decision constrains #63: **the
+`simian-eval --out` run artifact must be self-describing JSON that renders with
+no backend at all.** Which is a gift rather than a cost — the same property
+makes a run attachable to a CI job, diffable between two commits, and openable
+by someone who has never installed Simian.
+
+Two rendering rules matter enough to state here as well as there: a scenario
+whose efficacy probe failed renders as **not measured**, never as a zero; and
+the deterministic-detector column is a **floor**, so a subject scoring below it
+is flagged as failing to use its tools rather than failing to diagnose.
 
 ## 9. Phase 0 in detail
 
