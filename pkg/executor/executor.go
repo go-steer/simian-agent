@@ -16,6 +16,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -104,17 +105,28 @@ func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, e
 		e.rejected(ctx, m, err)
 		return "", err
 	}
-	if err := e.validateSafety(ctx, &m); err != nil {
+	narrowed, err := e.validateSafety(ctx, &m)
+	if err != nil {
 		e.rejected(ctx, m, err)
 		return "", err
 	}
 
-	e.auditor.Emit(ctx, simian.AuditEvent{
+	validated := simian.AuditEvent{
 		Event:    audit.EventExecutorValidated,
 		FaultUID: m.UID,
 		PlanID:   m.PlanID,
 		Mode:     m.Source,
-	})
+	}
+	if len(narrowed) > 0 {
+		// The spec left a selector unscoped and we pinned it to the target
+		// namespaces. Record it: the manifest that reaches the driver is no
+		// longer byte-identical to the one that was submitted.
+		validated.Payload = map[string]any{
+			"selectors_narrowed_to": targetNamespaces(m),
+			"selector_paths":        narrowed,
+		}
+	}
+	e.auditor.Emit(ctx, validated)
 
 	driver, ok := e.drivers[m.Engine]
 	if !ok {
@@ -227,55 +239,67 @@ func (e *Executor) validateSchema(m simian.FaultManifest) error {
 	return nil
 }
 
-func (e *Executor) validateSafety(ctx context.Context, m *simian.FaultManifest) error {
+// validateSafety applies every safety gate to the manifest. It may mutate m:
+// the blast-radius tier is classified here, and an unscoped spec selector is
+// narrowed to the target namespaces. It returns the dotted spec paths that
+// were narrowed, if any.
+func (e *Executor) validateSafety(ctx context.Context, m *simian.FaultManifest) ([]string, error) {
 	// Duration ceiling.
 	if m.Duration <= 0 {
-		return simian.NewExecutorError(simian.StageSafety, simian.ReasonDurationOverCeiling,
+		return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonDurationOverCeiling,
 			"duration must be positive", nil)
 	}
 	if e.cfg.DurationCeiling > 0 && m.Duration > e.cfg.DurationCeiling {
-		return simian.NewExecutorError(simian.StageSafety, simian.ReasonDurationOverCeiling,
+		return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonDurationOverCeiling,
 			fmt.Sprintf("duration %s exceeds ceiling %s", m.Duration, e.cfg.DurationCeiling), nil)
 	}
 
 	// Namespace eligibility.
 	for _, t := range m.Targets {
 		if t.Namespace == "" {
-			return simian.NewExecutorError(simian.StageSafety, simian.ReasonNamespaceNotEligible,
+			return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonNamespaceNotEligible,
 				"target namespace is empty", nil)
 		}
 		ok, err := e.elig.IsEligible(ctx, t.Namespace)
 		if err != nil {
-			return simian.NewExecutorError(simian.StageSafety, simian.ReasonNamespaceNotEligible,
+			return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonNamespaceNotEligible,
 				"eligibility lookup failed", err)
 		}
 		if !ok {
-			return simian.NewExecutorError(simian.StageSafety, simian.ReasonNamespaceNotEligible,
+			return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonNamespaceNotEligible,
 				fmt.Sprintf("namespace %q is not eligible for chaos", t.Namespace), nil)
 		}
 		excluded, err := e.elig.ExcludedWorkloads(ctx, t.Namespace)
 		if err != nil {
-			return simian.NewExecutorError(simian.StageSafety, simian.ReasonWorkloadExcluded,
+			return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonWorkloadExcluded,
 				"exclusion lookup failed", err)
 		}
 		if t.Name != "" && slices.Contains(excluded, t.Name) {
-			return simian.NewExecutorError(simian.StageSafety, simian.ReasonWorkloadExcluded,
+			return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonWorkloadExcluded,
 				fmt.Sprintf("workload %q in namespace %q is excluded", t.Name, t.Namespace), nil)
 		}
+	}
+
+	// Spec-level namespace scope. Targets alone do not bound a Chaos Mesh
+	// fault — the PodSelector inside the spec does. Must run after the target
+	// loop above, which is what makes the narrowing target trustworthy.
+	narrowed, err := e.validateSpecNamespaceScope(ctx, m)
+	if err != nil {
+		return nil, err
 	}
 
 	// Blast-radius classification + tier policy.
 	tier := catalog.ReclassifyForSpec(*m, e.cfg.AllCIDRs(), e.cfg.ClusterDomains)
 	m.BlastRadiusTier = tier
 	if !e.cfg.PermittedTiers[tier] {
-		return simian.NewExecutorError(simian.StageSafety, simian.ReasonTierNotPermitted,
+		return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonTierNotPermitted,
 			fmt.Sprintf("blast tier %q is not permitted by current policy", tier), nil)
 	}
 
 	// Concurrency budget.
 	if e.cfg.MaxConcurrentFaults > 0 {
 		if active := e.registry.List(""); len(active) >= e.cfg.MaxConcurrentFaults {
-			return simian.NewExecutorError(simian.StageSafety, simian.ReasonBudgetExceeded,
+			return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonBudgetExceeded,
 				fmt.Sprintf("max concurrent faults reached (%d)", e.cfg.MaxConcurrentFaults), nil)
 		}
 	}
@@ -287,12 +311,12 @@ func (e *Executor) validateSafety(ctx context.Context, m *simian.FaultManifest) 
 		last, ok := e.lastApplyByNS[ns]
 		e.mu.Unlock()
 		if ok && time.Since(last) < e.cfg.MinCooldown {
-			return simian.NewExecutorError(simian.StageSafety, simian.ReasonBudgetExceeded,
+			return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonBudgetExceeded,
 				fmt.Sprintf("namespace %q is in cooldown", ns), nil)
 		}
 	}
 
-	return nil
+	return narrowed, nil
 }
 
 func (e *Executor) recordApply(m simian.FaultManifest) {
@@ -306,7 +330,8 @@ func (e *Executor) recordApply(m simian.FaultManifest) {
 
 func (e *Executor) rejected(ctx context.Context, m simian.FaultManifest, err error) {
 	reason := ""
-	if ee, ok := err.(*simian.ExecutorError); ok {
+	var ee *simian.ExecutorError
+	if errors.As(err, &ee) {
 		reason = string(ee.Reason)
 	}
 	e.auditor.Emit(ctx, simian.AuditEvent{

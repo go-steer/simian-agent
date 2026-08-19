@@ -182,6 +182,8 @@ type FaultManifest struct {
   | 2. Safety validation                              |
   |    - Targets in eligible namespace? (annotation)  |
   |    - Targets not in exclude-workloads list?       |
+  |    - Spec selectors name only eligible NSes?      |
+  |      (unscoped selectors narrowed to the target)  |
   |    - chaos SA RBAC permits the GVK in the NS?     |
   |    - BlastRadiusTier permitted by config?         |
   |    - Per-spec re-classification (DNSChaos /       |
@@ -220,6 +222,10 @@ type FaultManifest struct {
 ```
 
 Failure at any stage emits an audit record with the rejection reason. Stages 1–2 produce no side effects; stages 3–6 are durably logged.
+
+`Targets` alone does not bound a Chaos Mesh fault. The Chaos Mesh driver hands `spec` to the API server verbatim, and a `PodSelector` carries its own namespace scope — so a manifest can name an eligible namespace in `targets` and still select pods in `kube-system` via `spec.selector.namespaces`. Stage 2 therefore walks the spec for every selector-shaped node, wherever it is nested (`spec.selector`, `spec.target.selector`, `spec.containerSelector`), and applies two rules: a selector that names namespaces must name only eligible ones, and a selector that names none is narrowed in place to the manifest's target namespaces so scope never falls back to the controller's default. Narrowing is recorded on the `executor.validated` audit event, because the manifest that reaches the driver is then no longer the one that was submitted.
+
+The walk is deliberately generic rather than keyed on resource kind — per R-FAULT-01 there are no per-fault-type Go wrappers, so nothing in the executor knows which kinds have a second selector. Treating an unfamiliar selector-shaped node as a selector fails closed: the worst case is narrowing to the namespace the fault was already aimed at. Engines whose driver builds its own API objects from `Targets` and never passes `spec` through as a selector (NetworkPolicy, Envoy fault) are exempt; the exemption is an explicit allowlist, so a new driver is scope-checked by default.
 
 ### 3.3 The Go interface
 
