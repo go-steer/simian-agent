@@ -78,11 +78,14 @@ jobs:
       - id: pages
         uses: actions/configure-pages@v5
 
+      # No `hugo mod get -u` here. Hugo resolves and downloads modules from
+      # docs/site/go.mod as part of the build, and `-u` would upgrade past
+      # the pin on every run — which is exactly how docsy v0.16.0 broke the
+      # site (it drops the blocks/cover shortcode used by content/_index.md).
+      # Theme upgrades are a deliberate, reviewable change to go.mod.
       - name: Build
         working-directory: docs/site
-        run: |
-          hugo mod get -u
-          hugo --minify --baseURL "${{ steps.pages.outputs.base_url }}/"
+        run: hugo --minify --baseURL "${{ steps.pages.outputs.base_url }}/"
         env:
           HUGO_ENVIRONMENT: production
 
