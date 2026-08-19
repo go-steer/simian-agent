@@ -501,12 +501,15 @@ graph tools are the first ones with real answers.
 
 Phases 0–4 are the rig. Phase 5 is the product. Phase 6 is the demo.
 
-### 8.1 Prerequisite: Simian has no local cluster story
+### 8.1 Prerequisite: Simian had no local cluster story
 
-Before any of this: `grep -rl 'kind create cluster'` across this repo returns
-**nothing**. There is no kind config, no cluster script, no e2e workflow — CI
-is `test`, `lint`, `tidy`, `govulncheck` and nothing else. Every verification
-claim in the roadmap was made by hand against a live GKE cluster.
+*Resolved by #53. The diagnosis is kept because the decision it forced is
+recorded below.*
+
+At plan time: `grep -rl 'kind create cluster'` across this repo returned
+**nothing**. There was no kind config, no cluster script, no e2e workflow — CI
+was `test`, `lint`, `tidy`, `govulncheck` and nothing else. Every verification
+claim in the roadmap had been made by hand against a live GKE cluster.
 
 An eval rig cannot be built on a cluster someone has to remember to create.
 This is the true first task, and it is copy-work rather than design work:
@@ -522,6 +525,41 @@ single environment runs all of Simian's engines.** The kind config must
 therefore either select a CNI that enforces NetworkPolicy (Calico) or the
 dataplane pack must declare which environments it is valid in — and §5's
 efficacy probes are what make that failure loud instead of silent.
+
+#### Decision: kind + Calico is the reference environment *(#53, shipped)*
+
+Calico, not kindnet. kindnet *accepts* `NetworkPolicy` objects and does not
+enforce them, and Simian's `network-policy` engine works by creating exactly
+those objects. On kindnet a partition fault applies cleanly, reports success,
+and blocks nothing.
+
+For a chaos tool that is a bug. For an eval rig it is disqualifying — the
+subject under test gets scored on an incident that never happened, and there is
+no error anywhere to notice, just a fault that did not land. That is the
+precise failure mode §5 exists to prevent, so the substrate must not be the
+thing introducing it.
+
+| engine | kind + kindnet | kind + Calico | GKE Dataplane V2 |
+| --- | --- | --- | --- |
+| `chaos-mesh` | yes | yes | `NetworkChaos`: no |
+| `network-policy` | applies, inert | yes | yes |
+| `envoy-fault` | yes | yes | yes |
+
+kind + Calico is the only environment that runs all three implemented engines,
+so it is the reference. GKE Dataplane V2 stays a second target where
+`chaos-mesh` `NetworkChaos` scenarios are invalid; declaring that per-scenario
+lands with the dataplane pack (#67).
+
+The decision is enforced rather than documented: `TestCNIEnforcesNetworkPolicy`
+in `test/e2e` proves connectivity, applies a deny-all, and fails the build if
+traffic still flows. A comment in a YAML file would not have survived the first
+CNI bump.
+
+What shipped with it: `internal/kindcluster` (create/delete/kubeconfig,
+Calico, Chaos Mesh, verification), `make cluster` / `make cluster-down` /
+`make e2e`, and an `e2e-kind` workflow on push to main. Credentials land in
+`.kube/e2e.yaml` inside the work tree and never in `~/.kube/config`, so the
+file naming the throwaway cluster physically cannot name a real one.
 
 ### 8.2 Vertical slice first
 
@@ -554,7 +592,7 @@ within a group is independent of its siblings.
 | #51 | `activeFaultCount` counts NetworkPolicies; give the netpol driver a TTL | M | — |
 | #52 | Housekeeping: `errors.As`, `topology` `stopCh` leak, `tierOrdinal` unknown-tier default, TOCTOU on concurrency/cooldown, drop `coverage.out` and `resume`, fix `examples/network-latency-manifest.json` | S | — |
 | **Phase 1 — ground under our feet** |
-| #53 | `internal/kindcluster` equivalent + `make cluster` + an e2e CI job that does nothing yet | M | — |
+| #53 | ✅ `internal/kindcluster` + `make cluster` + an `e2e-kind` job that asserts the rig (§8.1) | M | — |
 | #54 | `ProbeSpec` `Settle` mode, `k8s` probe type, executor gate, `fault.efficacy` audit event | M | — |
 | #55 | Probes on the existing engines' catalog entries — DPv2 `NetworkChaos` now fails loudly | M | #54 |
 | **Phase 2 — the `kube-state` engine** |

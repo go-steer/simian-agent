@@ -37,6 +37,11 @@ go.work.sum
 bin/
 dist/
 
+# Local e2e cluster credentials (`make cluster` writes .kube/e2e.yaml here
+# rather than ~/.kube/config so the file naming the throwaway cluster can
+# never also name a real one — see internal/kindcluster).
+.kube/
+
 # Per-developer Claude Code workspace state
 .claude/
 
