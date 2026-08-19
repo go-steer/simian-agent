@@ -139,10 +139,20 @@ func newServeCmd() *cobra.Command {
 				Drivers:  drivers,
 				Interval: reapInterval,
 				Auditor:  auditor,
+				// Where the orphan scan looks for faults this process did
+				// not apply. Bounded to the declared arenas — Simian must
+				// never delete objects in a namespace nobody opted in.
+				Namespaces: eligibleNS,
 				OnExpire: func(af simian.ActiveFault, reason string) {
 					history.UpdateCleared(af.FaultUID, time.Now().UTC(), reason)
 				},
 			}
+			// Sweep before the first tick. If this process is the restart of
+			// one that was killed holding a NetworkPolicy partition, that
+			// partition is still in the cluster and no lease remembers it;
+			// waiting a full reap interval to notice would extend an outage
+			// that the crash already made unbounded.
+			reaper.SweepOrphans(ctx)
 			go reaper.Run(ctx)
 
 			disco2 := topology.New(clientset, topologyResync)

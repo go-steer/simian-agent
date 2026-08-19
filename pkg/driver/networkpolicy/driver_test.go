@@ -16,13 +16,20 @@ package networkpolicy
 
 import (
 	"context"
+	"errors"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/go-steer/simian-agent/pkg/simian"
 )
@@ -208,6 +215,162 @@ func TestDecodeEngineUIDInvalid(t *testing.T) {
 	if _, _, err := decodeEngineUID("nopens"); err == nil {
 		t.Error("decodeEngineUID should reject string without /")
 	}
+}
+
+// The expiry stamp is the only record of a partition's deadline that survives
+// the process. If Apply stops writing it, nothing fails until a Simian is
+// killed mid-fault — at which point the partition is permanent.
+func TestApplyStampsTheDeadlineOnThePolicy(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	applied := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	d := New(cs, "")
+	d.Now = func() time.Time { return applied }
+
+	m := sampleManifest() // Duration: 30s
+	if _, err := d.Apply(context.Background(), m); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	np := onlyPolicy(t, cs, "boutique-m3")
+	got, ok := np.Annotations[ExpiryAnnotation]
+	if !ok {
+		t.Fatalf("policy has no %s annotation; annotations=%v", ExpiryAnnotation, np.Annotations)
+	}
+	if want := "2026-03-01T12:00:30Z"; got != want {
+		t.Errorf("%s = %q, want %q", ExpiryAnnotation, got, want)
+	}
+	if np.Labels[ManagedLabel] != "true" {
+		t.Errorf("policy must carry %s=true or the reaper cannot find it; labels=%v", ManagedLabel, np.Labels)
+	}
+}
+
+// A manifest with no duration must not be stamped. Stamping now+0 would make
+// the very next sweep delete a fault that just started.
+func TestApplyDoesNotStampAnAlreadyPassedDeadline(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	d := New(cs, "")
+
+	m := sampleManifest()
+	m.Duration = 0
+	if _, err := d.Apply(context.Background(), m); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if v, ok := onlyPolicy(t, cs, "boutique-m3").Annotations[ExpiryAnnotation]; ok {
+		t.Errorf("durationless fault was stamped %q; the next sweep would clear it immediately", v)
+	}
+}
+
+func TestReapExpiredClearsOnlyWhatHasActuallyExpired(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	policy := func(ns, name string, ann map[string]string, labels map[string]string) *networkingv1.NetworkPolicy {
+		return &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: ns, Annotations: ann, Labels: labels,
+		}}
+	}
+	ours := map[string]string{ManagedLabel: "true"}
+	at := func(t time.Time) map[string]string {
+		return map[string]string{ExpiryAnnotation: t.Format(time.RFC3339)}
+	}
+
+	cs := fake.NewSimpleClientset(
+		policy("arena-a", "expired", at(now.Add(-time.Minute)), ours),
+		policy("arena-a", "still-running", at(now.Add(time.Minute)), ours),
+		// Exactly at the deadline is not yet past it.
+		policy("arena-a", "on-the-boundary", at(now), ours),
+		// Ours but unstamped: an older Simian, or something wearing our
+		// label. We cannot prove it expired, so we leave it.
+		policy("arena-a", "unstamped", nil, ours),
+		policy("arena-a", "garbled", map[string]string{ExpiryAnnotation: "yesterday"}, ours),
+		// Expired but not ours — a real partition an operator applied by
+		// hand. Deleting it would be Simian breaking production.
+		policy("arena-a", "not-ours", at(now.Add(-time.Hour)), nil),
+		// Right label, right age, wrong namespace: not an arena we were
+		// told about.
+		policy("not-an-arena", "off-limits", at(now.Add(-time.Hour)), ours),
+		policy("arena-b", "expired-elsewhere", at(now.Add(-time.Hour)), ours),
+	)
+
+	d := New(cs, "")
+	cleared, err := d.ReapExpired(context.Background(), []string{"arena-a", "arena-b"}, now)
+	if err != nil {
+		t.Fatalf("ReapExpired: %v", err)
+	}
+
+	sort.Strings(cleared)
+	want := []string{"arena-a/expired", "arena-b/expired-elsewhere"}
+	if !reflect.DeepEqual(cleared, want) {
+		t.Errorf("cleared = %v, want %v", cleared, want)
+	}
+	survivors := map[string][]string{
+		"arena-a":      {"garbled", "not-ours", "on-the-boundary", "still-running", "unstamped"},
+		"arena-b":      nil,
+		"not-an-arena": {"off-limits"},
+	}
+	for ns, want := range survivors {
+		list, err := cs.NetworkingV1().NetworkPolicies(ns).List(context.Background(), metav1.ListOptions{})
+		if err != nil {
+			t.Fatalf("list %s: %v", ns, err)
+		}
+		var got []string
+		for _, np := range list.Items {
+			got = append(got, np.Name)
+		}
+		sort.Strings(got)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("namespace %s left with %v, want %v", ns, got, want)
+		}
+	}
+}
+
+// A driver that gives up on the first bad namespace would leave real leaks in
+// the healthy ones. RBAC is per-namespace, so one Forbidden is entirely
+// plausible in a partly-configured install.
+func TestReapExpiredKeepsGoingPastAFailedNamespace(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	cs := fake.NewSimpleClientset(&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{
+		Name:        "expired",
+		Namespace:   "arena-b",
+		Labels:      map[string]string{ManagedLabel: "true"},
+		Annotations: map[string]string{ExpiryAnnotation: now.Add(-time.Hour).Format(time.RFC3339)},
+	}})
+	cs.PrependReactor("list", "networkpolicies", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.GetNamespace() == "arena-a" {
+			return true, nil, apierrors.NewForbidden(
+				schema.GroupResource{Group: "networking.k8s.io", Resource: "networkpolicies"}, "", errors.New("nope"))
+		}
+		return false, nil, nil
+	})
+
+	d := New(cs, "")
+	cleared, err := d.ReapExpired(context.Background(), []string{"arena-a", "arena-b"}, now)
+	if err == nil {
+		t.Fatal("expected the forbidden namespace to be reported")
+	}
+	if !strings.Contains(err.Error(), "arena-a") {
+		t.Errorf("error should name the namespace that failed: %v", err)
+	}
+	if !reflect.DeepEqual(cleared, []string{"arena-b/expired"}) {
+		t.Errorf("cleared = %v, want the healthy namespace still swept", cleared)
+	}
+}
+
+// The reaper wiring in lease.Reaper finds the driver by type assertion. If the
+// method signature drifts, that assertion silently stops matching and the
+// orphan scan becomes a no-op with nothing failing to say so.
+func TestDriverSatisfiesOrphanReaper(t *testing.T) {
+	var _ simian.OrphanReaper = New(fake.NewSimpleClientset(), "")
+}
+
+func onlyPolicy(t *testing.T, cs *fake.Clientset, ns string) networkingv1.NetworkPolicy {
+	t.Helper()
+	list, err := cs.NetworkingV1().NetworkPolicies(ns).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("list policies: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("expected 1 NetworkPolicy in %s, got %d", ns, len(list.Items))
+	}
+	return list.Items[0]
 }
 
 func containsType(types []networkingv1.PolicyType, want networkingv1.PolicyType) bool {

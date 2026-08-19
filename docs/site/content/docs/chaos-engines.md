@@ -75,6 +75,47 @@ simian chaos --list-catalog                # catalog the LLM sees
 simian chaos --clear f-<UID>               # clear before lease expiry
 ```
 
+## How a fault recovers if the controller dies
+
+Chaos Mesh resources carry a `spec.duration` that `chaos-controller-manager`
+honours server-side, so a `chaos-mesh` fault recovers on its own even if Simian
+is killed mid-fault.
+
+A `network-policy` fault has no such backstop — a NetworkPolicy stays until
+something deletes it, and the in-memory lease that was going to delete it dies
+with the process. So the driver writes the deadline onto the policy itself:
+
+```
+metadata:
+  labels:
+    simian.chaos/managed: "true"
+    simian.chaos/fault-uid: f-01M0E6...
+  annotations:
+    simian.chaos/expires-at: "2026-08-19T23:42:53Z"   # RFC3339, UTC
+```
+
+On startup and on every reap tick, the controller sweeps the eligible
+namespaces for `simian.chaos/managed=true` policies whose `expires-at` has
+passed and deletes them, emitting `lease.expired` with
+`reason: orphan-reaped`. A restarted controller therefore clears partitions the
+previous one leaked, without needing to have known about them.
+
+Two deliberate non-behaviours:
+
+- A policy with **no** `expires-at`, or an unparseable one, is never deleted.
+  Simian will not remove a partition it cannot prove has expired — it may be an
+  operator's own. It still shows up in `simian arena describe`.
+- The scan only looks in namespaces that are declared arenas. An empty arena
+  list means it scans nothing, not everything.
+
+`simian arena destroy` refuses while any Simian-managed fault is live, and names
+each one so you know what to clear:
+
+```
+error: arena: 1 simian-managed chaos resource(s) still active in "boutique-1"
+       (NetworkPolicy/simian-np-01m0e6...); clear them first or pass --force
+```
+
 ## Background reading
 
 - [DPv2-compatible chaos engines]({{< relref "dpv2-chaos-engines.md" >}}) — full design rationale for `network-policy` and `envoy-fault`.

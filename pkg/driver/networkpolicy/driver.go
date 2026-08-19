@@ -27,8 +27,10 @@ package networkpolicy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -46,10 +48,36 @@ const Kind = "NetworkPolicy"
 // APIVersion is the standard K8s networking API version.
 const APIVersion = "networking.k8s.io/v1"
 
+// ManagedLabel marks a NetworkPolicy as Simian's. Mirrors
+// arena.SimianManagedFaultLabel, duplicated rather than imported to keep the
+// driver from depending on the arena package.
+const ManagedLabel = "simian.chaos/managed"
+
+// FaultUIDLabel ties the policy back to the fault that created it.
+const FaultUIDLabel = "simian.chaos/fault-uid"
+
+// ExpiryAnnotation carries the fault's deadline as an RFC3339 timestamp.
+//
+// This is the durable half of the lease. Every Chaos Mesh resource carries a
+// spec.duration that the chaos-controller-manager honours server-side, so those
+// faults recover on their own even if Simian is killed. A NetworkPolicy has no
+// such field: without something written into the cluster, a partition applied
+// by a process that then dies is permanent, and the in-memory lease registry
+// that was supposed to clear it died with the process.
+//
+// Recording the deadline on the object itself means the cluster holds enough
+// state for any later Simian — a restart, or a different replica — to find the
+// orphan and reap it. See ReapExpired.
+const ExpiryAnnotation = "simian.chaos/expires-at"
+
 // Driver implements simian.ChaosDriver for NetworkPolicy-based partitions.
 type Driver struct {
 	clientset  kubernetes.Interface
 	namePrefix string
+
+	// Now is the clock used to stamp expiries. Nil means time.Now; tests
+	// override it to make the stamp assertable.
+	Now func() time.Time
 }
 
 // New creates a Driver. namePrefix is the GenerateName prefix; defaults to
@@ -59,6 +87,13 @@ func New(clientset kubernetes.Interface, namePrefix string) *Driver {
 		namePrefix = "simian-np-"
 	}
 	return &Driver{clientset: clientset, namePrefix: namePrefix}
+}
+
+func (d *Driver) now() time.Time {
+	if d.Now != nil {
+		return d.Now()
+	}
+	return time.Now()
 }
 
 // Engine implements ChaosDriver.
@@ -112,9 +147,10 @@ func (d *Driver) Apply(ctx context.Context, m simian.FaultManifest) (string, err
 			Name:      name,
 			Namespace: ns,
 			Labels: map[string]string{
-				"simian.chaos/managed":   "true",
-				"simian.chaos/fault-uid": m.UID,
+				ManagedLabel:  "true",
+				FaultUIDLabel: m.UID,
 			},
+			Annotations: expiryAnnotation(d.now(), m.Duration),
 		},
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{MatchLabels: labels},
@@ -145,6 +181,83 @@ func (d *Driver) Clear(ctx context.Context, engineUIDStr string) error {
 		return fmt.Errorf("network-policy clear %s/%s: %w", ns, name, err)
 	}
 	return nil
+}
+
+// ReapExpired deletes every Simian-managed NetworkPolicy in the given
+// namespaces whose expiry has passed, and returns the engineUIDs it cleared.
+//
+// This is the recovery path for a partition whose lease died with the process
+// that held it. lease.Reaper clears faults it knows about; a policy created by
+// a previous Simian is not in the registry of the current one, so nothing in
+// memory will ever release it. Reading the deadline back off the object closes
+// that gap: whichever Simian is running next sweeps up what the last one left.
+//
+// Policies with no expiry annotation are left alone. That is deliberate — an
+// unstamped policy was either written by a Simian older than this annotation
+// or by something else entirely wearing our label, and deleting a partition we
+// cannot prove is expired is worse than leaving it for an operator to see. It
+// still shows up in `simian arena describe`.
+//
+// Errors on individual namespaces are collected rather than returned early: a
+// missing or forbidden namespace must not stop the other namespaces from being
+// swept. Whatever was cleared is returned alongside the error.
+func (d *Driver) ReapExpired(ctx context.Context, namespaces []string, now time.Time) ([]string, error) {
+	var (
+		cleared []string
+		errs    []error
+	)
+	for _, ns := range namespaces {
+		list, err := d.clientset.NetworkingV1().NetworkPolicies(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: ManagedLabel + "=true",
+		})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			errs = append(errs, fmt.Errorf("network-policy reap: list in %s: %w", ns, err))
+			continue
+		}
+		for i := range list.Items {
+			np := &list.Items[i]
+			expiry, ok := parseExpiry(np.Annotations)
+			if !ok || !expiry.Before(now) {
+				continue
+			}
+			err := d.clientset.NetworkingV1().NetworkPolicies(ns).Delete(ctx, np.Name, metav1.DeleteOptions{})
+			if err != nil && !apierrors.IsNotFound(err) {
+				errs = append(errs, fmt.Errorf("network-policy reap: delete %s/%s: %w", ns, np.Name, err))
+				continue
+			}
+			cleared = append(cleared, engineUID(ns, np.Name))
+		}
+	}
+	return cleared, errors.Join(errs...)
+}
+
+// expiryAnnotation builds the annotation map for a fault of the given
+// duration. A non-positive duration means the caller did not set one; rather
+// than stamping a deadline that has already passed (which would make the next
+// sweep delete a live fault), we stamp nothing and leave the policy to the
+// in-memory lease.
+func expiryAnnotation(now time.Time, d time.Duration) map[string]string {
+	if d <= 0 {
+		return nil
+	}
+	return map[string]string{ExpiryAnnotation: now.Add(d).UTC().Format(time.RFC3339)}
+}
+
+// parseExpiry reads the deadline back. An unparseable value is treated as
+// absent — same reasoning as a missing one: never delete on a guess.
+func parseExpiry(ann map[string]string) (time.Time, bool) {
+	raw, ok := ann[ExpiryAnnotation]
+	if !ok || raw == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // Catalog implements ChaosDriver. Always returns a single entry; the

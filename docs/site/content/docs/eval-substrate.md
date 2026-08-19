@@ -588,8 +588,8 @@ within a group is independent of its siblings.
 | **Phase 0 — fences** *(all parallel, all independently mergeable)* |
 | #48 | Validate `spec.selector.namespaces` against arena eligibility | M | — |
 | #49 | Wire `executor.permittedTiers` from chart → flag → executor | S | — |
-| #50 | Add `networking.k8s.io` create/delete to the per-arena Role (manifests + chart) | S | — |
-| #51 | `activeFaultCount` counts NetworkPolicies; give the netpol driver a TTL | M | — |
+| #50 | ✅ `networking.k8s.io` create/delete in the per-arena Role, all three sites, held together by a parity test | S | — |
+| #51 | ✅ `activeFaultCount` counts NetworkPolicies and names them; netpol faults carry a cluster-side expiry a restarted controller reaps | M | — |
 | #52 | Housekeeping: `errors.As`, `topology` `stopCh` leak, `tierOrdinal` unknown-tier default, TOCTOU on concurrency/cooldown, drop `coverage.out` and `resume`, fix `examples/network-latency-manifest.json` | S | — |
 | **Phase 1 — ground under our feet** |
 | #53 | ✅ `internal/kindcluster` + `make cluster` + an `e2e-kind` job that asserts the rig (§8.1) | M | — |

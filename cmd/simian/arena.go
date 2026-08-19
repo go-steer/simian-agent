@@ -212,6 +212,9 @@ func printArenaState(st arena.State) {
 	}
 	if st.SimianFaultCount > 0 {
 		fmt.Printf("active-faults:   %d\n", st.SimianFaultCount)
+		for _, n := range st.SimianFaultNames {
+			fmt.Printf("  - %s\n", n)
+		}
 	}
 	if len(st.Annotations) > 0 {
 		keys := make([]string, 0, len(st.Annotations))

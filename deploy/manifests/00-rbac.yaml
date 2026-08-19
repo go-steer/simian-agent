@@ -71,6 +71,14 @@ rules:
   - apiGroups: ["litmuschaos.io"]
     resources: ["chaosengines", "chaosresults", "chaosschedules"]
     verbs: ["create", "get", "list", "watch", "patch", "delete"]
+  # The network-policy engine creates these to cause partitions. It is the
+  # engine recommended on GKE Dataplane V2, where Chaos Mesh's NetworkChaos is
+  # silently bypassed — so omitting it disabled chaos precisely where it is the
+  # only option. Keep in sync with roleRules() in pkg/arena/arena.go; a test
+  # asserts the two match.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create", "get", "list", "watch", "patch", "delete"]
   - apiGroups: [""]
     resources: ["pods", "pods/log", "events", "configmaps", "services"]
     verbs: ["get", "list", "watch"]

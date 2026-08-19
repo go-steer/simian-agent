@@ -151,6 +151,12 @@ type Reaper struct {
 	Interval time.Duration
 	Auditor  simian.Auditor
 
+	// Namespaces is the set of eligible namespaces the orphan scan searches.
+	// Empty disables the scan: a driver that reaps by listing needs to be
+	// told where to look, and there is no safe cluster-wide default — Simian
+	// must never touch a namespace that was not declared an arena.
+	Namespaces []string
+
 	// OnExpire, if set, fires after a successful driver-clear of an
 	// expired fault, before the audit "lease.expired" event. Used by the
 	// autonomous-mode controller to push the cleared fault into the
@@ -225,4 +231,85 @@ func (rp *Reaper) Sweep(ctx context.Context) {
 			Reason:   "deadline-reached",
 		})
 	}
+	rp.sweepOrphans(ctx, now)
+}
+
+// sweepOrphans asks every driver that can find its own leaks to do so.
+//
+// The registry sweep above can only clear what this process applied. A fault
+// applied by a Simian that was then killed is invisible to it — and for an
+// engine with no server-side duration, invisible means permanent. This is the
+// half that survives a restart.
+//
+// Kept generic rather than special-casing the network-policy driver: any
+// future engine that creates plain Kubernetes objects has the same leak, and
+// implementing simian.OrphanReaper is enough to be covered.
+func (rp *Reaper) sweepOrphans(ctx context.Context, now time.Time) {
+	if len(rp.Namespaces) == 0 {
+		return
+	}
+	for _, d := range rp.orphanReapers() {
+		cleared, err := d.reaper.ReapExpired(ctx, rp.Namespaces, now)
+		for _, engineUID := range cleared {
+			rp.Auditor.Emit(ctx, simian.AuditEvent{
+				Event:  "lease.expired",
+				Reason: "orphan-reaped",
+				Payload: map[string]any{
+					"engine_uid": engineUID,
+					"engine":     string(d.engine),
+				},
+			})
+		}
+		if err != nil {
+			rp.Auditor.Emit(ctx, simian.AuditEvent{
+				Event:   "lease.cleared",
+				Reason:  "orphan-reap-failed",
+				Payload: map[string]any{"error": err.Error(), "engine": string(d.engine)},
+			})
+		}
+	}
+}
+
+// orphanCapable pairs a driver's reaping half with its engine, so the audit
+// events can name the engine without asserting the interface back.
+type orphanCapable struct {
+	engine simian.Engine
+	reaper simian.OrphanReaper
+}
+
+// orphanReapers returns the configured drivers that implement OrphanReaper,
+// in a deterministic order so audit output does not depend on map iteration.
+// Drivers and Driver are treated as mutually exclusive, exactly as driverFor
+// does, so a driver present in both cannot be swept twice.
+func (rp *Reaper) orphanReapers() []orphanCapable {
+	var out []orphanCapable
+	add := func(d simian.ChaosDriver) {
+		if d == nil {
+			return
+		}
+		if r, ok := d.(simian.OrphanReaper); ok {
+			out = append(out, orphanCapable{engine: d.Engine(), reaper: r})
+		}
+	}
+	if rp.Drivers != nil {
+		engines := make([]simian.Engine, 0, len(rp.Drivers))
+		for e := range rp.Drivers {
+			engines = append(engines, e)
+		}
+		sort.Slice(engines, func(i, j int) bool { return engines[i] < engines[j] })
+		for _, e := range engines {
+			add(rp.Drivers[e])
+		}
+		return out
+	}
+	add(rp.Driver)
+	return out
+}
+
+// SweepOrphans runs only the orphan scan. Called once at startup, before the
+// first tick: a controller that restarts mid-fault should clear what it left
+// behind immediately, not up to one Interval later. The registry is empty at
+// that point, so there is nothing for it to conflict with.
+func (rp *Reaper) SweepOrphans(ctx context.Context) {
+	rp.sweepOrphans(ctx, time.Now().UTC())
 }
