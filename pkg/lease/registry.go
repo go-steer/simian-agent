@@ -151,11 +151,18 @@ type Reaper struct {
 	Interval time.Duration
 	Auditor  simian.Auditor
 
-	// Namespaces is the set of eligible namespaces the orphan scan searches.
-	// Empty disables the scan: a driver that reaps by listing needs to be
-	// told where to look, and there is no safe cluster-wide default — Simian
-	// must never touch a namespace that was not declared an arena.
-	Namespaces []string
+	// Namespaces resolves the eligible namespaces the orphan scan searches.
+	//
+	// A resolver rather than a slice because the default install declares no
+	// arenas up front: namespaces opt in by annotation, at any time, including
+	// long after this controller started. Resolving per sweep means an arena
+	// created at 10:00 is swept at 10:01 instead of after the next restart.
+	//
+	// Nil, or a resolver returning nothing, disables the scan: a driver that
+	// reaps by listing needs to be told where to look, and there is no safe
+	// cluster-wide default — Simian must never touch a namespace that was not
+	// declared an arena.
+	Namespaces func(ctx context.Context) ([]string, error)
 
 	// OnExpire, if set, fires after a successful driver-clear of an
 	// expired fault, before the audit "lease.expired" event. Used by the
@@ -245,11 +252,25 @@ func (rp *Reaper) Sweep(ctx context.Context) {
 // future engine that creates plain Kubernetes objects has the same leak, and
 // implementing simian.OrphanReaper is enough to be covered.
 func (rp *Reaper) sweepOrphans(ctx context.Context, now time.Time) {
-	if len(rp.Namespaces) == 0 {
+	if rp.Namespaces == nil {
+		return
+	}
+	namespaces, err := rp.Namespaces(ctx)
+	if err != nil {
+		// Failing to resolve arenas is not the same as there being none:
+		// say so, rather than logging a silent no-op every tick.
+		rp.Auditor.Emit(ctx, simian.AuditEvent{
+			Event:   "lease.cleared",
+			Reason:  "orphan-namespaces-failed",
+			Payload: map[string]any{"error": err.Error()},
+		})
+		return
+	}
+	if len(namespaces) == 0 {
 		return
 	}
 	for _, d := range rp.orphanReapers() {
-		cleared, err := d.reaper.ReapExpired(ctx, rp.Namespaces, now)
+		cleared, err := d.reaper.ReapExpired(ctx, namespaces, now)
 		for _, engineUID := range cleared {
 			rp.Auditor.Emit(ctx, simian.AuditEvent{
 				Event:  "lease.expired",

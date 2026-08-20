@@ -17,6 +17,7 @@ package arena
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -57,6 +58,30 @@ func (e *AnnotationEligibility) IsEligible(ctx context.Context, namespace string
 		return false, fmt.Errorf("eligibility: get namespace %q: %w", namespace, err)
 	}
 	return ns.Annotations[EligibilityAnnotation] == "true", nil
+}
+
+// ListEligible returns every namespace carrying `simian.chaos/eligible: "true"`.
+//
+// The orphan scan needs this: it has to know where to look before it has a
+// fault to look up, and under annotation-based eligibility nobody has told the
+// controller which namespaces are arenas. Annotations are not indexed, so this
+// lists namespaces and filters client-side — acceptable at reap-tick cadence,
+// and the discovery ClusterRole already grants the cluster-wide list.
+//
+// The returned slice is sorted so callers (and audit output) are deterministic.
+func (e *AnnotationEligibility) ListEligible(ctx context.Context) ([]string, error) {
+	list, err := e.K8s.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("eligibility: list namespaces: %w", err)
+	}
+	var out []string
+	for _, ns := range list.Items {
+		if ns.Annotations[EligibilityAnnotation] == "true" {
+			out = append(out, ns.Name)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // ExcludedWorkloads parses the comma-separated exclusion annotation.

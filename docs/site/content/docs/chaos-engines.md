@@ -105,8 +105,12 @@ Two deliberate non-behaviours:
 - A policy with **no** `expires-at`, or an unparseable one, is never deleted.
   Simian will not remove a partition it cannot prove has expired — it may be an
   operator's own. It still shows up in `simian arena describe`.
-- The scan only looks in namespaces that are declared arenas. An empty arena
-  list means it scans nothing, not everything.
+- The scan only looks in namespaces that are declared arenas — the
+  `--eligible-namespace` allowlist, or every namespace annotated
+  `simian.chaos/eligible: "true"` when no allowlist is given. That set is
+  resolved on each sweep, so an arena created after the controller started is
+  swept without a restart. If nothing has opted in, the scan covers nothing —
+  not everything.
 
 `simian arena destroy` refuses while any Simian-managed fault is live, and names
 each one so you know what to clear:

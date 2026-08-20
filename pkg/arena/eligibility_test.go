@@ -109,3 +109,46 @@ func TestAnnotationEligibilityExcludedWorkloadsEmpty(t *testing.T) {
 		t.Errorf("expected no exclusions, got %v", got)
 	}
 }
+
+// The orphan reaper's blast radius is exactly what this returns, so it has to
+// agree with IsEligible: annotated namespaces and nothing else.
+func TestListEligibleReturnsOnlyAnnotatedNamespaces(t *testing.T) {
+	ctx := context.Background()
+	k8s := fake.NewClientset(
+		newNS("boutique-2", map[string]string{EligibilityAnnotation: "true"}),
+		newNS("boutique-1", map[string]string{EligibilityAnnotation: "true"}),
+		newNS("opted-out", map[string]string{EligibilityAnnotation: "false"}),
+		newNS("kube-system", nil),
+		newNS("prod", map[string]string{"some.other/annotation": "true"}),
+	)
+	e := NewAnnotationEligibility(k8s)
+
+	got, err := e.ListEligible(ctx)
+	if err != nil {
+		t.Fatalf("ListEligible: %v", err)
+	}
+	if want := []string{"boutique-1", "boutique-2"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ListEligible = %v, want %v", got, want)
+	}
+
+	// Whatever it names must be something IsEligible would also allow.
+	for _, ns := range got {
+		ok, err := e.IsEligible(ctx, ns)
+		if err != nil || !ok {
+			t.Errorf("ListEligible named %q but IsEligible says (%v, %v)", ns, ok, err)
+		}
+	}
+}
+
+// A cluster with no arenas yet must produce "nowhere", not an error and not a
+// non-nil empty that reads as configured.
+func TestListEligibleIsEmptyWhenNothingHasOptedIn(t *testing.T) {
+	e := NewAnnotationEligibility(fake.NewClientset(newNS("kube-system", nil)))
+	got, err := e.ListEligible(context.Background())
+	if err != nil {
+		t.Fatalf("ListEligible: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ListEligible = %v, want empty", got)
+	}
+}
