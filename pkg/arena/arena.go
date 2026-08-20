@@ -121,6 +121,9 @@ type State struct {
 	RoleBindingExists bool
 	ChaosSubjectBound bool
 	SimianFaultCount  int // count of simian-managed chaos resources discovered
+	// SimianFaultNames are those resources as "Kind/name", sorted. A count
+	// alone tells an operator that destroy will refuse but not what to clear.
+	SimianFaultNames []string
 }
 
 // roleRules is the canonical RBAC ruleset granted to the chaos SA inside an
@@ -135,6 +138,17 @@ func roleRules() []rbacv1.PolicyRule {
 		{
 			APIGroups: []string{"litmuschaos.io"},
 			Resources: []string{"chaosengines", "chaosresults", "chaosschedules"},
+			Verbs:     []string{"create", "get", "list", "watch", "patch", "delete"},
+		},
+		{
+			// The network-policy engine causes partitions by creating these.
+			// Without create/delete the driver is Forbidden in-cluster — and
+			// this is the engine recommended on GKE Dataplane V2, where Chaos
+			// Mesh's NetworkChaos is silently bypassed. The gap survived
+			// because `simian serve` run locally uses the operator's own
+			// kubeconfig, so only the deployed path failed.
+			APIGroups: []string{"networking.k8s.io"},
+			Resources: []string{"networkpolicies"},
 			Verbs:     []string{"create", "get", "list", "watch", "patch", "delete"},
 		},
 		{
@@ -354,40 +368,64 @@ func (m *Manager) Describe(ctx context.Context, namespace string) (State, error)
 	}
 
 	if m.Dyn != nil {
-		count, _, err := m.activeFaultCount(ctx, namespace)
+		count, names, err := m.activeFaultCount(ctx, namespace)
 		if err == nil {
 			out.SimianFaultCount = count
+			out.SimianFaultNames = names
 		}
 	}
 	return out, nil
 }
 
-// activeFaultCount lists simian-labeled chaos resources in the namespace
-// across both engines and returns count + sorted names. Best-effort: missing
-// CRDs are not errors.
+// faultResource is a resource activeFaultCount sweeps. kind is a fallback for
+// display: a dynamic List returns items whose kind is often empty, because it
+// is implied by the list's own kind rather than repeated per item. Without the
+// fallback the destroy-refused message reads "/simian-np-01jt…", which names
+// the leak without saying what it is.
+type faultResource struct {
+	gvr  schema.GroupVersionResource
+	kind string
+}
+
+// faultResources is every resource kind a Simian engine can leave behind in an
+// arena. Anything missing from this list is invisible to both the pre-destroy
+// check and `arena describe`.
+func faultResources() []faultResource {
+	return []faultResource{
+		// Chaos Mesh user-facing fault types we know about. Listing a missing
+		// CRD just returns NotFound; we ignore it.
+		{schema.GroupVersionResource{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "networkchaos"}, "NetworkChaos"},
+		{schema.GroupVersionResource{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "podchaos"}, "PodChaos"},
+		{schema.GroupVersionResource{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "iochaos"}, "IOChaos"},
+		{schema.GroupVersionResource{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "stresschaos"}, "StressChaos"},
+		{schema.GroupVersionResource{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "timechaos"}, "TimeChaos"},
+		{schema.GroupVersionResource{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "kernelchaos"}, "KernelChaos"},
+		{schema.GroupVersionResource{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "dnschaos"}, "DNSChaos"},
+		{schema.GroupVersionResource{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "httpchaos"}, "HTTPChaos"},
+		{schema.GroupVersionResource{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "jvmchaos"}, "JVMChaos"},
+		{schema.GroupVersionResource{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "blockchaos"}, "BlockChaos"},
+		{schema.GroupVersionResource{Group: "litmuschaos.io", Version: "v1alpha1", Resource: "chaosengines"}, "ChaosEngine"},
+		// The network-policy engine. Omitting it meant the pre-destroy check
+		// under-reported precisely the fault class that leaks forever: every
+		// Chaos Mesh resource above carries a spec.duration the
+		// chaos-controller-manager honours server-side, so those recover on
+		// their own if Simian dies. A NetworkPolicy has no such field, and the
+		// partition is permanent.
+		{schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"}, "NetworkPolicy"},
+	}
+}
+
+// activeFaultCount lists simian-labeled chaos resources in the namespace across
+// every engine and returns count + sorted names. Best-effort: missing CRDs are
+// not errors.
 func (m *Manager) activeFaultCount(ctx context.Context, namespace string) (int, []string, error) {
 	if m.Dyn == nil {
 		return 0, nil, nil
 	}
 	selector := labels.SelectorFromSet(labels.Set{SimianManagedFaultLabel: "true"}).String()
-	gvrs := []schema.GroupVersionResource{
-		// Chaos Mesh user-facing fault types we know about. Listing a missing
-		// CRD just returns NotFound; we ignore it.
-		{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "networkchaos"},
-		{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "podchaos"},
-		{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "iochaos"},
-		{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "stresschaos"},
-		{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "timechaos"},
-		{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "kernelchaos"},
-		{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "dnschaos"},
-		{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "httpchaos"},
-		{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "jvmchaos"},
-		{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "blockchaos"},
-		{Group: "litmuschaos.io", Version: "v1alpha1", Resource: "chaosengines"},
-	}
 	var names []string
-	for _, gvr := range gvrs {
-		list, err := m.Dyn.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	for _, res := range faultResources() {
+		list, err := m.Dyn.Resource(res.gvr).Namespace(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
 		if err != nil {
 			if apierrors.IsNotFound(err) || isNoMatchError(err) {
 				continue
@@ -395,7 +433,11 @@ func (m *Manager) activeFaultCount(ctx context.Context, namespace string) (int, 
 			return 0, nil, err
 		}
 		for _, item := range list.Items {
-			names = append(names, fmt.Sprintf("%s/%s", item.GetKind(), item.GetName()))
+			kind := item.GetKind()
+			if kind == "" {
+				kind = res.kind
+			}
+			names = append(names, fmt.Sprintf("%s/%s", kind, item.GetName()))
 		}
 	}
 	sort.Strings(names)

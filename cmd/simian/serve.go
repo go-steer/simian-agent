@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
@@ -119,7 +120,7 @@ func newServeCmd() *cobra.Command {
 				simian.EngineEnvoyFault:    envoyDriver,
 			}
 
-			elig := buildEligibility(clientset, eligibleNS, logger)
+			elig, arenaNamespaces := buildEligibility(clientset, eligibleNS, logger)
 			execCfg := executor.DefaultConfig()
 			if durationCap > 0 {
 				execCfg.DurationCeiling = durationCap
@@ -139,10 +140,23 @@ func newServeCmd() *cobra.Command {
 				Drivers:  drivers,
 				Interval: reapInterval,
 				Auditor:  auditor,
+				// Where the orphan scan looks for faults this process did
+				// not apply. Bounded to the declared arenas — Simian must
+				// never delete objects in a namespace nobody opted in. Under
+				// the default (annotation) mode this list is empty at startup
+				// and fills in as namespaces opt in, so it is resolved per
+				// sweep rather than captured here.
+				Namespaces: arenaNamespaces,
 				OnExpire: func(af simian.ActiveFault, reason string) {
 					history.UpdateCleared(af.FaultUID, time.Now().UTC(), reason)
 				},
 			}
+			// Sweep before the first tick. If this process is the restart of
+			// one that was killed holding a NetworkPolicy partition, that
+			// partition is still in the cluster and no lease remembers it;
+			// waiting a full reap interval to notice would extend an outage
+			// that the crash already made unbounded.
+			reaper.SweepOrphans(ctx)
 			go reaper.Run(ctx)
 
 			disco2 := topology.New(clientset, topologyResync)
@@ -332,7 +346,11 @@ func buildKubeConfig(path string) (*rest.Config, error) {
 	return clientCfg.ClientConfig()
 }
 
-func buildEligibility(k8s kubernetes.Interface, eligible []string, logger *slog.Logger) executor.EligibilityChecker {
+// buildEligibility returns the executor's per-fault eligibility check and,
+// alongside it, the resolver the orphan reaper uses to decide which namespaces
+// it may sweep. The two must agree: anything the reaper is allowed to delete in
+// has to be a namespace the executor would have allowed a fault in.
+func buildEligibility(k8s kubernetes.Interface, eligible []string, logger *slog.Logger) (executor.EligibilityChecker, func(context.Context) ([]string, error)) {
 	if len(eligible) > 0 {
 		m := map[string]bool{}
 		for _, ns := range eligible {
@@ -340,10 +358,14 @@ func buildEligibility(k8s kubernetes.Interface, eligible []string, logger *slog.
 		}
 		logger.Info("eligibility: using static --eligible-namespace allowlist",
 			slog.Any("namespaces", eligible))
-		return &executor.StaticEligibility{Eligible: m}
+		arenas := slices.Clone(eligible)
+		return &executor.StaticEligibility{Eligible: m}, func(context.Context) ([]string, error) {
+			return arenas, nil
+		}
 	}
 	logger.Info("eligibility: using annotation-based lookup (simian.chaos/eligible=\"true\")")
-	return arena.NewAnnotationEligibility(k8s)
+	ae := arena.NewAnnotationEligibility(k8s)
+	return ae, ae.ListEligible
 }
 
 func buildLLM(ctx context.Context, id, model string) (simian.LLMProvider, error) {

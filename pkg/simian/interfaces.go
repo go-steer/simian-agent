@@ -17,6 +17,7 @@ package simian
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 // FaultExecutor is the chokepoint between any fault source and the chaos
@@ -42,6 +43,28 @@ type ChaosDriver interface {
 	Apply(ctx context.Context, m FaultManifest) (engineUID string, err error)
 	Clear(ctx context.Context, engineUID string) error
 	Catalog(ctx context.Context) ([]CatalogEntry, error)
+}
+
+// OrphanReaper is an optional ChaosDriver capability: the driver can find and
+// clear its own leaked faults by reading the cluster, with no help from the
+// in-memory lease registry.
+//
+// Most engines do not need it. Every Chaos Mesh resource carries a
+// spec.duration that the chaos-controller-manager honours server-side, so a
+// Chaos Mesh fault recovers even if Simian is killed mid-fault. Engines that
+// create plain Kubernetes objects have no such backstop — kill the process and
+// the object stays until something deletes it, and the registry that knew
+// about it is gone.
+//
+// A driver that implements this is asked to sweep the eligible namespaces on
+// every reaper tick and once at startup. Implementations must be safe to call
+// concurrently with normal Apply/Clear traffic, and must only delete faults
+// they can prove are expired.
+type OrphanReaper interface {
+	// ReapExpired clears expired faults in the given namespaces and returns
+	// the engineUIDs it cleared. now is passed in rather than read from the
+	// clock so callers and tests share one notion of the present.
+	ReapExpired(ctx context.Context, namespaces []string, now time.Time) (cleared []string, err error)
 }
 
 // CompletionRequest is the LLMProvider input. Tools are read-only context tools

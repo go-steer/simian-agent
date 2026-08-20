@@ -16,6 +16,8 @@ package lease
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -218,4 +220,210 @@ func TestReaperOnExpireNilIsSafe(t *testing.T) {
 		// OnExpire intentionally nil
 	}
 	rp.Sweep(context.Background()) // must not panic
+}
+
+// reapingDriver is a driver that can also find its own leaks — the shape the
+// network-policy driver has.
+type reapingDriver struct {
+	fakeDriver
+	engine     simian.Engine
+	namespaces []string
+	calls      int
+	cleared    []string
+	err        error
+}
+
+func (d *reapingDriver) Engine() simian.Engine { return d.engine }
+
+// staticArenas is the resolver a --eligible-namespace install ends up with.
+func staticArenas(ns ...string) func(context.Context) ([]string, error) {
+	return func(context.Context) ([]string, error) { return ns, nil }
+}
+
+func (d *reapingDriver) ReapExpired(_ context.Context, namespaces []string, _ time.Time) ([]string, error) {
+	d.calls++
+	d.namespaces = namespaces
+	return d.cleared, d.err
+}
+
+// The orphan scan is what makes a partition survive a Simian restart at all.
+// It has to run on the normal sweep path, not only where it was wired by hand.
+func TestSweepAsksOrphanCapableDriversToClearWhatTheRegistryCannotSee(t *testing.T) {
+	np := &reapingDriver{engine: simian.EngineNetworkPolicy, cleared: []string{"ns-a/simian-np-01"}}
+	cm := &fakeDriver{} // no ReapExpired; must be skipped, not crashed on
+	aud := &fakeAuditor{}
+	rp := &Reaper{
+		Registry: NewRegistry("holder-1"),
+		Drivers: map[simian.Engine]simian.ChaosDriver{
+			simian.EngineChaosMesh:     cm,
+			simian.EngineNetworkPolicy: np,
+		},
+		Interval:   time.Second,
+		Auditor:    aud,
+		Namespaces: staticArenas("ns-a", "ns-b"),
+	}
+
+	rp.Sweep(context.Background())
+
+	if np.calls != 1 {
+		t.Fatalf("ReapExpired called %d times, want 1", np.calls)
+	}
+	if got, want := np.namespaces, []string{"ns-a", "ns-b"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("swept namespaces = %v, want %v", got, want)
+	}
+	var found bool
+	for _, e := range aud.events {
+		if e.Reason == "orphan-reaped" && e.Payload["engine_uid"] == "ns-a/simian-np-01" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a reaped orphan must be audited; events = %+v", aud.events)
+	}
+}
+
+// Simian may only touch namespaces an operator declared as arenas. An empty
+// list is not "everywhere", it is "nowhere".
+func TestSweepSkipsTheOrphanScanWhenNoArenasAreConfigured(t *testing.T) {
+	for name, resolver := range map[string]func(context.Context) ([]string, error){
+		"no resolver at all":     nil,
+		"resolver finds nothing": staticArenas(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			np := &reapingDriver{engine: simian.EngineNetworkPolicy}
+			rp := &Reaper{
+				Registry:   NewRegistry("holder-1"),
+				Drivers:    map[simian.Engine]simian.ChaosDriver{simian.EngineNetworkPolicy: np},
+				Interval:   time.Second,
+				Auditor:    &fakeAuditor{},
+				Namespaces: resolver,
+			}
+			rp.Sweep(context.Background())
+			if np.calls != 0 {
+				t.Errorf("orphan scan ran with no arenas configured (%d calls)", np.calls)
+			}
+		})
+	}
+}
+
+// The default install declares no arenas on the command line — namespaces opt
+// in by annotation, whenever an operator runs `simian arena create`. Capturing
+// the arena list at startup would make the whole orphan scan a no-op for every
+// arena created after boot, which is all of them.
+func TestSweepPicksUpAnArenaThatDidNotExistAtStartup(t *testing.T) {
+	np := &reapingDriver{engine: simian.EngineNetworkPolicy}
+	var arenas []string
+	rp := &Reaper{
+		Registry:   NewRegistry("holder-1"),
+		Drivers:    map[simian.Engine]simian.ChaosDriver{simian.EngineNetworkPolicy: np},
+		Interval:   time.Second,
+		Auditor:    &fakeAuditor{},
+		Namespaces: func(context.Context) ([]string, error) { return arenas, nil },
+	}
+
+	rp.Sweep(context.Background()) // boot: nothing is an arena yet
+	if np.calls != 0 {
+		t.Fatalf("scanned before any arena existed (%d calls)", np.calls)
+	}
+
+	arenas = []string{"boutique-1"} // operator runs `simian arena create`
+	rp.Sweep(context.Background())
+
+	if np.calls != 1 {
+		t.Fatalf("ReapExpired called %d times after the arena appeared, want 1", np.calls)
+	}
+	if got, want := np.namespaces, []string{"boutique-1"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("swept namespaces = %v, want %v", got, want)
+	}
+}
+
+// Failing to list namespaces is not the same as there being none to sweep.
+// Treating it as "nowhere" would hide a broken leak check behind silence.
+func TestSweepAuditsAFailureToResolveArenas(t *testing.T) {
+	np := &reapingDriver{engine: simian.EngineNetworkPolicy}
+	aud := &fakeAuditor{}
+	rp := &Reaper{
+		Registry: NewRegistry("holder-1"),
+		Drivers:  map[simian.Engine]simian.ChaosDriver{simian.EngineNetworkPolicy: np},
+		Interval: time.Second,
+		Auditor:  aud,
+		Namespaces: func(context.Context) ([]string, error) {
+			return nil, errors.New("namespaces is forbidden")
+		},
+	}
+
+	rp.Sweep(context.Background())
+
+	if np.calls != 0 {
+		t.Errorf("swept despite not knowing which namespaces are arenas (%d calls)", np.calls)
+	}
+	for _, e := range aud.events {
+		if e.Reason == "orphan-namespaces-failed" {
+			return
+		}
+	}
+	t.Errorf("an unresolvable arena list must be audited; events = %+v", aud.events)
+}
+
+// A driver that cannot list one namespace must not silence the sweep: the
+// operator needs to know the leak check is not running.
+func TestSweepAuditsAnOrphanScanFailure(t *testing.T) {
+	np := &reapingDriver{engine: simian.EngineNetworkPolicy, err: errors.New("forbidden")}
+	aud := &fakeAuditor{}
+	rp := &Reaper{
+		Registry:   NewRegistry("holder-1"),
+		Drivers:    map[simian.Engine]simian.ChaosDriver{simian.EngineNetworkPolicy: np},
+		Interval:   time.Second,
+		Auditor:    aud,
+		Namespaces: staticArenas("ns-a"),
+	}
+	rp.Sweep(context.Background())
+
+	for _, e := range aud.events {
+		if e.Reason == "orphan-reap-failed" {
+			return
+		}
+	}
+	t.Errorf("a failed orphan scan must be audited; events = %+v", aud.events)
+}
+
+// The startup scan is the whole point: the registry is empty after a restart,
+// so a leaked partition is only ever found this way.
+func TestSweepOrphansRunsWithoutTouchingTheRegistry(t *testing.T) {
+	r := NewRegistry("holder-1")
+	r.Register("f-live", "e1", newManifest("f-live", "ns-a", "x"), time.Now().Add(-time.Minute))
+	np := &reapingDriver{engine: simian.EngineNetworkPolicy}
+	rp := &Reaper{
+		Registry:   r,
+		Drivers:    map[simian.Engine]simian.ChaosDriver{simian.EngineNetworkPolicy: np},
+		Interval:   time.Second,
+		Auditor:    &fakeAuditor{},
+		Namespaces: staticArenas("ns-a"),
+	}
+
+	rp.SweepOrphans(context.Background())
+
+	if np.calls != 1 {
+		t.Errorf("SweepOrphans made %d ReapExpired calls, want 1", np.calls)
+	}
+	if _, ok := r.Get("f-live"); !ok {
+		t.Error("SweepOrphans must not clear registry-tracked faults")
+	}
+}
+
+// Single-driver installs use the Driver convenience field; the scan has to
+// reach it too.
+func TestSweepOrphansHonoursTheSingleDriverField(t *testing.T) {
+	np := &reapingDriver{engine: simian.EngineNetworkPolicy}
+	rp := &Reaper{
+		Registry:   NewRegistry("holder-1"),
+		Driver:     np,
+		Interval:   time.Second,
+		Auditor:    &fakeAuditor{},
+		Namespaces: staticArenas("ns-a"),
+	}
+	rp.SweepOrphans(context.Background())
+	if np.calls != 1 {
+		t.Errorf("ReapExpired called %d times via Driver, want 1", np.calls)
+	}
 }
