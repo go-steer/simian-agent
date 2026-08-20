@@ -1,0 +1,157 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: E2E (kind)
+
+# Stands up the real substrate — kind + Calico + Chaos Mesh — and asserts the
+# rig itself works: three nodes Ready, the Chaos Mesh CRDs registered with
+# chaos-daemon rolled out, and a CNI that actually enforces NetworkPolicy.
+#
+# Those are assertions about the environment, not about Simian, and that is the
+# point. Every fault Simian injects is observed through this cluster. A cluster
+# that accepts a NetworkPolicy and ignores it, or runs a chaos-daemon pointed at
+# the wrong container socket, produces faults that never land — with no error
+# anywhere to say so. Downstream that reads as the subject under test failing to
+# notice an incident that never happened.
+#
+# Deliberately NOT a pull_request job. It builds a three-node cluster and pulls
+# Calico and the Chaos Mesh chart from the network, so its failure modes include
+# "GitHub raw was slow". A ~98%-reliable required check taxes every PR. The
+# presubmits in ci.yml stay hermetic; this is the "something real is
+# continuously tested" tier.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.github/workflows/docs*.yml'
+      - '.github/workflows/release*.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+# Not cancel-in-progress: a half-cancelled run can leave a cluster behind, and
+# the teardown step is what proves `make cluster-down` still works.
+concurrency:
+  group: e2e-kind
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: '1.26'
+  # Pinned to match the local install instructions in dev/README.md. The kind
+  # version decides the default node image and the create semantics, both of
+  # which the cluster config depends on.
+  KIND_VERSION: v0.32.0
+  HELM_VERSION: v3.19.0
+
+jobs:
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    # Acceptance for #53 is "under ~10 minutes". The ceiling is set well above
+    # that so a slow run reports as slow rather than as a timeout with no logs.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-e2e-${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-e2e-${{ env.GO_VERSION }}-
+
+      - name: Install kind
+        run: go install sigs.k8s.io/kind@${{ env.KIND_VERSION }}
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      # `make`, not a dev/ci/presubmits/ delegator as the other workflows use:
+      # these are the commands a developer runs, and having CI run the same
+      # literal command is what keeps the documented path from rotting. The
+      # logic still lives in dev/tools/, not in this YAML.
+      - name: Cluster up
+        run: make cluster
+
+      - name: E2E suite
+        run: make e2e
+
+      # Runs on success too: tearing the cluster down is part of what this
+      # workflow is here to keep working, and a runner is the only place it gets
+      # exercised on every merge.
+      - name: Cluster down
+        if: always()
+        run: make cluster-down
+
+      - name: Collect forensics
+        if: failure()
+        env:
+          KUBECONFIG: ${{ github.workspace }}/.kube/e2e.yaml
+        run: |
+          mkdir -p _forensics
+          kubectl get nodes -o wide            >_forensics/nodes.txt 2>&1 || true
+          kubectl get pods -A -o wide          >_forensics/pods.txt 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp >_forensics/events.txt 2>&1 || true
+          kubectl -n kube-system describe ds/calico-node >_forensics/calico-node.txt 2>&1 || true
+          kubectl -n chaos-mesh get all        >_forensics/chaos-mesh.txt 2>&1 || true
+          kubectl -n chaos-mesh logs ds/chaos-daemon --tail=-1 --all-containers \
+                                               >_forensics/chaos-daemon.log 2>&1 || true
+          kubectl get crd -o name | grep chaos >_forensics/chaos-crds.txt 2>&1 || true
+
+      - name: Upload forensics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-forensics-${{ github.run_id }}
+          path: _forensics/
+          retention-days: 14
+
+      # Post-merge failures are otherwise silent — nobody reliably watches the
+      # Actions tab. One open issue collects repeats so a broken week does not
+      # file a duplicate per merge. Manual dispatches don't file: whoever
+      # clicked is watching.
+      - name: File or update tracking issue on unattended failure
+        if: failure() && github.event_name != 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          existing="$(gh issue list --repo "$REPO" --state open \
+            --search 'kind e2e failed in:title' --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" \
+              --body "Another failure ($(date -u +%Y-%m-%d), $SHA): $RUN_URL"
+          else
+            gh issue create --repo "$REPO" \
+              --title "kind e2e failed: run ${{ github.run_id }}" \
+              --body "The kind e2e run failed on $(date -u +%Y-%m-%d) at $SHA. Run: $RUN_URL
+
+          Cluster state is attached as the e2e-forensics artifact. Start with chaos-daemon.log and calico-node.txt: the two most likely causes are Chaos Mesh pointed at the wrong container socket and Calico failing to converge, and both present as faults that apply cleanly and do nothing. See dev/kind/cluster.yaml for why the CNI choice matters."
+          fi

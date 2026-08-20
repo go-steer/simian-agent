@@ -25,7 +25,8 @@ IMAGE_NAME     ?= go-steer/simian-agent
 VERSION        ?= dev
 IMAGE          := $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(VERSION)
 
-.PHONY: all build test vet tidy clean run-serve fmt ci image image-push
+.PHONY: all build test vet tidy clean run-serve fmt ci image image-push \
+        cluster cluster-down e2e
 
 all: vet test build
 
@@ -53,6 +54,25 @@ fmt:
 
 clean:
 	rm -rf bin dist coverage.txt
+
+# Local end-to-end cluster: kind + Calico + Chaos Mesh. Requires kind,
+# kubectl, helm and a container runtime. Credentials land in .kube/e2e.yaml
+# inside the work tree, never ~/.kube/config — see internal/kindcluster.
+#
+#   make cluster        # stand it up (~4 min from cold)
+#   make e2e            # run the e2e tests against it
+#   make cluster-down   # tear it down
+cluster:
+	dev/tools/cluster-up
+
+cluster-down:
+	dev/tools/cluster-down
+
+# Run the e2e suite against an already-running `make cluster`. Separate from
+# `make test` because it needs a live cluster; the unit suite must stay
+# hermetic.
+e2e:
+	dev/tools/test-e2e
 
 run-serve: build
 	$(BIN) serve

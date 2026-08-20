@@ -35,8 +35,13 @@ dev/
 │   ├── verify-mod-tidy    # `go mod tidy` clean check
 │   ├── verify-vuln        # govulncheck ./...
 │   ├── add-license-headers # bulk-applier for Apache 2.0 headers
+│   ├── cluster-up         # kind + Calico + Chaos Mesh   (`make cluster`)
+│   ├── cluster-down       # tear it down                 (`make cluster-down`)
+│   ├── test-e2e           # go test -tags e2e ./test/... (`make e2e`)
 │   ├── common.sh          # shared bash helpers (ensure_tool, run_step)
 │   └── .golangci.yml      # linter config
+├── kind/
+│   └── cluster.yaml       # kind topology + the CNI decision
 └── ci/
     └── presubmits/        # thin delegators called by .github/workflows/ci.yml
         ├── vet            # → dev/tools/vet
@@ -77,6 +82,48 @@ For this to actually gate merges, the repo's branch protection on
 Docs-only PRs (`**/*.md`) are handled by the companion `ci-docs.yml`
 workflow, which emits the same four check names trivially-green so
 branch protection is satisfied without running the full Go pipeline.
+
+## The e2e cluster
+
+The presubmits above are hermetic — no cluster, no Docker, no network. The
+live-cluster tier is separate:
+
+```bash
+make cluster        # kind + Calico + Chaos Mesh (~4 min cold)
+make e2e            # go test -tags e2e ./test/...
+make cluster-down
+```
+
+Needs `kind` **v0.32.0 or newer**, `kubectl`, `helm`, and a container runtime
+on `PATH`:
+
+```bash
+go install sigs.k8s.io/kind@v0.32.0
+```
+
+`make cluster` checks the version before it builds anything. Older kind is
+rejected rather than warned about, because the failure it causes is invisible
+until the end: the cluster comes up healthy, Calico and Chaos Mesh install, and
+then `kind load docker-image` fails with `unknown containerd config version: 4`
+because the pinned node image runs containerd v2. That is the step that puts
+the image under test into the cluster, so everything downstream is untestable
+while everything upstream looks fine. CI pins the same version, so CI never
+sees it.
+
+Credentials are written to `.kube/e2e.yaml` in the work tree, never merged
+into `~/.kube/config`: Simian creates namespaces, binds RBAC, and kills pods,
+so the file it is handed must not be able to name a real cluster. See the
+package comment in `internal/kindcluster` for the four guards that enforce
+that, and `dev/kind/cluster.yaml` for why the default CNI is not used.
+
+`make cluster` refuses to adopt an existing cluster of the same name. If a run
+was killed before teardown, clear the leftover with
+`go run ./internal/kindcluster/kindctl reap`.
+
+CI runs this as the `e2e-kind` workflow on push to `main`, not on PRs — it
+pulls Calico and the Chaos Mesh chart from the network, and a required check
+that can fail on someone else's CDN taxes every PR. It is not one of the four
+gating checks.
 
 ## License headers
 
