@@ -53,6 +53,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -72,6 +73,19 @@ const DefaultName = NamePrefix + "dev"
 // DefaultCreateTimeout bounds cluster creation. Three nodes plus a CNI that
 // has to converge takes a couple of minutes; ten means something is wrong.
 const DefaultCreateTimeout = 10 * time.Minute
+
+// MinKindVersion is the oldest kind that can drive this package. Keep in sync
+// with KIND_VERSION in .github/workflows/e2e-kind.yml and the install line in
+// dev/README.md.
+//
+// The floor is not cosmetic. The node image is pinned to a Kubernetes version
+// whose containerd writes a config the older kind CLI cannot parse, so
+// `kind load docker-image` fails with "unknown containerd config version: 4"
+// while everything else — create, CNI, Chaos Mesh, kubectl — works. A
+// developer on an older kind therefore gets a cluster that comes up clean and
+// then cannot be given the image under test, which is the one thing the e2e
+// path exists to do. CI pins the right version and never sees it.
+const MinKindVersion = "v0.32.0"
 
 // Config describes the cluster to create.
 type Config struct {
@@ -129,6 +143,9 @@ func Create(ctx context.Context, cfg Config) (c *Cluster, err error) {
 		if _, err := exec.LookPath(tool); err != nil {
 			return nil, fmt.Errorf("kindcluster: %s is not on PATH: %w", tool, err)
 		}
+	}
+	if err := checkKindVersion(ctx, cfg.Out); err != nil {
+		return nil, err
 	}
 	if cfg.ConfigFile != "" {
 		if _, err := os.Stat(cfg.ConfigFile); err != nil {
@@ -343,6 +360,97 @@ func (c *Cluster) run(ctx context.Context, tool string, stdin io.Reader, args ..
 	}
 	return out.String(), nil
 }
+
+// checkKindVersion refuses to build a cluster the installed kind cannot
+// finish driving. It runs before `kind create` so the failure costs seconds
+// rather than four minutes and a half-usable cluster.
+//
+// An unreadable version is a warning, not an error: a kind built from source
+// reports something this cannot parse, and blocking that is worse than the
+// problem. Only a version we can read *and* know is too old is fatal.
+func checkKindVersion(ctx context.Context, out io.Writer) error {
+	raw, err := runKind(ctx, "version")
+	if err != nil {
+		return fmt.Errorf("kindcluster: kind version: %w", err)
+	}
+	return judgeKindVersion(raw, out)
+}
+
+// judgeKindVersion is the decision checkKindVersion makes, split out from the
+// exec so a test can drive it with the version strings that matter instead of
+// whatever kind happens to be installed on the machine running the test.
+func judgeKindVersion(raw string, out io.Writer) error {
+	got, ok := parseKindVersion(raw)
+	if !ok {
+		if out != nil {
+			fmt.Fprintf(out, "▸ warning: cannot parse kind version %q; wanted at least %s\n",
+				strings.TrimSpace(raw), MinKindVersion)
+		}
+		return nil
+	}
+	want, _ := parseKindVersion(MinKindVersion)
+	if compareVersions(got, want) < 0 {
+		return fmt.Errorf("kindcluster: kind %s is too old (need %s or newer): "+
+			"older kind cannot load images into a node running containerd v2, so "+
+			"`kind load docker-image` fails after the cluster comes up. "+
+			"Install with: go install sigs.k8s.io/kind@%s",
+			formatVersion(got), MinKindVersion, MinKindVersion)
+	}
+	return nil
+}
+
+// parseKindVersion pulls the first vN.N.N out of `kind version` output, which
+// looks like "kind v0.32.0 go1.24.0 linux/amd64". Pre-release suffixes are
+// truncated at the patch number: v0.32.0-alpha compares equal to v0.32.0,
+// which is the lenient direction.
+func parseKindVersion(s string) ([3]int, bool) {
+	for _, field := range strings.Fields(s) {
+		if len(field) < 2 || field[0] != 'v' {
+			continue
+		}
+		var v [3]int
+		parts := strings.SplitN(field[1:], ".", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		ok := true
+		for i, p := range parts {
+			// Truncate at the first non-digit so "0-alpha" reads as 0.
+			end := 0
+			for end < len(p) && p[end] >= '0' && p[end] <= '9' {
+				end++
+			}
+			if end == 0 {
+				ok = false
+				break
+			}
+			n, err := strconv.Atoi(p[:end])
+			if err != nil {
+				ok = false
+				break
+			}
+			v[i] = n
+		}
+		if ok {
+			return v, true
+		}
+	}
+	return [3]int{}, false
+}
+
+func compareVersions(a, b [3]int) int {
+	for i := range a {
+		switch {
+		case a[i] < b[i]:
+			return -1
+		case a[i] > b[i]:
+			return 1
+		}
+	}
+	return 0
+}
+
+func formatVersion(v [3]int) string { return fmt.Sprintf("v%d.%d.%d", v[0], v[1], v[2]) }
 
 func (c *Cluster) logf(format string, args ...any) {
 	if c.out == nil {

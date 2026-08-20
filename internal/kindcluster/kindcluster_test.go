@@ -15,7 +15,9 @@
 package kindcluster
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -347,5 +349,157 @@ func TestPinnedArtifactURLsCarryTheirVersions(t *testing.T) {
 				t.Errorf("%q is not pinned: contains %q", u, floating)
 			}
 		}
+	}
+}
+
+func TestParseKindVersion(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want [3]int
+		ok   bool
+	}{
+		{"real kind output", "kind v0.32.0 go1.24.0 linux/amd64", [3]int{0, 32, 0}, true},
+		{"the constant itself", MinKindVersion, [3]int{0, 32, 0}, true},
+		{"the version that breaks image load", "kind v0.31.0 go1.23.0 linux/amd64", [3]int{0, 31, 0}, true},
+		{"newer major", "kind v1.2.3", [3]int{1, 2, 3}, true},
+		{"pre-release truncates to the patch", "kind v0.32.0-alpha.1 go1.24.0", [3]int{0, 32, 0}, true},
+		{"source build", "kind version unknown", [3]int{}, false},
+		{"no version at all", "", [3]int{}, false},
+		{"not enough components", "kind v0.32", [3]int{}, false},
+		{"non-numeric", "kind vX.Y.Z", [3]int{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseKindVersion(tc.in)
+			if ok != tc.ok {
+				t.Fatalf("parseKindVersion(%q) ok=%v, want %v", tc.in, ok, tc.ok)
+			}
+			if ok && got != tc.want {
+				t.Errorf("parseKindVersion(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// The floor exists because of one specific failure: `kind load docker-image`
+// against a containerd-v2 node. Getting the comparison backwards would let the
+// broken version through, which is indistinguishable from having no check.
+func TestKindVersionGateRejectsExactlyTheOldOnes(t *testing.T) {
+	cases := map[string]bool{ // `kind version` output -> should be allowed
+		"kind v0.31.0 go1.23.0 linux/amd64": false,
+		"kind v0.30.9 go1.23.0 linux/amd64": false,
+		"kind v0.32.0 go1.24.0 linux/amd64": true, // the floor itself is fine
+		"kind v0.32.1 go1.24.0 linux/amd64": true,
+		"kind v0.33.0 go1.24.0 linux/amd64": true,
+		"kind v1.0.0 go1.24.0 linux/amd64":  true,
+	}
+	for raw, allow := range cases {
+		err := judgeKindVersion(raw, io.Discard)
+		if allowed := err == nil; allowed != allow {
+			t.Errorf("%q allowed=%v (err=%v), want allowed=%v", raw, allowed, err, allow)
+		}
+	}
+}
+
+// The message is the whole value of the check: it fires on a machine where
+// everything else works, so it has to say what to install.
+func TestKindVersionRejectionSaysHowToFixIt(t *testing.T) {
+	err := judgeKindVersion("kind v0.31.0 go1.23.0 linux/amd64", io.Discard)
+	if err == nil {
+		t.Fatal("v0.31.0 must be rejected")
+	}
+	for _, want := range []string{"v0.31.0", MinKindVersion, "go install sigs.k8s.io/kind@"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err.Error(), want)
+		}
+	}
+}
+
+// A kind built from source reports a version this cannot read. Refusing to
+// build a cluster over that would be worse than the problem it prevents, so it
+// warns and continues.
+func TestKindVersionUnparseableWarnsButProceeds(t *testing.T) {
+	var buf bytes.Buffer
+	if err := judgeKindVersion("kind version unknown", &buf); err != nil {
+		t.Fatalf("an unreadable version must not block: %v", err)
+	}
+	if !strings.Contains(buf.String(), "warning") {
+		t.Errorf("expected a warning on stdout, got %q", buf.String())
+	}
+	// And it must be silent, not panic, when the caller discards output.
+	if err := judgeKindVersion("kind version unknown", nil); err != nil {
+		t.Fatalf("nil writer: %v", err)
+	}
+}
+
+// The CI pin and the code's floor have to be the same version, or CI passes on
+// a version the code rejects (or worse, the reverse).
+func TestKindFloorMatchesTheCIPin(t *testing.T) {
+	wf, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "e2e-kind.yml"))
+	if err != nil {
+		t.Fatalf("read workflow: %v", err)
+	}
+	var pinned string
+	for _, line := range strings.Split(string(wf), "\n") {
+		if _, after, found := strings.Cut(line, "KIND_VERSION:"); found {
+			pinned = strings.TrimSpace(after)
+			break
+		}
+	}
+	if pinned == "" {
+		t.Fatal("no KIND_VERSION in the e2e workflow")
+	}
+	if pinned != MinKindVersion {
+		t.Errorf("workflow pins kind %s but MinKindVersion is %s", pinned, MinKindVersion)
+	}
+}
+
+// stubTools puts fake kind/kubectl binaries at the front of PATH. The kind
+// stub answers `version` and fails everything else, so a test can tell "Create
+// stopped at the version gate" apart from "Create went on to do real work".
+func stubTools(t *testing.T, kindVersion string) {
+	t.Helper()
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	script := "#!/usr/bin/env bash\nif [ \"$1\" = version ]; then echo '" + kindVersion + "'; exit 0; fi\n" +
+		"echo 'stub: refusing to run kind '\"$*\" >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(dir, "kind"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte("#!/usr/bin/env bash\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// A version check nobody calls is not a version check. Create has to run it,
+// and run it before it starts building anything — the cost of finding out late
+// is a four-minute cluster that cannot be given the image under test.
+func TestCreateRefusesToBuildOnATooOldKind(t *testing.T) {
+	stubTools(t, "kind v0.31.0 go1.23.0 linux/amd64")
+
+	_, err := Create(context.Background(), Config{Name: DefaultName + "-versiongate"})
+	if err == nil {
+		t.Fatal("Create proceeded on a kind that cannot load images")
+	}
+	if !strings.Contains(err.Error(), "too old") || !strings.Contains(err.Error(), MinKindVersion) {
+		t.Errorf("Create failed for the wrong reason — the version gate did not fire: %v", err)
+	}
+}
+
+// The converse: on a supported kind, Create must get past the gate and fail at
+// real work instead. Without this, a gate that rejects everything would pass.
+func TestCreateGetsPastTheGateOnASupportedKind(t *testing.T) {
+	stubTools(t, "kind v0.32.0 go1.24.0 linux/amd64")
+
+	_, err := Create(context.Background(), Config{Name: DefaultName + "-versiongate"})
+	if err == nil {
+		t.Fatal("the stub kind cannot actually create a cluster; expected a failure")
+	}
+	if strings.Contains(err.Error(), "too old") {
+		t.Errorf("supported kind rejected by the version gate: %v", err)
 	}
 }

@@ -94,7 +94,22 @@ make e2e            # go test -tags e2e ./test/...
 make cluster-down
 ```
 
-Needs `kind`, `kubectl`, `helm`, and a container runtime on `PATH`.
+Needs `kind` **v0.32.0 or newer**, `kubectl`, `helm`, and a container runtime
+on `PATH`:
+
+```bash
+go install sigs.k8s.io/kind@v0.32.0
+```
+
+`make cluster` checks the version before it builds anything. Older kind is
+rejected rather than warned about, because the failure it causes is invisible
+until the end: the cluster comes up healthy, Calico and Chaos Mesh install, and
+then `kind load docker-image` fails with `unknown containerd config version: 4`
+because the pinned node image runs containerd v2. That is the step that puts
+the image under test into the cluster, so everything downstream is untestable
+while everything upstream looks fine. CI pins the same version, so CI never
+sees it.
+
 Credentials are written to `.kube/e2e.yaml` in the work tree, never merged
 into `~/.kube/config`: Simian creates namespaces, binds RBAC, and kills pods,
 so the file it is handed must not be able to name a real cluster. See the
