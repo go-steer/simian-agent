@@ -31,6 +31,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/go-steer/simian-agent/pkg/arena"
@@ -45,6 +46,7 @@ import (
 	"github.com/go-steer/simian-agent/pkg/loop"
 	"github.com/go-steer/simian-agent/pkg/mcp"
 	"github.com/go-steer/simian-agent/pkg/planner"
+	"github.com/go-steer/simian-agent/pkg/probe"
 	"github.com/go-steer/simian-agent/pkg/simian"
 	"github.com/go-steer/simian-agent/pkg/sut"
 	"github.com/go-steer/simian-agent/pkg/topology"
@@ -133,7 +135,12 @@ func newServeCmd() *cobra.Command {
 			}
 			registry := lease.NewRegistry(holderID)
 			history := executor.NewHistory(recentFaultsCapacity)
-			exec := executor.New(execCfg, drivers, registry, auditor, elig, executor.WithHistory(history))
+			// Efficacy gate: a fault with Settle probes is not reported as
+			// applied until they pass. Shares the chaos driver's REST mapper
+			// so a probe can name any resource the cluster knows about.
+			prober := probe.NewK8sProber(dyn, restmapper.NewDeferredDiscoveryRESTMapper(cached))
+			exec := executor.New(execCfg, drivers, registry, auditor, elig,
+				executor.WithHistory(history), executor.WithProber(prober))
 
 			reaper := &lease.Reaper{
 				Registry: registry,

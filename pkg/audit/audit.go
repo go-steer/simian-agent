@@ -35,12 +35,20 @@ const (
 	EventDriverApplied     = "driver.applied"
 	EventDriverFailed      = "driver.failed"
 	EventLeaseRegistered   = "lease.registered"
-	EventLeaseHeartbeat    = "lease.heartbeat"
-	EventLeaseExpired      = "lease.expired"
-	EventLeaseCleared      = "lease.cleared"
-	EventPageDispatched    = "page.dispatched"
-	EventPageFailed        = "page.failed"
-	EventAgentResponse     = "agent.response_received"
+
+	// EventFaultEfficacy records one Settle probe: did the fault actually
+	// land, and what was observed. Emitted per probe, pass or fail. A fault
+	// with Settle probes and no passing fault.efficacy record did not manifest,
+	// and any eval result built on it is a harness bug rather than a data
+	// point — which is only reportable if the events are here to check.
+	EventFaultEfficacy = "fault.efficacy"
+
+	EventLeaseHeartbeat = "lease.heartbeat"
+	EventLeaseExpired   = "lease.expired"
+	EventLeaseCleared   = "lease.cleared"
+	EventPageDispatched = "page.dispatched"
+	EventPageFailed     = "page.failed"
+	EventAgentResponse  = "agent.response_received"
 
 	// M3 autonomous-mode cycle events.
 	EventCycleStarted     = "cycle.started"

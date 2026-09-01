@@ -25,6 +25,9 @@ const (
 	StageAudit  ExecutorStage = "audit"
 	StageDriver ExecutorStage = "driver"
 	StageLease  ExecutorStage = "lease"
+	// StageProbe is the efficacy gate that runs after the driver applied the
+	// fault: the fault exists, but has not been observed to take effect.
+	StageProbe ExecutorStage = "probe"
 )
 
 // RejectionReason is a stable identifier for why a manifest was rejected.
@@ -42,6 +45,17 @@ const (
 	ReasonBudgetExceeded       RejectionReason = "budget-exceeded"
 	ReasonDriverFailed         RejectionReason = "driver-failed"
 	ReasonLeaseFailed          RejectionReason = "lease-failed"
+
+	// ReasonProbeFailed means a Settle probe never passed within its timeout.
+	// Distinct from driver-failed on purpose: the fault was accepted by the
+	// cluster and simply did nothing, which is the failure mode that quietly
+	// turns an eval result into a confident wrong number.
+	ReasonProbeFailed RejectionReason = "probe-failed"
+
+	// ReasonProbeNotConfigured means the manifest carries Settle probes but no
+	// prober is wired in. Loud by design: silently skipping the gate would
+	// report unverified faults as verified.
+	ReasonProbeNotConfigured RejectionReason = "probe-not-configured"
 )
 
 // ExecutorError is the typed error returned by FaultExecutor methods. Callers
