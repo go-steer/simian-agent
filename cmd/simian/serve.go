@@ -191,10 +191,12 @@ func newServeCmd() *cobra.Command {
 			// cycle.health_gate_failed until establish_baseline is called by
 			// hand.
 			sutMgr := sut.NewManager(clientset, dyn, cached, sut.Default)
-			sutMgr.Store = sut.NewConfigMapStore(clientset)
+			// Same arena resolver the orphan reaper uses: baselines live in
+			// arena namespaces, so that is exactly where List should look.
+			sutMgr.Store = sut.NewConfigMapStore(clientset, arenaNamespaces)
 			if n, err := sutMgr.LoadCachedBaselines(cmd.Context()); err != nil {
-				logger.Warn("simian serve: baseline cache warm failed; continuing with empty cache",
-					slog.String("error", err.Error()))
+				logger.Warn("simian serve: baseline cache warm incomplete",
+					slog.Int("loaded", n), slog.String("error", err.Error()))
 			} else if n > 0 {
 				logger.Info("simian serve: baseline cache warmed", slog.Int("namespaces", n))
 			}

@@ -242,17 +242,20 @@ func (m *Manager) LoadCachedBaselines(ctx context.Context) (int, error) {
 	if m.Store == nil {
 		return 0, nil
 	}
+	// List may return baselines *and* an error: it searches namespace by
+	// namespace, and one unreadable arena should not discard the others.
+	// Warm what came back, then report the failure.
 	bls, err := m.Store.List(ctx)
-	if err != nil {
-		return 0, err
-	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	for _, bl := range bls {
 		if bl.Namespace == "" {
 			continue
 		}
 		m.baselines[bl.Namespace] = bl
+	}
+	m.mu.Unlock()
+	if err != nil {
+		return len(bls), err
 	}
 	return len(bls), nil
 }

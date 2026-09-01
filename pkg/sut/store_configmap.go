@@ -17,6 +17,7 @@ package sut
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -38,7 +39,8 @@ const (
 	configMapDataKey = "baseline.json"
 
 	// labelManagedBy and labelComponent are added so kubectl / Helm see the
-	// ConfigMap as ours and so the ConfigMapStore can list+filter cluster-wide.
+	// ConfigMap as ours and so List can tell our ConfigMaps apart from an
+	// operator's own inside an arena namespace.
 	labelManagedBy = "app.kubernetes.io/managed-by"
 	labelComponent = "simian.go-steer.dev/persistence"
 
@@ -58,14 +60,20 @@ const (
 //  2. RBAC scope stays tight — the controller only needs configmaps verbs on
 //     namespaces it already manages SUTs in.
 type ConfigMapStore struct {
-	client kubernetes.Interface
+	client     kubernetes.Interface
+	namespaces func(context.Context) ([]string, error)
 }
 
 // NewConfigMapStore constructs a ConfigMapStore over the given clientset.
 // Pass the same clientset already used for SUT manifest application — the
 // store does not need cluster-admin, just configmaps verbs on SUT namespaces.
-func NewConfigMapStore(client kubernetes.Interface) *ConfigMapStore {
-	return &ConfigMapStore{client: client}
+//
+// namespaces resolves where List looks. It is a constructor argument rather
+// than a settable field so that it cannot be forgotten: a store built without
+// one compiles, and the resulting List failure only shows up in a deployed
+// cluster where the fallback permission is absent. See List.
+func NewConfigMapStore(client kubernetes.Interface, namespaces func(context.Context) ([]string, error)) *ConfigMapStore {
+	return &ConfigMapStore{client: client, namespaces: namespaces}
 }
 
 // Save writes (or upserts) the ConfigMap holding bl. Uses Update-then-Create
@@ -132,31 +140,54 @@ func (s *ConfigMapStore) Delete(ctx context.Context, namespace string) error {
 	return fmt.Errorf("ConfigMapStore.Delete %s/%s: %w", namespace, configMapName, err)
 }
 
-// List returns every persisted baseline across all namespaces. Implemented as
-// a cluster-wide list filtered by our managed-by label so the controller
-// doesn't need to enumerate namespaces first.
+// List returns every persisted baseline, searching one namespace at a time.
+//
+// It used to list at metav1.NamespaceAll with a label selector. That reads
+// nicely but RBAC cannot filter by label, so it silently required read access
+// to every ConfigMap in the cluster — which the deployed controller does not
+// have and should not be given. The result was that the baseline cache never
+// warmed on any in-cluster start, degraded to a WARN, while working perfectly
+// under an operator's own kubeconfig. Listing per namespace needs only the
+// configmaps verbs the per-arena Role already grants.
+//
+// One unreadable namespace does not lose the others: partial results come back
+// alongside a joined error, and the caller decides. A namespace with no
+// baseline is not an error — most arenas won't have one.
 func (s *ConfigMapStore) List(ctx context.Context) ([]Baseline, error) {
-	selector := fmt.Sprintf("%s=%s,%s=%s", labelManagedBy, managedByValue, labelComponent, componentValue)
-	cms, err := s.client.CoreV1().ConfigMaps(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
-		LabelSelector: selector,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("ConfigMapStore.List: %w", err)
+	if s.namespaces == nil {
+		return nil, fmt.Errorf("ConfigMapStore.List: no namespace resolver configured")
 	}
-	out := make([]Baseline, 0, len(cms.Items))
-	for i := range cms.Items {
-		cm := &cms.Items[i]
-		raw, ok := cm.Data[configMapDataKey]
-		if !ok || raw == "" {
-			// Skip malformed entries rather than failing the whole list — a
-			// single corrupted ConfigMap shouldn't block warming the others.
+	namespaces, err := s.namespaces(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("ConfigMapStore.List: resolve namespaces: %w", err)
+	}
+	selector := fmt.Sprintf("%s=%s,%s=%s", labelManagedBy, managedByValue, labelComponent, componentValue)
+	var out []Baseline
+	var errs []error
+	for _, ns := range namespaces {
+		cms, err := s.client.CoreV1().ConfigMaps(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: selector,
+		})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("namespace %q: %w", ns, err))
 			continue
 		}
-		var bl Baseline
-		if err := json.Unmarshal([]byte(raw), &bl); err != nil {
-			continue
+		for i := range cms.Items {
+			raw, ok := cms.Items[i].Data[configMapDataKey]
+			if !ok || raw == "" {
+				// Skip malformed entries rather than failing the whole list —
+				// a single corrupted ConfigMap shouldn't block the others.
+				continue
+			}
+			var bl Baseline
+			if err := json.Unmarshal([]byte(raw), &bl); err != nil {
+				continue
+			}
+			out = append(out, bl)
 		}
-		out = append(out, bl)
+	}
+	if len(errs) > 0 {
+		return out, fmt.Errorf("ConfigMapStore.List: %w", errors.Join(errs...))
 	}
 	return out, nil
 }
