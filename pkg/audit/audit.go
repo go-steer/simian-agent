@@ -32,9 +32,14 @@ const (
 	EventExecutorReceived  = "executor.received"
 	EventExecutorValidated = "executor.validated"
 	EventExecutorRejected  = "executor.rejected"
-	EventDriverApplied     = "driver.applied"
-	EventDriverFailed      = "driver.failed"
-	EventLeaseRegistered   = "lease.registered"
+	// EventFaultPrecheck records one SOT probe: was the cluster in the state
+	// the fault's own verification assumes it starts from. Emitted per probe,
+	// pass or fail, before anything is applied.
+	EventFaultPrecheck = "fault.precheck"
+
+	EventDriverApplied   = "driver.applied"
+	EventDriverFailed    = "driver.failed"
+	EventLeaseRegistered = "lease.registered"
 
 	// EventFaultEfficacy records one Settle probe: did the fault actually
 	// land, and what was observed. Emitted per probe, pass or fail. A fault

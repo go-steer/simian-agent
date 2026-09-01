@@ -36,6 +36,7 @@ import (
 
 	"github.com/go-steer/simian-agent/pkg/arena"
 	"github.com/go-steer/simian-agent/pkg/audit"
+	"github.com/go-steer/simian-agent/pkg/catalog"
 	"github.com/go-steer/simian-agent/pkg/driver/chaosmesh"
 	"github.com/go-steer/simian-agent/pkg/driver/envoyfault"
 	"github.com/go-steer/simian-agent/pkg/driver/networkpolicy"
@@ -63,6 +64,7 @@ func newServeCmd() *cobra.Command {
 		durationCap          time.Duration
 		maxConcurrentFaults  int
 		minCooldown          time.Duration
+		defaultProbes        bool
 		reapInterval         time.Duration
 		holderID             string
 		debugLLMPayloads     bool
@@ -136,11 +138,23 @@ func newServeCmd() *cobra.Command {
 			registry := lease.NewRegistry(holderID)
 			history := executor.NewHistory(recentFaultsCapacity)
 			// Efficacy gate: a fault with Settle probes is not reported as
-			// applied until they pass. Shares the chaos driver's REST mapper
-			// so a probe can name any resource the cluster knows about.
-			prober := probe.NewK8sProber(dyn, restmapper.NewDeferredDiscoveryRESTMapper(cached))
-			exec := executor.New(execCfg, drivers, registry, auditor, elig,
-				executor.WithHistory(history), executor.WithProber(prober))
+			// applied until they pass, and one with SOT probes is not applied
+			// at all until they do. The k8s prober shares the chaos driver's
+			// REST mapper so a probe can name any resource the cluster knows
+			// about; the http prober dials pod IPs directly, the same way the
+			// envoy-fault driver reaches each sidecar's admin API.
+			prober := probe.NewMux(map[string]probe.Prober{
+				simian.ProbeTypeK8s:  probe.NewK8sProber(dyn, restmapper.NewDeferredDiscoveryRESTMapper(cached)),
+				simian.ProbeTypeHTTP: probe.NewKubernetesHTTPProber(clientset),
+			})
+			execOpts := []executor.Option{
+				executor.WithHistory(history),
+				executor.WithProber(prober),
+			}
+			if defaultProbes {
+				execOpts = append(execOpts, executor.WithDefaultProbes(catalog.DefaultProbes))
+			}
+			exec := executor.New(execCfg, drivers, registry, auditor, elig, execOpts...)
 
 			reaper := &lease.Reaper{
 				Registry: registry,
@@ -302,6 +316,7 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&durationCap, "duration-ceiling", 0, "Override executor duration ceiling (default 15m)")
 	cmd.Flags().IntVar(&maxConcurrentFaults, "max-concurrent-faults", 0, "Cap on total leased faults across all namespaces (0 = no cap). Enforced by the safety stage; rejected applies surface as executor.rejected with reason safety:budget-exceeded.")
 	cmd.Flags().DurationVar(&minCooldown, "min-cooldown", 0, "Minimum gap between consecutive faults applied to the same namespace (0 = disabled)")
+	cmd.Flags().BoolVar(&defaultProbes, "default-efficacy-probes", true, "Attach Simian's built-in efficacy probes to fault kinds that have one (see the catalog's efficacy_gate field). Turning this off applies dataplane faults unverified: a fault the cluster accepts but silently drops is then indistinguishable from one that worked.")
 	cmd.Flags().DurationVar(&reapInterval, "reap-interval", 30*time.Second, "Lease reaper sweep interval")
 	cmd.Flags().StringVar(&holderID, "holder-id", os.Getenv("HOSTNAME"), "Holder ID recorded on leases (defaults to HOSTNAME)")
 	cmd.Flags().BoolVar(&debugLLMPayloads, "debug-llm-payloads", false, "Log raw LLM responses (debug only; do not enable in production — see design.md §12.2)")

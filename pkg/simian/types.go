@@ -74,7 +74,15 @@ const (
 	// harness grade its own experiment.
 	ProbeModeSettle = "Settle"
 
-	ProbeModeSOT        = "SOT"
+	// ProbeModeSOT gates the fault before it is applied: every SOT probe must
+	// pass or the manifest is rejected without the cluster being touched.
+	//
+	// This is what keeps a Settle probe honest. "The workload is unreachable"
+	// is not evidence a partition landed unless the workload was reachable a
+	// moment earlier — otherwise the gate passes for the wrong reason, which is
+	// the same class of bug as a check that asserts nothing at all.
+	ProbeModeSOT = "SOT"
+
 	ProbeModeEOT        = "EOT"
 	ProbeModeEdge       = "Edge"
 	ProbeModeContinuous = "Continuous"
@@ -104,11 +112,18 @@ type ProbeSpec struct {
 	Spec map[string]any `json:"spec"`
 }
 
-// SettleProbes returns the probes that gate Apply, in declaration order.
-func (m FaultManifest) SettleProbes() []ProbeSpec {
+// SettleProbes returns the probes that gate Apply after the driver has run,
+// in declaration order.
+func (m FaultManifest) SettleProbes() []ProbeSpec { return m.probesInMode(ProbeModeSettle) }
+
+// SOTProbes returns the probes that gate Apply before the driver has run, in
+// declaration order.
+func (m FaultManifest) SOTProbes() []ProbeSpec { return m.probesInMode(ProbeModeSOT) }
+
+func (m FaultManifest) probesInMode(mode string) []ProbeSpec {
 	var out []ProbeSpec
 	for _, p := range m.Probes {
-		if p.Mode == ProbeModeSettle {
+		if p.Mode == mode {
 			out = append(out, p)
 		}
 	}
@@ -281,6 +296,15 @@ type CatalogEntry struct {
 	// SchemaJSON is the CRD's OpenAPI schema for the spec field, JSON-encoded.
 	// Optional in M1; required for full schema validation.
 	SchemaJSON []byte `json:"schema_json,omitempty"`
+	// EfficacyGate describes, in one line, the default probes Simian attaches
+	// to a manifest of this kind that declares none of its own. Empty means
+	// this kind has no default gate and a fault of it is applied unverified —
+	// which the planner should know, because it changes what the result means.
+	//
+	// The probes themselves are built per manifest (they aim at whatever the
+	// fault aims at), so the catalog carries the description rather than
+	// pretending a static spec would be accurate.
+	EfficacyGate string `json:"efficacy_gate,omitempty"`
 }
 
 // IncidentNotification is the Red Phone outbound payload schema (M5).

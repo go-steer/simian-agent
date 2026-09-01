@@ -271,6 +271,7 @@ func (d *Driver) Catalog(_ context.Context) ([]simian.CatalogEntry, error) {
 			ResourceKind:    Kind,
 			BlastRadiusTier: catalog.Classify(simian.EngineNetworkPolicy, Kind),
 			Description:     "Standard K8s NetworkPolicy partition (works on GKE Dataplane V2; partition only, no delay/loss).",
+			EfficacyGate:    catalog.EfficacyGate(simian.EngineNetworkPolicy, Kind),
 			SpecTemplate: `Use this for partition-style chaos: completely cut off ingress, egress,
 or both for a labeled set of pods. Works on GKE Dataplane V2.
 

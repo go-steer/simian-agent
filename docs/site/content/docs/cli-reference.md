@@ -46,6 +46,7 @@ Set on `simian serve`:
 | `--duration-ceiling` | 15m | Hard cap per fault. |
 | `--max-concurrent-faults` | 0 (no cap) | Total leased faults across namespaces. Rejected applies surface as `executor.rejected` with reason `safety:budget-exceeded`. |
 | `--min-cooldown` | 0 | Per-namespace cooldown between consecutive faults. |
+| `--default-efficacy-probes` | true | Attach Simian's own [efficacy gate]({{< relref "efficacy-probes.md" >}}) to every fault kind that has one. Set false to accept faults that report success without proving they landed. |
 
 ### Autonomous mode
 

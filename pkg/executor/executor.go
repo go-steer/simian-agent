@@ -41,6 +41,9 @@ type Executor struct {
 	elig     EligibilityChecker
 	history  *History // optional; nil disables get_recent_faults backing
 	prober   probe.Prober
+	// defaultProbes supplies the gate for manifests that declare none. nil
+	// leaves every fault gated only by what its author wrote.
+	defaultProbes func(simian.FaultManifest) []simian.ProbeSpec
 
 	mu            sync.Mutex
 	lastApplyByNS map[string]time.Time
@@ -61,6 +64,17 @@ func WithHistory(h *History) Option {
 // probes is rejected rather than applied unverified — see Executor.settle.
 func WithProber(p probe.Prober) Option {
 	return func(e *Executor) { e.prober = p }
+}
+
+// WithDefaultProbes makes Simian attach its own efficacy gate to manifests
+// that do not bring one — catalog.DefaultProbes in production.
+//
+// This is an operator decision, not a manifest one. A fault's author is the
+// planner being evaluated against it; letting the manifest opt out of its own
+// verification would put the harness's honesty in the hands of the thing the
+// harness is measuring.
+func WithDefaultProbes(fn func(simian.FaultManifest) []simian.ProbeSpec) Option {
+	return func(e *Executor) { e.defaultProbes = fn }
 }
 
 // New constructs an Executor.
@@ -119,20 +133,29 @@ func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, e
 		return "", err
 	}
 
+	// Attach Simian's own gate before anything reads m.Probes. Done after
+	// narrowing so a default probe inherits the selector the driver will
+	// actually be given, not the one the manifest arrived with.
+	attached := e.attachDefaultProbes(&m)
+
 	validated := simian.AuditEvent{
 		Event:    audit.EventExecutorValidated,
 		FaultUID: m.UID,
 		PlanID:   m.PlanID,
 		Mode:     m.Source,
 	}
+	if len(attached) > 0 || len(narrowed) > 0 {
+		validated.Payload = map[string]any{}
+	}
+	if len(attached) > 0 {
+		validated.Payload["default_probes"] = attached
+	}
 	if len(narrowed) > 0 {
 		// The spec left a selector unscoped and we pinned it to the target
 		// namespaces. Record it: the manifest that reaches the driver is no
 		// longer byte-identical to the one that was submitted.
-		validated.Payload = map[string]any{
-			"selectors_narrowed_to": targetNamespaces(m),
-			"selector_paths":        narrowed,
-		}
+		validated.Payload["selectors_narrowed_to"] = targetNamespaces(m)
+		validated.Payload["selector_paths"] = narrowed
 	}
 	e.auditor.Emit(ctx, validated)
 
@@ -140,6 +163,14 @@ func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, e
 	if !ok {
 		err := simian.NewExecutorError(simian.StageDriver, simian.ReasonDriverFailed,
 			fmt.Sprintf("no driver registered for engine %q", m.Engine), nil)
+		e.rejected(ctx, m, err)
+		return "", err
+	}
+
+	// Nothing has touched the cluster yet, which is the point: a fault whose
+	// starting conditions do not hold is rejected outright rather than applied
+	// and rolled back.
+	if err := e.precheck(ctx, m); err != nil {
 		e.rejected(ctx, m, err)
 		return "", err
 	}
@@ -209,7 +240,41 @@ func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, e
 // otherwise drift apart and the fault would outlive its lease. The cost shows
 // up as elapsed_ms on the efficacy event rather than as a silent discrepancy.
 func (e *Executor) settle(ctx context.Context, m simian.FaultManifest) error {
-	probes := m.SettleProbes()
+	return e.runProbes(ctx, m, m.SettleProbes(), probeStage{
+		mode:   simian.ProbeModeSettle,
+		event:  audit.EventFaultEfficacy,
+		stage:  simian.StageProbe,
+		reason: simian.ReasonProbeFailed,
+	})
+}
+
+// precheck runs the manifest's SOT probes before the driver does anything.
+//
+// A Settle probe only means something relative to a starting state. "The
+// workload does not answer" proves a partition landed exactly when the
+// workload answered a moment ago and nothing else changed in between; against
+// a workload that was already down it is a gate that passes for the wrong
+// reason, which is indistinguishable from no gate at all.
+func (e *Executor) precheck(ctx context.Context, m simian.FaultManifest) error {
+	return e.runProbes(ctx, m, m.SOTProbes(), probeStage{
+		mode:   simian.ProbeModeSOT,
+		event:  audit.EventFaultPrecheck,
+		stage:  simian.StagePrecheck,
+		reason: simian.ReasonPrecheckFailed,
+	})
+}
+
+// probeStage is the per-mode wiring shared by precheck and settle.
+type probeStage struct {
+	mode   string
+	event  string
+	stage  simian.ExecutorStage
+	reason simian.RejectionReason
+}
+
+// runProbes runs one mode's probes in order, emitting an audit event per
+// probe, and stops at the first that does not pass.
+func (e *Executor) runProbes(ctx context.Context, m simian.FaultManifest, probes []simian.ProbeSpec, st probeStage) error {
 	if len(probes) == 0 {
 		return nil
 	}
@@ -217,19 +282,21 @@ func (e *Executor) settle(ctx context.Context, m simian.FaultManifest) error {
 		// Loud, not skipped. Treating an unrunnable gate as a passing one
 		// would mark unverified faults verified, which is the failure this
 		// whole mechanism exists to prevent.
-		return simian.NewExecutorError(simian.StageProbe, simian.ReasonProbeNotConfigured,
-			fmt.Sprintf("manifest declares %d Settle probe(s) but the executor has no prober wired in", len(probes)), nil)
+		return simian.NewExecutorError(st.stage, simian.ReasonProbeNotConfigured,
+			fmt.Sprintf("manifest declares %d %s probe(s) but the executor has no prober wired in", len(probes), st.mode), nil)
 	}
 
-	ns := ""
+	target := probe.Target{}
 	if len(m.Targets) > 0 {
-		ns = m.Targets[0].Namespace
+		target.Namespace = m.Targets[0].Namespace
+		target.Labels = m.Targets[0].Labels
 	}
 	for _, p := range probes {
-		res := e.prober.Run(ctx, p, ns)
+		res := e.prober.Run(ctx, p, target)
 		payload := map[string]any{
 			"probe":      res.Name,
 			"type":       res.Type,
+			"mode":       st.mode,
 			"passed":     res.Passed,
 			"observed":   res.Observed,
 			"expected":   res.Expected,
@@ -238,13 +305,13 @@ func (e *Executor) settle(ctx context.Context, m simian.FaultManifest) error {
 		}
 		reason := ""
 		if !res.Passed {
-			reason = string(simian.ReasonProbeFailed)
+			reason = string(st.reason)
 		}
 		if res.Err != nil {
 			payload["error"] = res.Err.Error()
 		}
 		e.auditor.Emit(ctx, simian.AuditEvent{
-			Event:    audit.EventFaultEfficacy,
+			Event:    st.event,
 			FaultUID: m.UID,
 			PlanID:   m.PlanID,
 			Mode:     m.Source,
@@ -252,11 +319,28 @@ func (e *Executor) settle(ctx context.Context, m simian.FaultManifest) error {
 			Payload:  payload,
 		})
 		if !res.Passed {
-			return simian.NewExecutorError(simian.StageProbe, simian.ReasonProbeFailed,
-				res.Describe(), res.Err)
+			return simian.NewExecutorError(st.stage, st.reason, res.Describe(), res.Err)
 		}
 	}
 	return nil
+}
+
+// attachDefaultProbes appends Simian's own gate to m and returns the names it
+// added, for the audit record. No-op when no default source is wired.
+func (e *Executor) attachDefaultProbes(m *simian.FaultManifest) []string {
+	if e.defaultProbes == nil {
+		return nil
+	}
+	defaults := e.defaultProbes(*m)
+	if len(defaults) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(defaults))
+	for _, p := range defaults {
+		names = append(names, p.Name)
+	}
+	m.Probes = append(m.Probes, defaults...)
+	return names
 }
 
 // abandon backs out a fault that was applied but never manifested.

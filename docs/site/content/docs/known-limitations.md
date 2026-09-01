@@ -17,6 +17,7 @@ References: [chaos-mesh#3302](https://github.com/chaos-mesh/chaos-mesh/issues/33
 
 - The [`network-policy` engine]({{< relref "chaos-engines.md" >}}) handles partition-style chaos. Works on DPv2.
 - The [`envoy-fault` engine]({{< relref "chaos-engines.md" >}}) handles HTTP-layer delay + abort via an injected Envoy sidecar. Works on DPv2 (subject to the limitation immediately below).
+- The word *silently* no longer applies. `NetworkChaos` carries a [default efficacy gate]({{< relref "efficacy-probes.md" >}}): a partition or delay that the qdisc never applied fails at inject time with a named probe and is rolled back, instead of being reported as a fault the agent under test then gets scored on. Same for `NetworkPolicy` on a CNI that does not enforce it.
 
 For non-network chaos, `PodChaos` / `StressChaos` / `TimeChaos` / `IOChaos` / `JVMChaos` continue to work fine on Dataplane V2. See [DPv2-compatible chaos engines]({{< relref "dpv2-chaos-engines.md" >}}) for the full design rationale.
 
