@@ -77,9 +77,9 @@ func (s k8sSpec) satisfied(out string) bool {
 }
 
 // Run implements Prober.
-func (k *K8sProber) Run(ctx context.Context, p simian.ProbeSpec, defaultNamespace string) Result {
+func (k *K8sProber) Run(ctx context.Context, p simian.ProbeSpec, target Target) Result {
 	res := Result{Name: p.Name, Type: p.Type}
-	spec, err := parseK8sSpec(p.Spec, defaultNamespace)
+	spec, err := parseK8sSpec(p.Spec, target)
 	if err != nil {
 		res.Err = fmt.Errorf("probe %q: %w", p.Name, err)
 		return res
@@ -186,7 +186,7 @@ func (k *K8sProber) resolve(resource string) (schema.GroupVersionResource, error
 }
 
 // parseK8sSpec decodes and validates a k8s probe's Spec map.
-func parseK8sSpec(raw map[string]any, defaultNamespace string) (k8sSpec, error) {
+func parseK8sSpec(raw map[string]any, target Target) (k8sSpec, error) {
 	s := k8sSpec{
 		timeout:  DefaultTimeout,
 		interval: DefaultInterval,
@@ -227,13 +227,18 @@ func parseK8sSpec(raw map[string]any, defaultNamespace string) (k8sSpec, error) 
 		return s, fmt.Errorf("k8s probe: %q is required", "jsonpath")
 	}
 	if s.namespace == "" {
-		s.namespace = defaultNamespace
+		s.namespace = target.Namespace
 	}
 	if s.namespace == "" {
 		return s, fmt.Errorf("k8s probe: no namespace, and the fault declares no target namespace to fall back to")
 	}
 	if s.name != "" && s.labelSelector != "" {
 		return s, fmt.Errorf("k8s probe: %q and %q are mutually exclusive", "name", "label_selector")
+	}
+	if s.name == "" && s.labelSelector == "" {
+		// Aim at whatever the fault aims at. This is what lets a default probe
+		// be written once per fault kind instead of once per manifest.
+		s.labelSelector = target.Selector()
 	}
 
 	// A probe must state a condition, and "expect_contains": "" is not one:
@@ -254,47 +259,4 @@ func parseK8sSpec(raw map[string]any, defaultNamespace string) (k8sSpec, error) 
 		return s, fmt.Errorf("k8s probe: %q must be positive, got %s", "interval", s.interval)
 	}
 	return s, nil
-}
-
-func optString(raw map[string]any, key string) (string, error) {
-	v, ok := raw[key]
-	if !ok || v == nil {
-		return "", nil
-	}
-	s, ok := v.(string)
-	if !ok {
-		return "", fmt.Errorf("k8s probe: %q must be a string, got %T", key, v)
-	}
-	return s, nil
-}
-
-func optBool(raw map[string]any, key string) (bool, error) {
-	v, ok := raw[key]
-	if !ok || v == nil {
-		return false, nil
-	}
-	b, ok := v.(bool)
-	if !ok {
-		return false, fmt.Errorf("k8s probe: %q must be a bool, got %T", key, v)
-	}
-	return b, nil
-}
-
-// optDuration accepts a Go duration string ("90s", "2m"). Numbers are rejected
-// rather than guessed at: "timeout": 30 is ambiguous between seconds and
-// nanoseconds, and picking wrong turns the gate into a no-op or a hang.
-func optDuration(raw map[string]any, key string, def time.Duration) (time.Duration, error) {
-	v, ok := raw[key]
-	if !ok || v == nil {
-		return def, nil
-	}
-	s, ok := v.(string)
-	if !ok {
-		return 0, fmt.Errorf("k8s probe: %q must be a duration string like \"90s\", got %T", key, v)
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, fmt.Errorf("k8s probe: %q: %w", key, err)
-	}
-	return d, nil
 }

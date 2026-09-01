@@ -28,6 +28,10 @@ const (
 	// StageProbe is the efficacy gate that runs after the driver applied the
 	// fault: the fault exists, but has not been observed to take effect.
 	StageProbe ExecutorStage = "probe"
+	// StagePrecheck is the gate that runs before the driver: the cluster was
+	// not in the state the fault's own verification assumes it starts from.
+	// Nothing has been applied when this stage fails.
+	StagePrecheck ExecutorStage = "precheck"
 )
 
 // RejectionReason is a stable identifier for why a manifest was rejected.
@@ -51,6 +55,12 @@ const (
 	// cluster and simply did nothing, which is the failure mode that quietly
 	// turns an eval result into a confident wrong number.
 	ReasonProbeFailed RejectionReason = "probe-failed"
+
+	// ReasonPrecheckFailed means an SOT probe never passed, so the experiment
+	// would have started from a state its own verification cannot interpret —
+	// a workload that was already unreachable, or already slow. Rejected before
+	// the driver runs, so there is nothing to roll back.
+	ReasonPrecheckFailed RejectionReason = "precheck-failed"
 
 	// ReasonProbeNotConfigured means the manifest carries Settle probes but no
 	// prober is wired in. Loud by design: silently skipping the gate would

@@ -41,7 +41,7 @@ Simian must verify **efficacy** and must not verify **outcome**.
 
 This is not a theoretical hazard. `NetworkChaos` on GKE Dataplane V2 is
 silently bypassed (M1 verification notes, `dpv2-chaos-engines.md`), and
-`NetworkPolicy` is a no-op under kindnet. A fault that silently does nothing
+`NetworkPolicy` was long a no-op under kindnet. A fault that silently does nothing
 produces an eval result that reads **"the agent missed a network partition"**
 when there was no network partition. That is worse than no measurement,
 because it is a confident wrong number.
@@ -523,19 +523,19 @@ exactly this. `kindcluster` is the closer fit — it is Go, it is already shaped
 as a library for a test harness, and it does fresh-per-run with a
 `context.WithoutCancel` teardown.
 
-Note the constraint discovered earlier: kindnet does not enforce
-NetworkPolicy, and GKE Dataplane V2 bypasses Chaos Mesh `NetworkChaos`. **No
+Note the constraint discovered earlier: how much of NetworkPolicy the CNI
+enforces varies, and GKE Dataplane V2 bypasses Chaos Mesh `NetworkChaos`. **No
 single environment runs all of Simian's engines.** The kind config must
-therefore either select a CNI that enforces NetworkPolicy (Calico) or the
+therefore either pin a CNI that enforces NetworkPolicy (Calico) or the
 dataplane pack must declare which environments it is valid in — and §5's
 efficacy probes are what make that failure loud instead of silent.
 
 #### Decision: kind + Calico is the reference environment *(#53, shipped)*
 
-Calico, not kindnet. kindnet *accepts* `NetworkPolicy` objects and does not
-enforce them, and Simian's `network-policy` engine works by creating exactly
-those objects. On kindnet a partition fault applies cleanly, reports success,
-and blocks nothing.
+Calico, pinned. Older kindnet *accepted* `NetworkPolicy` objects without
+enforcing them, and Simian's `network-policy` engine works by creating exactly
+those objects: a partition fault would apply cleanly, report success, and block
+nothing.
 
 For a chaos tool that is a bug. For an eval rig it is disqualifying — the
 subject under test gets scored on an incident that never happened, and there is
@@ -543,14 +543,20 @@ no error anywhere to notice, just a fault that did not land. That is the
 precise failure mode §5 exists to prevent, so the substrate must not be the
 thing introducing it.
 
+Recent kindnet closes that particular gap — measured on kind v0.31.0 /
+Kubernetes v1.35.0, a workload is reachable before a deny-all-ingress policy
+and refused after. The rig still pins Calico, for reasons unrelated to the old
+caveat: Calico is what the eval targets look like, and a pinned CNI does not
+change behaviour underneath the rig when the node image moves.
+
 | engine | kind + kindnet | kind + Calico | GKE Dataplane V2 |
 | --- | --- | --- | --- |
 | `chaos-mesh` | yes | yes | `NetworkChaos`: no |
-| `network-policy` | applies, inert | yes | yes |
+| `network-policy` | recent kindnet only | yes | yes |
 | `envoy-fault` | yes | yes | yes |
 
-kind + Calico is the only environment that runs all three implemented engines,
-so it is the reference. GKE Dataplane V2 stays a second target where
+kind + Calico is the reference because it runs all three implemented engines on
+a version Simian pins. GKE Dataplane V2 stays a second target where
 `chaos-mesh` `NetworkChaos` scenarios are invalid; declaring that per-scenario
 lands with the dataplane pack (#67).
 

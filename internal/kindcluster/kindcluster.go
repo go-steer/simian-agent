@@ -95,8 +95,8 @@ type Config struct {
 
 	// ConfigFile is a kind cluster config YAML (node topology, CNI choice).
 	// Empty uses kind's defaults, which is almost never what Simian wants —
-	// the default CNI does not enforce NetworkPolicy, so the network-policy
-	// engine would silently no-op. See dev/kind/cluster.yaml.
+	// the CNI is then whatever the node image ships, and how much of
+	// NetworkPolicy it enforces moves with it. See dev/kind/cluster.yaml.
 	ConfigFile string
 
 	// Image is the node image (e.g. "kindest/node:v1.34.8"). Empty uses the

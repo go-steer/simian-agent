@@ -16,27 +16,31 @@
 #
 # ── Why not the default CNI ──────────────────────────────────────────
 #
-# kind ships kindnet, which *accepts* NetworkPolicy objects and does not
-# enforce them. Simian's network-policy engine works by creating exactly
-# those objects. On kindnet a partition fault would apply cleanly, report
-# success, and block nothing.
-#
-# For a chaos tool that is a bug. For an eval rig it is disqualifying:
+# Historically kindnet *accepted* NetworkPolicy objects and did not
+# enforce them, which is disqualifying for an eval rig: Simian's
+# network-policy engine works by creating exactly those objects, so a
+# partition fault would apply cleanly, report success, block nothing, and
 # the subject under test would be scored on an incident that never
-# happened, and the failure is invisible — there is no error anywhere,
-# just a fault that did not land.
+# happened.
 #
-# So the default CNI is disabled and Calico is installed instead (see
-# internal/kindcluster/install.go). Calico enforces NetworkPolicy and
-# leaves Chaos Mesh's iptables/tc manipulation working, which makes this
-# the one environment that runs all three of Simian's implemented
-# engines:
+# Recent kindnet does enforce NetworkPolicy — measured on kind v0.31.0 /
+# Kubernetes v1.35.0, reachable before a deny-all-ingress policy and
+# refused after. The default CNI is still disabled here for two reasons
+# that have nothing to do with that: Calico is what the eval targets look
+# like, and pinning the CNI keeps the rig from silently changing
+# behaviour as the node image moves. Note that "the CNI enforces it" is
+# not something Simian takes on trust either way — the efficacy gate on
+# every NetworkPolicy fault proves it per fault, per cluster.
 #
-#   engine           kind + kindnet   kind + Calico   GKE Dataplane V2
-#   ───────────────  ──────────────   ─────────────   ────────────────
-#   chaos-mesh       yes              yes             NetworkChaos: no
-#   network-policy   applies, inert   yes             yes
-#   envoy-fault      yes              yes             yes
+# Calico enforces NetworkPolicy and leaves Chaos Mesh's iptables/tc
+# manipulation working, which makes this the one environment that runs
+# all three of Simian's implemented engines:
+#
+#   engine           kind + kindnet     kind + Calico   GKE Dataplane V2
+#   ───────────────  ────────────────   ─────────────   ────────────────
+#   chaos-mesh       yes                yes             NetworkChaos: no
+#   network-policy   yes (recent only)  yes             yes
+#   envoy-fault      yes                yes             yes
 #
 # GKE Dataplane V2 (Cilium, eBPF) bypasses the netfilter hooks Chaos Mesh
 # NetworkChaos relies on — that is why the network-policy and envoy-fault

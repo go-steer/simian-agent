@@ -33,14 +33,14 @@ type fakeProber struct {
 	mu      sync.Mutex
 	results []probe.Result
 	calls   []simian.ProbeSpec
-	nsSeen  []string
+	seen    []probe.Target
 }
 
-func (f *fakeProber) Run(_ context.Context, p simian.ProbeSpec, ns string) probe.Result {
+func (f *fakeProber) Run(_ context.Context, p simian.ProbeSpec, target probe.Target) probe.Result {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, p)
-	f.nsSeen = append(f.nsSeen, ns)
+	f.seen = append(f.seen, target)
 	if len(f.results) == 0 {
 		return probe.Result{Name: p.Name, Type: p.Type, Passed: true}
 	}
@@ -63,7 +63,7 @@ func settleProbe(name string) simian.ProbeSpec {
 
 // newProbedExecutor builds an executor whose only arena is "online-boutique",
 // wiring prober unless it is nil.
-func newProbedExecutor(t *testing.T, prober probe.Prober) (*Executor, *testutil.FakeDriver, *testutil.FakeAuditor, *lease.Registry) {
+func newProbedExecutor(t *testing.T, prober probe.Prober, extra ...Option) (*Executor, *testutil.FakeDriver, *testutil.FakeAuditor, *lease.Registry) {
 	t.Helper()
 	driver := &testutil.FakeDriver{EngineName: simian.EngineChaosMesh}
 	registry := lease.NewRegistry("test-holder")
@@ -73,6 +73,7 @@ func newProbedExecutor(t *testing.T, prober probe.Prober) (*Executor, *testutil.
 	if prober != nil {
 		opts = append(opts, WithProber(prober))
 	}
+	opts = append(opts, extra...)
 	exec := New(DefaultConfig(), map[simian.Engine]simian.ChaosDriver{simian.EngineChaosMesh: driver},
 		registry, auditor, elig, opts...)
 	return exec, driver, auditor, registry
@@ -284,7 +285,7 @@ func TestSettleProbesGetTheFaultsOwnNamespace(t *testing.T) {
 	if _, err := exec.Apply(context.Background(), m); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if got := prober.nsSeen[0]; got != "online-boutique" {
+	if got := prober.seen[0].Namespace; got != "online-boutique" {
 		t.Errorf("probe default namespace=%q, want %q", got, "online-boutique")
 	}
 }

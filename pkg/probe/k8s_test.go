@@ -98,7 +98,7 @@ func TestK8sProbePassesWhenTheClusterAlreadySaysWhatWeExpect(t *testing.T) {
 	dyn := newFakeDyn(pod("boutique", "payments-1", "CrashLoopBackOff"))
 	p := NewK8sProber(dyn, testMapper())
 
-	res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), "boutique")
+	res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), Target{Namespace: "boutique"})
 	if res.Err != nil {
 		t.Fatalf("Err: %v", res.Err)
 	}
@@ -136,7 +136,7 @@ func TestK8sProbeKeepsPollingUntilTheFaultActuallyManifests(t *testing.T) {
 	})
 	p := NewK8sProber(dyn, testMapper())
 
-	res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), "boutique")
+	res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), Target{Namespace: "boutique"})
 	if !res.Passed {
 		t.Fatalf("probe never passed; observed %q, attempts %d", res.Observed, res.Attempts)
 	}
@@ -150,7 +150,7 @@ func TestK8sProbeTimesOutReportingWhatItLastSaw(t *testing.T) {
 	dyn := newFakeDyn(pod("boutique", "payments-1", "ImagePullBackOff"))
 	p := NewK8sProber(dyn, testMapper())
 
-	res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), "boutique")
+	res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), Target{Namespace: "boutique"})
 	if res.Passed {
 		t.Fatal("probe passed against a pod that never crash-looped")
 	}
@@ -185,7 +185,7 @@ func TestK8sProbeHandlesAFaultWhoseSignatureIsAnAbsence(t *testing.T) {
 		"endpoints": []any{},
 	}}
 	p := NewK8sProber(newFakeDyn(empty), testMapper())
-	res := p.Run(context.Background(), k8sProbe(spec), "boutique")
+	res := p.Run(context.Background(), k8sProbe(spec), Target{Namespace: "boutique"})
 	if res.Err != nil {
 		t.Fatalf("Err: %v", res.Err)
 	}
@@ -202,7 +202,7 @@ func TestK8sProbeHandlesAFaultWhoseSignatureIsAnAbsence(t *testing.T) {
 		}},
 	}}
 	p2 := NewK8sProber(newFakeDyn(populated), testMapper())
-	res2 := p2.Run(context.Background(), k8sProbe(spec), "boutique")
+	res2 := p2.Run(context.Background(), k8sProbe(spec), Target{Namespace: "boutique"})
 	if res2.Passed {
 		t.Fatalf("expect_empty passed with an address present: observed %q", res2.Observed)
 	}
@@ -288,7 +288,7 @@ func TestK8sProbeRejectsSpecsThatWouldPassUnconditionally(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := base()
 			tc.mutate(s)
-			res := p.Run(context.Background(), k8sProbe(s), "boutique")
+			res := p.Run(context.Background(), k8sProbe(s), Target{Namespace: "boutique"})
 			if res.Err == nil {
 				t.Fatalf("spec accepted, want rejection (passed=%v)", res.Passed)
 			}
@@ -316,7 +316,7 @@ func TestK8sProbeReadsOneNamedObjectWhenGivenAName(t *testing.T) {
 		"interval":        "10ms",
 	}
 	p := NewK8sProber(dyn, testMapper())
-	res := p.Run(context.Background(), k8sProbe(spec), "boutique")
+	res := p.Run(context.Background(), k8sProbe(spec), Target{Namespace: "boutique"})
 	if res.Err != nil {
 		t.Fatalf("Err: %v", res.Err)
 	}
@@ -331,7 +331,7 @@ func TestK8sProbeTreatsMissingKeysAsEmptyRatherThanAnError(t *testing.T) {
 	// reason and never get the chance to succeed.
 	dyn := newFakeDyn(pod("boutique", "payments-1", ""))
 	p := NewK8sProber(dyn, testMapper())
-	res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), "boutique")
+	res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), Target{Namespace: "boutique"})
 	if res.Err != nil {
 		t.Fatalf("missing key surfaced as an error: %v", res.Err)
 	}
@@ -355,7 +355,7 @@ func TestK8sProbeDefaultsToTheFaultsNamespaceAndHonoursAnExplicitOne(t *testing.
 	})
 	p := NewK8sProber(dyn, testMapper())
 
-	if res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), "boutique"); !res.Passed {
+	if res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), Target{Namespace: "boutique"}); !res.Passed {
 		t.Fatalf("probe did not pass: %+v", res)
 	}
 	if len(seen) == 0 || seen[0] != "boutique" {
@@ -364,7 +364,7 @@ func TestK8sProbeDefaultsToTheFaultsNamespaceAndHonoursAnExplicitOne(t *testing.
 
 	spec := crashLoopSpec()
 	spec["namespace"] = "other"
-	_ = p.Run(context.Background(), k8sProbe(spec), "boutique")
+	_ = p.Run(context.Background(), k8sProbe(spec), Target{Namespace: "boutique"})
 	mu.Lock()
 	last := seen[len(seen)-1]
 	mu.Unlock()
@@ -375,7 +375,7 @@ func TestK8sProbeDefaultsToTheFaultsNamespaceAndHonoursAnExplicitOne(t *testing.
 
 func TestK8sProbeWithoutAnyNamespaceSaysSo(t *testing.T) {
 	p := NewK8sProber(newFakeDyn(), testMapper())
-	res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), "")
+	res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), Target{})
 	if res.Err == nil {
 		t.Fatal("probe ran with no namespace at all")
 	}
@@ -400,7 +400,7 @@ func TestK8sProbePassesTheLabelSelectorThrough(t *testing.T) {
 	spec := crashLoopSpec()
 	spec["label_selector"] = "app=payments"
 	p := NewK8sProber(dyn, testMapper())
-	if res := p.Run(context.Background(), k8sProbe(spec), "boutique"); !res.Passed {
+	if res := p.Run(context.Background(), k8sProbe(spec), Target{Namespace: "boutique"}); !res.Passed {
 		t.Fatalf("probe did not pass: %+v", res)
 	}
 	if len(selectors) == 0 || selectors[0] != "app=payments" {
@@ -412,7 +412,7 @@ func TestK8sProbeNamesAnUnknownResource(t *testing.T) {
 	spec := crashLoopSpec()
 	spec["resource"] = "widgets"
 	p := NewK8sProber(newFakeDyn(), testMapper())
-	res := p.Run(context.Background(), k8sProbe(spec), "boutique")
+	res := p.Run(context.Background(), k8sProbe(spec), Target{Namespace: "boutique"})
 	if res.Err == nil {
 		t.Fatal("unknown resource accepted")
 	}
@@ -436,7 +436,7 @@ func TestK8sProbePollsThroughATransientReadFailure(t *testing.T) {
 		return false, nil, nil
 	})
 	p := NewK8sProber(dyn, testMapper())
-	res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), "boutique")
+	res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), Target{Namespace: "boutique"})
 	if !res.Passed {
 		t.Fatalf("a transient read error ended the probe: %+v", res)
 	}
@@ -451,7 +451,7 @@ func TestK8sProbeReportsAReadErrorThatNeverClears(t *testing.T) {
 		return true, nil, errors.New("configmaps is forbidden")
 	})
 	p := NewK8sProber(dyn, testMapper())
-	res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), "boutique")
+	res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), Target{Namespace: "boutique"})
 	if res.Passed {
 		t.Fatal("probe passed while unable to read anything")
 	}
@@ -477,7 +477,7 @@ func TestK8sProbeStopsWhenTheContextIsCancelled(t *testing.T) {
 		cancel()
 	}()
 	done := make(chan Result, 1)
-	go func() { done <- p.Run(ctx, k8sProbe(spec), "boutique") }()
+	go func() { done <- p.Run(ctx, k8sProbe(spec), Target{Namespace: "boutique"}) }()
 	select {
 	case res := <-done:
 		if res.Passed {
@@ -505,7 +505,7 @@ func TestK8sProbeAcceptsAGroupQualifiedResource(t *testing.T) {
 		"interval":     "10ms",
 	}
 	p := NewK8sProber(newFakeDyn(empty), testMapper())
-	res := p.Run(context.Background(), k8sProbe(spec), "boutique")
+	res := p.Run(context.Background(), k8sProbe(spec), Target{Namespace: "boutique"})
 	if res.Err != nil {
 		t.Fatalf("group-qualified resource rejected: %v", res.Err)
 	}
@@ -518,7 +518,7 @@ func TestK8sProbeRejectsAnUnparseableJsonpath(t *testing.T) {
 	spec := crashLoopSpec()
 	spec["jsonpath"] = "{.items[*"
 	p := NewK8sProber(newFakeDyn(), testMapper())
-	res := p.Run(context.Background(), k8sProbe(spec), "boutique")
+	res := p.Run(context.Background(), k8sProbe(spec), Target{Namespace: "boutique"})
 	if res.Err == nil {
 		t.Fatal("malformed jsonpath accepted")
 	}
@@ -530,7 +530,7 @@ func TestK8sProbeRejectsAnUnparseableJsonpath(t *testing.T) {
 func TestDefaultsAreUsedWhenTimingIsUnspecified(t *testing.T) {
 	got, err := parseK8sSpec(map[string]any{
 		"resource": "pods", "jsonpath": "{.x}", "expect_contains": "y",
-	}, "boutique")
+	}, Target{Namespace: "boutique"})
 	if err != nil {
 		t.Fatalf("parseK8sSpec: %v", err)
 	}
@@ -557,7 +557,7 @@ func TestListMetadataIsReachableFromAJsonpath(t *testing.T) {
 		"interval":        "10ms",
 	}
 	p := NewK8sProber(dyn, testMapper())
-	if res := p.Run(context.Background(), k8sProbe(spec), "boutique"); !res.Passed {
+	if res := p.Run(context.Background(), k8sProbe(spec), Target{Namespace: "boutique"}); !res.Passed {
 		t.Fatalf("items[*] did not resolve: %+v", res)
 	}
 }

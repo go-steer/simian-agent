@@ -53,9 +53,9 @@ const chaosMeshChart = "https://charts.chaos-mesh.org/chaos-mesh-" + ChaosMeshVe
 // InstallCNI installs Calico and waits for it to converge.
 //
 // The cluster config sets disableDefaultCNI, so nodes stay NotReady until this
-// runs. See dev/kind/cluster.yaml for why kindnet is not good enough.
+// runs. See dev/kind/cluster.yaml for why the rig pins its CNI.
 func (c *Cluster) InstallCNI(ctx context.Context) error {
-	c.logf("installing Calico %s (the CNI that actually enforces NetworkPolicy)", CalicoVersion)
+	c.logf("installing Calico %s (the CNI the eval targets look like)", CalicoVersion)
 	if _, err := c.Kubectl(ctx, "apply", "-f", calicoManifest); err != nil {
 		return fmt.Errorf("kindcluster: install calico: %w", err)
 	}

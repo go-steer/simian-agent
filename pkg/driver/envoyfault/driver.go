@@ -194,6 +194,7 @@ func (d *Driver) Catalog(_ context.Context) ([]simian.CatalogEntry, error) {
 			ResourceKind:    KindDelay,
 			BlastRadiusTier: catalog.Classify(simian.EngineEnvoyFault, KindDelay),
 			Description:     "Inject a fixed delay into HTTP/gRPC requests at the workload's Envoy sidecar (works on GKE Dataplane V2).",
+			EfficacyGate:    catalog.EfficacyGate(simian.EngineEnvoyFault, KindDelay),
 			SpecTemplate: `Adds a fixed delay to a percentage of inbound HTTP/gRPC requests at
 the target workload's Envoy sidecar. Works on GKE Dataplane V2.
 
@@ -217,6 +218,7 @@ Spec:
 			ResourceKind:    KindAbort,
 			BlastRadiusTier: catalog.Classify(simian.EngineEnvoyFault, KindAbort),
 			Description:     "Return an HTTP error status for a percentage of inbound requests at the workload's Envoy sidecar.",
+			EfficacyGate:    catalog.EfficacyGate(simian.EngineEnvoyFault, KindAbort),
 			SpecTemplate: `Returns an HTTP error status for a percentage of inbound HTTP/gRPC
 requests at the target workload's Envoy sidecar. Works on GKE
 Dataplane V2.
