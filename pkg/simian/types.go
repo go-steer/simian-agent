@@ -63,13 +63,56 @@ type TargetRef struct {
 	Labels map[string]string `json:"labels,omitempty"`
 }
 
-// ProbeSpec describes a Litmus probe attached to a fault. Empty for Chaos Mesh
-// manifests in M1; expanded in M2.
+// Probe modes. Simian only acts on ProbeModeSettle; the remaining Litmus modes
+// are accepted and carried through so a manifest written for Litmus round-trips
+// unchanged, but nothing in Simian schedules them.
+const (
+	// ProbeModeSettle gates Apply: the fault is not considered applied until
+	// every Settle probe passes. This is an *efficacy* check — did the fault
+	// land — and deliberately not an outcome check. What the fault caused is
+	// what the agent under test is scored on; measuring it here would let the
+	// harness grade its own experiment.
+	ProbeModeSettle = "Settle"
+
+	ProbeModeSOT        = "SOT"
+	ProbeModeEOT        = "EOT"
+	ProbeModeEdge       = "Edge"
+	ProbeModeContinuous = "Continuous"
+	ProbeModeOnChaos    = "OnChaos"
+)
+
+// Probe types.
+const (
+	// ProbeTypeK8s polls a jsonpath expression over a Kubernetes resource,
+	// exactly as `kubectl get <resource> -o jsonpath=...` would. Every settle
+	// condition Simian needs so far is expressible this way.
+	ProbeTypeK8s = "k8s"
+
+	ProbeTypeCmd        = "cmd"
+	ProbeTypeHTTP       = "http"
+	ProbeTypePrometheus = "prometheus"
+)
+
+// ProbeSpec describes a probe attached to a fault.
+//
+// Spec is type-dependent and validated by the prober, not here — see
+// pkg/probe for the k8s shape.
 type ProbeSpec struct {
 	Name string         `json:"name"`
 	Type string         `json:"type"` // cmd | http | k8s | prometheus
-	Mode string         `json:"mode"` // SOT | EOT | Edge | Continuous | OnChaos
+	Mode string         `json:"mode"` // Settle | SOT | EOT | Edge | Continuous | OnChaos
 	Spec map[string]any `json:"spec"`
+}
+
+// SettleProbes returns the probes that gate Apply, in declaration order.
+func (m FaultManifest) SettleProbes() []ProbeSpec {
+	var out []ProbeSpec
+	for _, p := range m.Probes {
+		if p.Mode == ProbeModeSettle {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // FaultManifest is the engine-agnostic, mode-agnostic description of one

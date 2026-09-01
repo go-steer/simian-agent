@@ -27,6 +27,7 @@ import (
 	"github.com/go-steer/simian-agent/pkg/audit"
 	"github.com/go-steer/simian-agent/pkg/catalog"
 	"github.com/go-steer/simian-agent/pkg/lease"
+	"github.com/go-steer/simian-agent/pkg/probe"
 	"github.com/go-steer/simian-agent/pkg/simian"
 )
 
@@ -39,6 +40,7 @@ type Executor struct {
 	auditor  simian.Auditor
 	elig     EligibilityChecker
 	history  *History // optional; nil disables get_recent_faults backing
+	prober   probe.Prober
 
 	mu            sync.Mutex
 	lastApplyByNS map[string]time.Time
@@ -53,6 +55,12 @@ type Option func(*Executor)
 // directly (wired in cmd/simian/serve.go via lease.Reaper.OnExpire).
 func WithHistory(h *History) Option {
 	return func(e *Executor) { e.history = h }
+}
+
+// WithProber wires the efficacy gate. Without it, a manifest carrying Settle
+// probes is rejected rather than applied unverified — see Executor.settle.
+func WithProber(p probe.Prober) Option {
+	return func(e *Executor) { e.prober = p }
 }
 
 // New constructs an Executor.
@@ -155,13 +163,6 @@ func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, e
 	deadline := now.Add(m.Duration)
 	e.registry.Register(m.UID, engineUID, m, deadline)
 	e.recordApply(m)
-	if e.history != nil {
-		e.history.Push(RecentFault{
-			FaultUID:  m.UID,
-			Manifest:  m,
-			AppliedAt: now.UTC(),
-		})
-	}
 
 	e.auditor.Emit(ctx, simian.AuditEvent{
 		Event:    audit.EventDriverApplied,
@@ -180,7 +181,115 @@ func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, e
 		Mode:     m.Source,
 	})
 
+	// The lease is registered before the gate runs, deliberately. Everything
+	// below can fail, and a fault the cluster has already accepted must be
+	// reapable no matter which way it does.
+	if err := e.settle(ctx, m); err != nil {
+		e.abandon(ctx, m, engineUID, err)
+		return "", err
+	}
+
+	if e.history != nil {
+		e.history.Push(RecentFault{
+			FaultUID:  m.UID,
+			Manifest:  m,
+			AppliedAt: now.UTC(),
+		})
+	}
+
 	return m.UID, nil
+}
+
+// settle runs the manifest's Settle probes in order and returns once they have
+// all passed, or at the first one that has not.
+//
+// The deadline is not extended to cover this wait. A fault that takes 30s to
+// manifest spends 30s of its own duration doing so, which keeps Simian's lease
+// and the engine's own server-side spec.duration in agreement — they would
+// otherwise drift apart and the fault would outlive its lease. The cost shows
+// up as elapsed_ms on the efficacy event rather than as a silent discrepancy.
+func (e *Executor) settle(ctx context.Context, m simian.FaultManifest) error {
+	probes := m.SettleProbes()
+	if len(probes) == 0 {
+		return nil
+	}
+	if e.prober == nil {
+		// Loud, not skipped. Treating an unrunnable gate as a passing one
+		// would mark unverified faults verified, which is the failure this
+		// whole mechanism exists to prevent.
+		return simian.NewExecutorError(simian.StageProbe, simian.ReasonProbeNotConfigured,
+			fmt.Sprintf("manifest declares %d Settle probe(s) but the executor has no prober wired in", len(probes)), nil)
+	}
+
+	ns := ""
+	if len(m.Targets) > 0 {
+		ns = m.Targets[0].Namespace
+	}
+	for _, p := range probes {
+		res := e.prober.Run(ctx, p, ns)
+		payload := map[string]any{
+			"probe":      res.Name,
+			"type":       res.Type,
+			"passed":     res.Passed,
+			"observed":   res.Observed,
+			"expected":   res.Expected,
+			"attempts":   res.Attempts,
+			"elapsed_ms": res.Elapsed.Milliseconds(),
+		}
+		reason := ""
+		if !res.Passed {
+			reason = string(simian.ReasonProbeFailed)
+		}
+		if res.Err != nil {
+			payload["error"] = res.Err.Error()
+		}
+		e.auditor.Emit(ctx, simian.AuditEvent{
+			Event:    audit.EventFaultEfficacy,
+			FaultUID: m.UID,
+			PlanID:   m.PlanID,
+			Mode:     m.Source,
+			Reason:   reason,
+			Payload:  payload,
+		})
+		if !res.Passed {
+			return simian.NewExecutorError(simian.StageProbe, simian.ReasonProbeFailed,
+				res.Describe(), res.Err)
+		}
+	}
+	return nil
+}
+
+// abandon backs out a fault that was applied but never manifested.
+//
+// An unverified fault is not a valid experiment, and leaving it running would
+// contaminate the next one while the caller — holding an error and no UID —
+// has no way to clear it. If the clear itself fails the lease is left in place
+// on purpose, so the reaper collects it at the deadline instead.
+func (e *Executor) abandon(ctx context.Context, m simian.FaultManifest, engineUID string, cause error) {
+	reason := string(simian.ReasonProbeFailed)
+	payload := map[string]any{
+		"engine_uid": engineUID,
+		"error":      cause.Error(),
+	}
+	if driver, ok := e.drivers[m.Engine]; ok {
+		if err := driver.Clear(ctx, engineUID); err != nil {
+			payload["clear_error"] = err.Error()
+			payload["left_to_reaper"] = true
+		} else {
+			_ = e.registry.Forget(m.UID)
+		}
+	} else {
+		payload["clear_error"] = fmt.Sprintf("no driver registered for engine %q", m.Engine)
+		payload["left_to_reaper"] = true
+	}
+	e.auditor.Emit(ctx, simian.AuditEvent{
+		Event:    audit.EventLeaseCleared,
+		FaultUID: m.UID,
+		PlanID:   m.PlanID,
+		Mode:     m.Source,
+		Reason:   reason,
+		Payload:  payload,
+	})
 }
 
 // Clear removes an active fault before its lease expires.

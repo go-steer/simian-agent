@@ -197,8 +197,12 @@ revert. The driver is assembly, not invention.
 
 ## 5. Deliverable B — efficacy confirmation
 
-`FaultManifest.Probes []ProbeSpec` already exists in `pkg/simian/types.go:92`
-and is referenced by no code. It becomes the settle/efficacy mechanism.
+> **Shipped.** `Mode: "Settle"`, the `k8s` probe type, the `Apply` gate and the
+> `fault.efficacy` audit event are implemented — see
+> [Efficacy probes]({{< relref "efficacy-probes.md" >}}) for the user-facing
+> reference. The `cmd`/`http`/`prometheus` probe types below remain future work.
+
+`FaultManifest.Probes []ProbeSpec` becomes the settle/efficacy mechanism.
 
 ```go
 type ProbeSpec struct {
