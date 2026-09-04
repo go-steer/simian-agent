@@ -277,12 +277,21 @@ type ExpectedFinding struct {
 semantics, same tolerances, so numbers from the two rigs are comparable
 without a translation argument.
 
-**`simian.AuditEvent.ScenarioID` (`pkg/simian/interfaces.go:131`) is already
-defined and already stamped by `audit.go:82` — and never populated by any
-caller.** `Scenario.ID` populates it. That one field then joins Simian's audit
-log, k8s-lookout's findings, and the agent's transcript into a single
-correlatable record, which is the mechanical prerequisite for "see what we did
-and did not detect, did and did not fix."
+**`simian.AuditEvent.ScenarioID` was defined and stamped by the audit sink long
+before anything populated it.** `Scenario.ID` populates it. That one field
+joins Simian's audit log, k8s-lookout's findings, and the agent's transcript
+into a single correlatable record, which is the mechanical prerequisite for
+"see what we did and did not detect, did and did not fix."
+
+It is carried in the **context**, not passed as an argument. Simian emits audit
+events from around thirty call sites across the executor, the autonomous loop
+and the lease reaper; threading a parameter through all of them is churn that
+the next new call site silently forgets, and a missing join key is invisible
+until someone tries to score a run and finds a hole in it. `audit.WithScenarioID`
+puts the ID on the context and the sink stamps every event that does not
+already carry one. An event that sets the ID explicitly wins, which is how the
+lease reaper — outliving the context that applied the fault — still attributes
+a late expiry to the right scenario.
 
 ### 6.2 The packs
 
@@ -624,7 +633,7 @@ within a group is independent of its siblings.
 | #58 | Lookout-only kinds: `NodeUnready`, `PDBGridlock`, `CertExpiry`, `RolloutStuck` | M | #56 |
 | #59 | `mutate` mode + revert-on-lease-expiry | L | #56 |
 | **Phase 3 — scenarios** |
-| #60 | `Scenario` type, `ScenarioID` plumbed through executor + audit, pack loader | M | — |
+| #60 ✅ | `Scenario` type, `ScenarioID` plumbed through executor + audit, pack loader | M | — |
 | #61 | Lookout pack (10) + parity pack (11) + the equivalence-matrix test | M | #57, #58, #60 |
 | **Phase 4 — the rig** |
 | #62 | `pkg/eval`: `Report`, `Subject`, and the seven measures | M | #60 |

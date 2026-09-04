@@ -82,6 +82,15 @@ func New(logger *slog.Logger) *SLogAuditor {
 
 // Emit implements simian.Auditor.
 func (a *SLogAuditor) Emit(ctx context.Context, ev simian.AuditEvent) {
+	// Stamped here rather than at each of the ~30 call sites. The scenario ID
+	// is the key that joins this log to a subject's report, and a call site
+	// that forgets it punches a hole in a correlation nobody notices until
+	// they try to score a run. An event that sets the ID explicitly wins, so
+	// the lease reaper can stamp events that outlive the applying context.
+	if ev.ScenarioID == "" {
+		ev.ScenarioID = ScenarioIDFrom(ctx)
+	}
+
 	attrs := []any{
 		slog.String("event", ev.Event),
 		slog.Time("ts", time.Now().UTC()),
