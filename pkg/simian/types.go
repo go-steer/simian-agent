@@ -21,6 +21,7 @@ package simian
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -33,6 +34,30 @@ const (
 	TierNode      BlastRadiusTier = "node"
 	TierExternal  BlastRadiusTier = "external"
 )
+
+// AllTiers lists every tier, least severe first.
+var AllTiers = []BlastRadiusTier{TierNamespace, TierNode, TierExternal}
+
+// ParseBlastRadiusTier validates an operator-supplied tier name.
+//
+// Errors rather than falling back to a default, and callers should surface that
+// at startup: every tier setting is something an operator reached for to make
+// the policy *narrower*, so a typo that silently restored the default would
+// widen the very thing it was meant to close.
+func ParseBlastRadiusTier(name string) (BlastRadiusTier, error) {
+	t := BlastRadiusTier(strings.TrimSpace(name))
+	for _, known := range AllTiers {
+		if t == known {
+			return t, nil
+		}
+	}
+	names := make([]string, len(AllTiers))
+	for i, k := range AllTiers {
+		names[i] = string(k)
+	}
+	return "", fmt.Errorf("unknown blast-radius tier %q: must be one of %s",
+		name, strings.Join(names, ", "))
+}
 
 // ManifestSource identifies which mode produced a FaultManifest. The executor
 // is mode-agnostic, but the source flows into audit records and metrics labels.

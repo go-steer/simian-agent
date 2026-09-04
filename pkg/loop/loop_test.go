@@ -338,3 +338,35 @@ var _ HealthGate = alwaysUnhealthy{}
 // removal of sut.WorkloadStatus during refactors.
 var _ = sut.WorkloadStatus{}
 var _ = topology.Workload{}
+
+func TestTierExceedsFailsClosedOnBothSides(t *testing.T) {
+	// A tier neither side recognises used to sort as "namespace", the least
+	// severe thing there is, so an unrecognised manifest sailed under every
+	// cap. Fail-closed here means the loop skips what it cannot bound rather
+	// than applying it.
+	tests := []struct {
+		name string
+		have simian.BlastRadiusTier
+		max  simian.BlastRadiusTier
+		want bool
+	}{
+		{"namespace under a namespace cap", simian.TierNamespace, simian.TierNamespace, false},
+		{"node over a namespace cap", simian.TierNode, simian.TierNamespace, true},
+		{"node under a node cap", simian.TierNode, simian.TierNode, false},
+		{"external over a node cap", simian.TierExternal, simian.TierNode, true},
+		{"namespace under an external cap", simian.TierNamespace, simian.TierExternal, false},
+
+		// A blast radius we cannot classify is not a small one.
+		{"an unrecognised tier exceeds even the widest cap", "planet-scale", simian.TierExternal, true},
+		{"an empty tier exceeds even the widest cap", "", simian.TierExternal, true},
+		// And a cap we cannot parse was an operator narrowing something.
+		{"an unparseable cap permits nothing", simian.TierNamespace, "namesapce", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tierExceeds(tt.have, tt.max); got != tt.want {
+				t.Errorf("tierExceeds(%q, %q) = %v, want %v", tt.have, tt.max, got, tt.want)
+			}
+		})
+	}
+}

@@ -114,6 +114,19 @@ jobs:
       - name: Verify tidy
         run: dev/ci/presubmits/verify-mod-tidy
 
+  chart:
+    name: helm chart renders its safety policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned to the same version the kind e2e job uses, so "renders here"
+      # and "installs there" are the same helm.
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - name: Verify chart
+        run: dev/ci/presubmits/verify-chart
+
   vuln:
     name: govulncheck
     runs-on: ubuntu-latest

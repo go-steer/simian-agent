@@ -43,7 +43,11 @@ llm:
 # Executor safety policy.
 executor:
   durationCeiling: 15m   # hard cap per fault
-  permittedTiers:        # blast-radius tiers permitted by this installation
+  # Blast-radius tiers permitted by this installation: namespace | node |
+  # external. Drop "node" to keep node-level chaos off the cluster entirely.
+  # An empty list means "use the built-in default" (namespace, node) rather
+  # than "permit nothing"; an unrecognised name stops the controller starting.
+  permittedTiers:
     - namespace
     - node
   maxConcurrentFaults: 0 # 0 = no cap

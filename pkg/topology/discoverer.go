@@ -72,14 +72,22 @@ func New(client kubernetes.Interface, resync time.Duration) *Discoverer {
 
 // Run starts the informer factory, waits for cache sync, then blocks until
 // ctx is done. Callers typically run it in its own goroutine.
+//
+// Run owns the informers for the life of ctx and shuts them down on the way
+// out, including when cache sync is cancelled. It used to return on ctx.Done
+// leaving seven reflectors watching the API server, which cost nothing in a
+// controller that exits shortly afterwards and leaks a set per scenario in a
+// runner that builds a Discoverer per scenario.
 func (d *Discoverer) Run(ctx context.Context) error {
 	d.mu.Lock()
 	if d.started {
 		d.mu.Unlock()
+		// Not ours to stop — another caller is running it.
 		return fmt.Errorf("topology: Run already called")
 	}
 	d.started = true
 	d.mu.Unlock()
+	defer d.Stop()
 
 	d.factory.Start(d.stopCh)
 	if !cache.WaitForCacheSync(ctx.Done(), d.syncCheck...) {

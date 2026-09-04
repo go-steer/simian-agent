@@ -46,10 +46,32 @@ For installs that want a known-good starting point rather than the chart default
 | Value | Default | Notes |
 |---|---|---|
 | `executor.durationCeiling` | `15m` | Hard cap per fault. Recommended overlay: `5m`. |
-| `executor.permittedTiers` | `[namespace, node]` | Blast-radius tiers permitted. Recommended overlay: `[namespace]` (opt-in to node tier per install). |
+| `executor.permittedTiers` | `[namespace, node]` | Blast-radius tiers permitted: `namespace`, `node`, `external`. Renders one `--permitted-tiers=` arg per entry. Recommended overlay: `[namespace]` (opt-in to node tier per install). |
 | `executor.maxConcurrentFaults` | `0` (no cap) | Total leased faults across namespaces. Recommended overlay: `1`. |
 | `executor.minCooldown` | `0s` | Per-namespace cooldown. Recommended overlay: `60s`. |
 | `executor.recentFaultsCapacity` | `100` | Bounded ring backing the `get_recent_faults` MCP tool. |
+
+### How `permittedTiers` fails
+
+This is the one value an operator sets to make the policy *narrower* — usually
+to keep node-level chaos off a cluster they care about — so its failure modes
+are deliberately loud rather than convenient.
+
+- **An unrecognised tier name stops the controller starting**, with
+  `--permitted-tiers: unknown blast-radius tier "..."`. A typo that fell back
+  to the default would silently restore the very tier the operator was
+  removing.
+- **An empty list means "use the built-in default"** (`namespace`, `node`), not
+  "permit nothing". The chart renders no flag at all in that case, and a flag
+  the operator never set must not be a capability change.
+- **`--set executor.permittedTiers={}` is not an empty list.** Helm's `--set`
+  turns it into a one-element list holding the empty string, which renders
+  `--permitted-tiers=` and stops the controller with an unknown-tier error. Use
+  `--set-json 'executor.permittedTiers=[]'`, or set it in a values file.
+
+`autonomous.maxSeverityPerCycle` is validated the same way, at startup rather
+than in the loop: an unparseable cap makes every planned step ineligible, which
+otherwise looks exactly like a planner that produced nothing.
 
 ## Topology + SUT
 

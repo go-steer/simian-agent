@@ -45,7 +45,8 @@ Set on `simian serve`:
 |---|---|---|
 | `--duration-ceiling` | 15m | Hard cap per fault. |
 | `--max-concurrent-faults` | 0 (no cap) | Total leased faults across namespaces. Rejected applies surface as `executor.rejected` with reason `safety:budget-exceeded`. |
-| `--min-cooldown` | 0 | Per-namespace cooldown between consecutive faults. |
+| `--min-cooldown` | 0 | Per-namespace cooldown between consecutive faults. An apply already in flight against a namespace counts as consecutive. |
+| `--permitted-tiers` | namespace,node | Blast-radius tiers this installation permits (`namespace\|node\|external`). Repeatable or comma-separated. Unset keeps the default; pass just `namespace` to keep node-level chaos off the cluster entirely. An unrecognised name stops the controller starting rather than falling back — see [Helm values]({{< relref "helm-values.md" >}}). |
 | `--default-efficacy-probes` | true | Attach Simian's own [efficacy gate]({{< relref "efficacy-probes.md" >}}) to every fault kind that has one. Set false to accept faults that report success without proving they landed. |
 
 ### Autonomous mode
@@ -58,7 +59,7 @@ Set on `simian serve` together:
 | `--autonomous-namespace` | (required when `--autonomous`) | Repeatable. Arena namespace(s) the loop targets. |
 | `--cycle-interval` | 5m | Time between cycles. |
 | `--max-faults-per-cycle` | 3 | Cap on faults applied per cycle. |
-| `--max-severity-per-cycle` | namespace | Highest blast tier the loop will apply (`namespace\|node\|external`). |
+| `--max-severity-per-cycle` | namespace | Highest blast tier the loop will apply (`namespace\|node\|external`). Validated at startup: an unparseable cap would make the loop skip every step, which is indistinguishable from a planner producing nothing. |
 | `--hypothesis-hint` | empty | Soft preference passed to the LLM each cycle. Useful for biasing toward specific engines. |
 
 ### Envoy SUT injection
