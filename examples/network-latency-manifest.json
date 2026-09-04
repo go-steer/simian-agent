@@ -18,7 +18,7 @@
   },
   "targets": [
     {
-      "namespace": "online-boutique",
+      "namespace": "boutique-1",
       "name": "paymentservice"
     }
   ],

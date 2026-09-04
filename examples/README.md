@@ -26,6 +26,12 @@ helm install simian deploy/helm/simian -n simian-system \
 | [`network-latency.json`](network-latency.json) | Inline `spec` for a NetworkChaos delay fault. Useful as a `--spec-file` reference (note: see the CLI bug noted in the acceptance results — currently use `--spec` with inline JSON). |
 | [`network-latency-manifest.json`](network-latency-manifest.json) | A fully-formed `FaultManifest` JSON suitable for `simian chaos --manifest`. |
 
+`--manifest` submits the file verbatim — there is no `--namespace` override — so
+`targets[].namespace` has to name *your* arena. It ships as `boutique-1`, the
+namespace the [getting-started](../docs/site/content/docs/getting-started.md)
+walkthrough creates; change it if yours is called something else, or the
+executor will reject the fault as targeting an ineligible namespace.
+
 ## What this directory is NOT
 
 - A test fixture set — those live next to their packages as `*_test.go`.

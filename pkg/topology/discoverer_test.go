@@ -266,3 +266,47 @@ func contains(s []string, v string) bool {
 	}
 	return false
 }
+
+func TestRunShutsTheInformersDownWhenItsContextEnds(t *testing.T) {
+	// Run used to return on ctx.Done and leave seven reflectors watching. A
+	// long-lived controller exits shortly afterwards so it never showed; an
+	// eval runner that builds a Discoverer per scenario leaks a set each time.
+	//
+	// Both exit paths are covered, because the early one leaked too: a Run
+	// whose cache sync is cancelled has already called factory.Start.
+	tests := []struct {
+		name        string
+		waitForSync bool
+	}{
+		{"cancelled after the caches sync", true},
+		{"cancelled while the caches are still syncing", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := New(fake.NewSimpleClientset(), time.Millisecond)
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- d.Run(ctx) }()
+
+			if tt.waitForSync && !d.WaitForSync(context.Background()) {
+				t.Fatal("caches never synced")
+			}
+			cancel()
+			<-done
+
+			select {
+			case <-d.stopCh:
+			default:
+				t.Fatal("Run returned with the informer stop channel still open")
+			}
+		})
+	}
+}
+
+func TestStopIsIdempotentSoRunCanBeBelledTwice(t *testing.T) {
+	// Run defers Stop, and callers wired before that change still call Stop
+	// themselves. Closing a closed channel would panic.
+	d := New(fake.NewSimpleClientset(), time.Millisecond)
+	d.Stop()
+	d.Stop()
+}

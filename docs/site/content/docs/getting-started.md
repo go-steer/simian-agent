@@ -52,6 +52,11 @@ bin/simian chaos --intent "kill one paymentservice pod in boutique-1 for 30 seco
 bin/simian chaos --manifest examples/network-latency-manifest.json
 ```
 
+A manifest is submitted verbatim — `--namespace` does not apply to it — so the
+example's `targets[].namespace` names `boutique-1`, the arena created above. If
+your arena is called something else, edit that field or the executor will reject
+the fault as targeting an ineligible namespace.
+
 `simian chaos` returns a fault UID; the lease auto-expires after the manifest's duration (default 2m, capped by `--duration-ceiling`). Inspect with `simian chaos --list-active`; clear early with `simian chaos --clear <uid>`.
 
 ## Apply your first fault — autonomous mode

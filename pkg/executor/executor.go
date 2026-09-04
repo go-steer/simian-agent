@@ -47,6 +47,13 @@ type Executor struct {
 
 	mu            sync.Mutex
 	lastApplyByNS map[string]time.Time
+	// inFlight counts applies that have passed the budget check but have not
+	// yet registered a lease, keyed by namespace and in total. Without these
+	// the caps are advisory: minutes can pass between the check and the
+	// lease — SOT probes alone are allowed 90s — and the autonomous loop
+	// fans out into that window on purpose.
+	inFlight   int
+	inFlightNS map[string]int
 }
 
 // Option configures an Executor at construction time.
@@ -86,6 +93,7 @@ func New(cfg Config, drivers map[simian.Engine]simian.ChaosDriver, registry *lea
 		auditor:       auditor,
 		elig:          elig,
 		lastApplyByNS: map[string]time.Time{},
+		inFlightNS:    map[string]int{},
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -132,6 +140,15 @@ func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, e
 		e.rejected(ctx, m, err)
 		return "", err
 	}
+
+	// Hold a slot for the whole run-up to the lease. validateSafety has
+	// already guaranteed at least one target with a non-empty namespace.
+	release, err := e.reserve(m.Targets[0].Namespace)
+	if err != nil {
+		e.rejected(ctx, m, err)
+		return "", err
+	}
+	defer release()
 
 	// Attach Simian's own gate before anything reads m.Probes. Done after
 	// narrowing so a default probe inherits the selector the driver will
@@ -194,6 +211,9 @@ func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, e
 	deadline := now.Add(m.Duration)
 	e.registry.Register(m.UID, engineUID, m, deadline)
 	e.recordApply(m)
+	// The lease is counted from here, so hand the reservation back rather
+	// than holding both against the cap for the length of the settle wait.
+	release()
 
 	e.auditor.Emit(ctx, simian.AuditEvent{
 		Event:    audit.EventDriverApplied,
@@ -489,27 +509,69 @@ func (e *Executor) validateSafety(ctx context.Context, m *simian.FaultManifest) 
 			fmt.Sprintf("blast tier %q is not permitted by current policy", tier), nil)
 	}
 
-	// Concurrency budget.
+	// Concurrency budget and per-namespace cooldown are not checked here.
+	// Apply reserves against both instead, in one critical section — see
+	// Executor.reserve.
+	return narrowed, nil
+}
+
+// reserve books this apply against the concurrency budget and the namespace
+// cooldown, and returns the function that gives the booking back.
+//
+// The checks used to live in validateSafety, where they were read-then-act
+// against a lease that would not exist until the driver had run. Everything
+// between the two — default probes, the driver lookup, and SOT probes, which
+// alone may poll for 90s — happened in that window, and pkg/loop fans applies
+// out in parallel across it. Both callers saw room for one more and both took
+// it, so a cap of 1 admitted as many faults as the plan had steps.
+//
+// The reservation closes the window by counting what is on the way in as well
+// as what has landed. It is idempotent: Apply releases it as soon as the lease
+// is registered and the registry starts counting, and the deferred call is
+// then a no-op.
+func (e *Executor) reserve(ns string) (release func(), err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	if e.cfg.MaxConcurrentFaults > 0 {
-		if active := e.registry.List(""); len(active) >= e.cfg.MaxConcurrentFaults {
+		// registry.List is read under e.mu so a concurrent reserve cannot
+		// observe the same free slot. Nothing in lease reaches back into the
+		// executor, so this nesting has no partner to deadlock against.
+		if len(e.registry.List(""))+e.inFlight >= e.cfg.MaxConcurrentFaults {
 			return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonBudgetExceeded,
 				fmt.Sprintf("max concurrent faults reached (%d)", e.cfg.MaxConcurrentFaults), nil)
 		}
 	}
 
-	// Per-namespace cooldown.
 	if e.cfg.MinCooldown > 0 {
-		ns := m.Targets[0].Namespace
-		e.mu.Lock()
-		last, ok := e.lastApplyByNS[ns]
-		e.mu.Unlock()
-		if ok && time.Since(last) < e.cfg.MinCooldown {
+		// An apply already in flight against this namespace counts as
+		// consecutive. The cooldown is about how close together two faults
+		// hit a namespace, and two that overlap are as close as it gets.
+		if e.inFlightNS[ns] > 0 {
+			return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonBudgetExceeded,
+				fmt.Sprintf("namespace %q already has a fault being applied", ns), nil)
+		}
+		if last, ok := e.lastApplyByNS[ns]; ok && time.Since(last) < e.cfg.MinCooldown {
 			return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonBudgetExceeded,
 				fmt.Sprintf("namespace %q is in cooldown", ns), nil)
 		}
 	}
 
-	return narrowed, nil
+	e.inFlight++
+	e.inFlightNS[ns]++
+	done := false
+	return func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if done {
+			return
+		}
+		done = true
+		e.inFlight--
+		if e.inFlightNS[ns]--; e.inFlightNS[ns] <= 0 {
+			delete(e.inFlightNS, ns)
+		}
+	}, nil
 }
 
 func (e *Executor) recordApply(m simian.FaultManifest) {

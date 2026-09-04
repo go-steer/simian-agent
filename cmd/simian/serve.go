@@ -62,6 +62,7 @@ func newServeCmd() *cobra.Command {
 		llmModel             string
 		eligibleNS           []string
 		durationCap          time.Duration
+		permittedTiers       []string
 		maxConcurrentFaults  int
 		minCooldown          time.Duration
 		defaultProbes        bool
@@ -134,6 +135,22 @@ func newServeCmd() *cobra.Command {
 			}
 			if minCooldown > 0 {
 				execCfg.MinCooldown = minCooldown
+			}
+			// Parsed before anything is built. A controller whose safety
+			// policy does not parse must not come up holding the default
+			// one — the operator asked for something narrower and would
+			// have no way to tell they did not get it.
+			if tiers, err := executor.ParsePermittedTiers(permittedTiers); err != nil {
+				return fmt.Errorf("--permitted-tiers: %w", err)
+			} else if tiers != nil {
+				execCfg.PermittedTiers = tiers
+			}
+			// Validated here rather than where the loop reads it. An
+			// unparseable cap makes the loop skip every step, which looks
+			// exactly like a planner producing nothing.
+			severityCap, err := simian.ParseBlastRadiusTier(maxSeverityPerCycle)
+			if err != nil {
+				return fmt.Errorf("--max-severity-per-cycle: %w", err)
 			}
 			registry := lease.NewRegistry(holderID)
 			history := executor.NewHistory(recentFaultsCapacity)
@@ -268,7 +285,7 @@ func newServeCmd() *cobra.Command {
 						MaxFaultsPerCycle:   maxFaultsPerCycle,
 						MaxConcurrentFaults: execCfg.MaxConcurrentFaults,
 						MinCooldown:         execCfg.MinCooldown,
-						MaxSeverityPerCycle: simian.BlastRadiusTier(maxSeverityPerCycle),
+						MaxSeverityPerCycle: severityCap,
 					},
 					Auditor:    auditor,
 					Logger:     logger,
@@ -314,6 +331,7 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&llmModel, "llm-model", "", "Model override (provider default if empty)")
 	cmd.Flags().StringSliceVar(&eligibleNS, "eligible-namespace", nil, "Namespaces to treat as eligible (overrides annotation lookup; can be repeated)")
 	cmd.Flags().DurationVar(&durationCap, "duration-ceiling", 0, "Override executor duration ceiling (default 15m)")
+	cmd.Flags().StringSliceVar(&permittedTiers, "permitted-tiers", nil, "Blast-radius tiers this installation permits (namespace|node|external). Repeatable or comma-separated. Unset keeps the default policy of namespace,node; set it to just namespace to keep node-level chaos off the cluster entirely.")
 	cmd.Flags().IntVar(&maxConcurrentFaults, "max-concurrent-faults", 0, "Cap on total leased faults across all namespaces (0 = no cap). Enforced by the safety stage; rejected applies surface as executor.rejected with reason safety:budget-exceeded.")
 	cmd.Flags().DurationVar(&minCooldown, "min-cooldown", 0, "Minimum gap between consecutive faults applied to the same namespace (0 = disabled)")
 	cmd.Flags().BoolVar(&defaultProbes, "default-efficacy-probes", true, "Attach Simian's built-in efficacy probes to fault kinds that have one (see the catalog's efficacy_gate field). Turning this off applies dataplane faults unverified: a fault the cluster accepts but silently drops is then indistinguishable from one that worked.")

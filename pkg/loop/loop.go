@@ -310,19 +310,33 @@ func (l *Loop) executePlan(ctx context.Context, ns string, plan simian.AttackPla
 }
 
 // tierOrdinal maps a tier string to an ordering: namespace < node < external.
-func tierOrdinal(t simian.BlastRadiusTier) int {
+// It reports ok=false for anything it does not recognise; callers decide what
+// that means, because the safe answer is not the same on both sides.
+func tierOrdinal(t simian.BlastRadiusTier) (int, bool) {
 	switch t {
 	case simian.TierNamespace:
-		return 1
+		return 1, true
 	case simian.TierNode:
-		return 2
+		return 2, true
 	case simian.TierExternal:
-		return 3
+		return 3, true
 	default:
-		return 1
+		return 0, false
 	}
 }
 
+// tierExceeds reports whether a step's tier is above the cycle's severity cap.
+//
+// Both unknowns fail closed, and they fail closed for different reasons. A
+// manifest carrying a tier we do not recognise is not a namespace-scoped fault
+// we can wave through — it is a fault whose blast radius we cannot bound, which
+// is strictly worse than a known external one. A cap we cannot parse permits
+// nothing, because the operator who set it was narrowing something.
 func tierExceeds(have, max simian.BlastRadiusTier) bool {
-	return tierOrdinal(have) > tierOrdinal(max)
+	h, okHave := tierOrdinal(have)
+	m, okMax := tierOrdinal(max)
+	if !okHave || !okMax {
+		return true
+	}
+	return h > m
 }

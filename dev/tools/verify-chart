@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Lint the Helm chart and assert that the safety-relevant values actually
+# reach the controller's container args.
+#
+# A Helm value that renders to nothing is the worst kind of safety setting:
+# the operator sets `permittedTiers: [namespace]` to keep node-level chaos off
+# a cluster they care about, `helm install` succeeds, and the controller comes
+# up with the default policy that still permits it. Nothing in the chart, the
+# release, or the pod says otherwise. `helm lint` will not catch that — a
+# template that silently drops a value is valid YAML.
+#
+# So the assertions below are on rendered args, and the negative cases carry as
+# much weight as the positive ones.
+set -euo pipefail
+. "$(dirname "$0")/common.sh"
+cd "$(repo_root)"
+
+CHART=deploy/helm/simian
+
+if ! command -v helm >/dev/null 2>&1; then
+  # Deliberately not a skip. This check exists because the chart can be
+  # broken in ways the Go tests cannot see; a silent pass on a machine
+  # without helm is the same as not having the check.
+  echo "verify-chart: helm not found on PATH — install it (https://helm.sh/docs/intro/install/)" >&2
+  exit 1
+fi
+
+fail=0
+
+# render <name> [helm-args...] — echoes the controller Deployment's rendered
+# manifest for the given value overrides.
+render() {
+  local name="$1"; shift
+  if ! helm template "$name" "$CHART" "$@" 2>&1; then
+    echo "verify-chart: helm template failed for case '$name'" >&2
+    exit 1
+  fi
+}
+
+# expect_arg <case> <rendered> <arg> — the arg must appear in the output.
+expect_arg() {
+  local case_name="$1" rendered="$2" arg="$3"
+  if ! grep -qF -- "- $arg" <<<"$rendered"; then
+    echo "✗ $case_name: expected container arg '$arg', not found" >&2
+    fail=1
+  fi
+}
+
+# reject_arg <case> <rendered> <arg> — the arg must NOT appear in the output.
+reject_arg() {
+  local case_name="$1" rendered="$2" arg="$3"
+  if grep -qF -- "- $arg" <<<"$rendered"; then
+    echo "✗ $case_name: container arg '$arg' should not be rendered, but was" >&2
+    fail=1
+  fi
+}
+
+echo "▸ helm lint"
+helm lint "$CHART"
+
+echo "▸ default values render both permitted tiers"
+out="$(render sim-default)"
+expect_arg "default" "$out" "--permitted-tiers=namespace"
+expect_arg "default" "$out" "--permitted-tiers=node"
+reject_arg "default" "$out" "--permitted-tiers=external"
+
+echo "▸ narrowing to namespace drops the node tier"
+# The reject is the assertion that matters. An operator who sets this has
+# decided node-level chaos is not allowed here, and a template that appends
+# rather than replaces would still render --permitted-tiers=node.
+out="$(render sim-narrow --set-json 'executor.permittedTiers=["namespace"]')"
+expect_arg "namespace-only" "$out" "--permitted-tiers=namespace"
+reject_arg "namespace-only" "$out" "--permitted-tiers=node"
+
+echo "▸ widening to external is possible but must be explicit"
+out="$(render sim-wide --set-json 'executor.permittedTiers=["namespace","node","external"]')"
+expect_arg "external" "$out" "--permitted-tiers=external"
+
+echo "▸ an empty list renders no flag at all"
+# Empty means "leave the built-in default alone", which the binary can only
+# read from the flag's absence — see executor.ParsePermittedTiers. Rendering
+# `--permitted-tiers=` here would be parsed as an unknown tier and stop the
+# controller starting.
+#
+# --set-json, not --set: `--set executor.permittedTiers={}` is a one-element
+# list holding the empty string, not an empty list, so it renders exactly the
+# `--permitted-tiers=` this case is here to reject. That is a helm --set
+# quirk rather than a chart bug, and the controller refuses to start on it
+# rather than guessing — see helm-values.md.
+out="$(render sim-empty --set-json 'executor.permittedTiers=[]')"
+reject_arg "empty" "$out" "--permitted-tiers="
+
+echo "▸ the baked-defaults overlay keeps node tier off"
+# The overlay's header promises "everything experimental (Envoy injection,
+# autonomous mode, node-tier chaos) is explicitly off". It sets
+# permittedTiers: [namespace] to do it, so assert the promise, not the value.
+out="$(render sim-baked -f examples/values-baked-defaults.yaml)"
+expect_arg "baked-defaults" "$out" "--permitted-tiers=namespace"
+reject_arg "baked-defaults" "$out" "--permitted-tiers=node"
+
+if [[ "$fail" -ne 0 ]]; then
+  echo >&2
+  echo "✗ chart assertions failed" >&2
+  exit 1
+fi
+
+echo "✓ chart renders the executor safety policy into the container args"

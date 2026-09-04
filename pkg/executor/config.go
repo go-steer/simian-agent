@@ -67,6 +67,31 @@ func DefaultConfig() Config {
 	}
 }
 
+// ParsePermittedTiers turns a list of tier names into a PermittedTiers set.
+//
+// An empty list returns nil, which callers should read as "leave the default
+// policy alone" rather than "permit nothing" — a flag the operator did not set
+// must not be a silent capability change.
+//
+// An unrecognised name is an error, not a skip. This is the one setting an
+// operator reaches for to keep node-level chaos off a cluster they care about,
+// and a typo that quietly widened the policy instead of narrowing it would be
+// precisely the failure it exists to prevent. Better to refuse to start.
+func ParsePermittedTiers(names []string) (map[simian.BlastRadiusTier]bool, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	out := map[simian.BlastRadiusTier]bool{}
+	for _, raw := range names {
+		tier, err := simian.ParseBlastRadiusTier(raw)
+		if err != nil {
+			return nil, err
+		}
+		out[tier] = true
+	}
+	return out, nil
+}
+
 // AllCIDRs returns pod + service CIDRs combined for in-cluster IP checks.
 func (c Config) AllCIDRs() []*net.IPNet {
 	out := make([]*net.IPNet, 0, len(c.ClusterPodCIDRs)+len(c.ClusterServiceCIDRs))

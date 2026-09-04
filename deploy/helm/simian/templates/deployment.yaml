@@ -30,6 +30,9 @@ spec:
             - --llm-model={{ .Values.llm.model }}
             {{- end }}
             - --duration-ceiling={{ .Values.executor.durationCeiling }}
+            {{- range .Values.executor.permittedTiers }}
+            - --permitted-tiers={{ . }}
+            {{- end }}
             - --max-concurrent-faults={{ .Values.executor.maxConcurrentFaults }}
             - --min-cooldown={{ .Values.executor.minCooldown }}
             - --recent-faults-capacity={{ .Values.executor.recentFaultsCapacity }}
