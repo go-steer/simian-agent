@@ -9,8 +9,8 @@ Simian ships three chaos engines. Each is a `simian.ChaosDriver` registered with
 
 | Engine | What it does | When to use it |
 |---|---|---|
-| `chaos-mesh` | The full Chaos Mesh CRD catalog: PodChaos, StressChaos, IOChaos, TimeChaos, NetworkChaos, etc. | Default for non-network chaos. NetworkChaos is silently bypassed on GKE Dataplane V2 — see [Known limitations]({{< relref "known-limitations.md" >}}). |
-| `network-policy` | Standard `networking.k8s.io/v1` NetworkPolicy partitions (deny ingress / egress / both). | Network partition chaos on GKE DPv2 (or any cluster where NetworkChaos isn't reliable). Partition only — no delay / loss / jitter. |
+| `chaos-mesh` | The full Chaos Mesh CRD catalog: PodChaos, StressChaos, IOChaos, TimeChaos, NetworkChaos, etc. | Default for everything. Whether NetworkChaos lands on GKE Dataplane V2 depends on the Cilium version — it does on current GKE, and its efficacy gate tells you either way. See [Known limitations]({{< relref "known-limitations.md" >}}). |
+| `network-policy` | Standard `networking.k8s.io/v1` NetworkPolicy partitions (deny ingress / egress / both). | Network partition chaos on any cluster where NetworkChaos isn't reliable. Partition only — no delay / loss / jitter. |
 | `envoy-fault` | HTTP-layer delay + abort via an injected Envoy sidecar. Two kinds: `EnvoyHttpDelay`, `EnvoyHttpAbort`. | HTTP/gRPC delay or error injection on DPv2. Requires the SUT to be deployed with `--no-envoy-faults=false` (off by default — see [Known limitations]({{< relref "known-limitations.md" >}}#envoy-injection-breaks-grpc-kubelet-probes)). |
 
 ## Directed-control patterns
@@ -123,4 +123,5 @@ error: arena: 1 simian-managed chaos resource(s) still active in "boutique-1"
 ## Background reading
 
 - [DPv2-compatible chaos engines]({{< relref "dpv2-chaos-engines.md" >}}) — full design rationale for `network-policy` and `envoy-fault`.
-- [Known limitations]({{< relref "known-limitations.md" >}}) — the GKE DPv2 NetworkChaos bypass and the Envoy injection / gRPC probe interaction.
+- [GKE bring-up]({{< relref "gke-bring-up.md" >}}) — measuring which of these engines actually land on your own GKE cluster.
+- [Known limitations]({{< relref "known-limitations.md" >}}) — the GKE DPv2 NetworkChaos question and the Envoy injection / gRPC probe interaction.

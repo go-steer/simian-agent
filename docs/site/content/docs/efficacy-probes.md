@@ -149,6 +149,42 @@ Two details are load-bearing and worth knowing about:
 * **Latency is measured through the body, not to the first byte.** A delay
   fault can hold the body rather than the headers.
 
+#### A request that never came back is slow
+
+A `min_latency` gate has to decide what a request that timed out means. The
+literal reading — no response, no measurement, no pass — is wrong here, and
+wrong in the expensive direction: it takes a delay fault that landed *harder*
+than asked and reports it as a fault that did nothing. The SUT ate the chaos
+and the audit record says it did not.
+
+That is not hypothetical. An injected 250ms delay on Online Boutique's
+`frontend` produced a 3.9s page load, because one page fans out into a dozen
+internal round trips and each pays the delay twice. Any per-request deadline
+sized against the *injected* number will expire.
+
+So a timeout satisfies `min_latency`, under four conditions, all of which have
+to hold:
+
+* `min_latency` is the *only* expectation on the probe. A status code, a body
+  match or a reachability check cannot be satisfied by a response that never
+  arrived, and a timeout fails them.
+* The request ran at least `min_latency` before giving up. A connection refused
+  in 2ms is not slowness, it is a dead pod.
+* The failure is genuinely a timeout — `context.DeadlineExceeded` or a
+  `net.Error` reporting `Timeout()`. A connection reset at 120ms is a broken
+  target, not a slow one, and is not counted.
+* `request_timeout >= min_latency`, so the deadline could not have fired before
+  the threshold was reachable.
+
+The caller's own deadline is not evidence either: a cancelled probe fails
+rather than passing on the way out.
+
+The SOT half is what makes the inference safe. `simian-fast-before` has already
+proved this pod answers well inside the threshold, so "it stopped answering
+within the deadline" is a change Simian caused, not a property of the workload.
+The `Expected` string says so out loud — `latency >= 125ms (or no response
+within 1s)` — so the audit record never claims a measurement it does not have.
+
 ### Why not `cmd`
 
 An `exec`-into-the-pod probe would read `tc -s qdisc` and settle a whole class
@@ -193,6 +229,21 @@ Defaults are on unless the operator turns them off:
 ```
 simian serve --default-efficacy-probes=false
 ```
+
+### Size a delay against the workload, not against the drama
+
+The delay gate is a 4× signal-to-noise requirement in disguise. SOT demands the
+target answer in under `latency/4`; Settle demands at least `latency/2`. That
+ratio is what stops "the app was always slow" from passing as "the fault
+landed", and it means the injected number has to be chosen relative to the
+target's own baseline.
+
+Online Boutique's `frontend` answers in 40–240ms depending on what its
+downstreams are doing, so a 250ms delay puts the SOT threshold at 62.5ms —
+inside the noise, and the precheck passes or fails on which sample it happens
+to take. Injecting 2s moves the threshold to 500ms, clear of it. A precheck
+that keeps failing on a fault you believe in usually means the delay is too
+small for the workload, not that the gate is broken.
 
 ### The envoy gate reads the value back
 

@@ -479,6 +479,129 @@ func TestLatencyCoversTheBodyNotJustTheHeaders(t *testing.T) {
 	}
 }
 
+func TestADelayGateCountsARequestThatNeverCameBack(t *testing.T) {
+	// Measured on GKE Dataplane V2: a 250ms netem delay took Online Boutique's
+	// frontend from ~90ms to ~3.9s, because one page load fans out into a dozen
+	// internal round trips. The Settle probe's request timeout is derived from
+	// the injected latency, so the request it was gating on blew straight
+	// through it — and the executor rolled back a fault that had visibly
+	// wrecked the app, reporting it as one that did nothing.
+	lister := &stubLister{pods: []Pod{{Name: "web-1", IP: "10.0.0.1", Ports: []int{8080}}}}
+	hung := &stubDoer{byURL: map[string]reply{
+		"http://10.0.0.1:8080/": {status: 200, body: "ok", delay: 2 * time.Second},
+	}}
+	p := NewHTTPProber(lister, hung)
+
+	spec := map[string]any{"min_latency": "50ms", "timeout": "1s", "interval": "10ms", "request_timeout": "100ms"}
+	res := p.Run(context.Background(), httpProbe(spec), webTarget())
+	if !res.Passed {
+		t.Fatalf("a request that timed out after 100ms did not satisfy min_latency=50ms: %s", res.Describe())
+	}
+	if !strings.Contains(res.Expected, "or no response within 100ms") {
+		t.Fatalf("the audit record does not state the predicate that actually passed: %q", res.Expected)
+	}
+}
+
+func TestARefusedConnectionIsNotSlowness(t *testing.T) {
+	// The whole inference rests on "we waited and got nothing". A connection
+	// refused comes back immediately and says the target is down, which is a
+	// different fault entirely — and on a delay gate, evidence that the delay
+	// is not what happened.
+	lister := &stubLister{pods: []Pod{{Name: "web-1", IP: "10.0.0.1", Ports: []int{8080}}}}
+	refused := &stubDoer{} // no entry, no fallback: connection refused
+	p := NewHTTPProber(lister, refused)
+
+	spec := map[string]any{"min_latency": "50ms", "timeout": "150ms", "interval": "10ms", "request_timeout": "2s"}
+	if res := p.Run(context.Background(), httpProbe(spec), webTarget()); res.Passed {
+		t.Fatalf("a delay gate passed against a target that refused the connection: %s", res.Describe())
+	}
+}
+
+func TestATimeoutShorterThanTheThresholdProvesNothing(t *testing.T) {
+	// Waiting 20ms and giving up says nothing about whether the answer would
+	// have taken longer than 500ms. Allowing it would make the gate pass on any
+	// target at all, given a tight enough request timeout.
+	lister := &stubLister{pods: []Pod{{Name: "web-1", IP: "10.0.0.1", Ports: []int{8080}}}}
+	hung := &stubDoer{byURL: map[string]reply{
+		"http://10.0.0.1:8080/": {status: 200, body: "ok", delay: 2 * time.Second},
+	}}
+	p := NewHTTPProber(lister, hung)
+
+	spec := map[string]any{"min_latency": "500ms", "timeout": "200ms", "interval": "10ms", "request_timeout": "20ms"}
+	res := p.Run(context.Background(), httpProbe(spec), webTarget())
+	if res.Passed {
+		t.Fatalf("a 20ms timeout was accepted as proof of 500ms of latency: %s", res.Describe())
+	}
+	if strings.Contains(res.Expected, "or no response") {
+		t.Fatalf("the audit record promises an inference the probe will not make: %q", res.Expected)
+	}
+}
+
+func TestASlowFailureThatIsNotATimeoutIsNotSlowness(t *testing.T) {
+	// A connection reset 200ms in is not a slow answer, it is no answer. Only
+	// "we waited the full request timeout and nothing came back" supports the
+	// inference; every other transport failure is the target being broken in
+	// some way the delay gate cannot claim credit for.
+	lister := &stubLister{pods: []Pod{{Name: "web-1", IP: "10.0.0.1", Ports: []int{8080}}}}
+	reset := &stubDoer{byURL: map[string]reply{
+		"http://10.0.0.1:8080/": {delay: 120 * time.Millisecond, err: fmt.Errorf("read tcp 10.0.0.1:8080: connection reset by peer")},
+	}}
+	p := NewHTTPProber(lister, reset)
+
+	spec := map[string]any{"min_latency": "50ms", "timeout": "300ms", "interval": "10ms", "request_timeout": "2s"}
+	if res := p.Run(context.Background(), httpProbe(spec), webTarget()); res.Passed {
+		t.Fatalf("a connection reset was accepted as proof the delay landed: %s", res.Describe())
+	}
+}
+
+func TestTheCallersDeadlineIsNotEvidenceOfSlowness(t *testing.T) {
+	// The request inherits the caller's context, so when the executor's own
+	// budget runs out mid-request the attempt fails with the same deadline
+	// error a real request timeout produces — at whatever latency the budget
+	// happened to end, which can be far below the threshold. Without the floor
+	// the probe could pass by the executor running out of time.
+	lister := &stubLister{pods: []Pod{{Name: "web-1", IP: "10.0.0.1", Ports: []int{8080}}}}
+	hung := &stubDoer{byURL: map[string]reply{
+		"http://10.0.0.1:8080/": {status: 200, body: "ok", delay: 5 * time.Second},
+	}}
+	p := NewHTTPProber(lister, hung)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancel()
+	spec := map[string]any{"min_latency": "500ms", "timeout": "10s", "interval": "10ms", "request_timeout": "5s"}
+	if res := p.Run(ctx, httpProbe(spec), webTarget()); res.Passed {
+		t.Fatalf("the probe passed on a deadline that expired after 120ms: %s", res.Describe())
+	}
+}
+
+func TestATimeoutIsNotEvidenceForTheOtherExpectations(t *testing.T) {
+	// A response that never arrived has no status and no body. A spec that
+	// asserts one of those cannot be satisfied by its absence, even when it
+	// also asks about latency.
+	lister := &stubLister{pods: []Pod{{Name: "web-1", IP: "10.0.0.1", Ports: []int{8080}}}}
+	hung := &stubDoer{byURL: map[string]reply{
+		"http://10.0.0.1:8080/": {status: 200, body: "ok", delay: 2 * time.Second},
+	}}
+
+	for _, tc := range []struct {
+		name string
+		spec map[string]any
+	}{
+		{"a status it never saw", map[string]any{"min_latency": "50ms", "expect_status": 200}},
+		{"a body it never read", map[string]any{"min_latency": "50ms", "expect_contains": "ok"}},
+		{"reachability it never established", map[string]any{"min_latency": "50ms", "expect_reachable": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.spec["timeout"] = "150ms"
+			tc.spec["interval"] = "10ms"
+			tc.spec["request_timeout"] = "100ms"
+			if res := NewHTTPProber(lister, hung).Run(context.Background(), httpProbe(tc.spec), webTarget()); res.Passed {
+				t.Fatalf("a timed-out request satisfied an expectation it could not observe: %s", res.Describe())
+			}
+		})
+	}
+}
+
 func TestMaxLatencyRejectsAnAlreadySlowBaseline(t *testing.T) {
 	lister := &stubLister{pods: []Pod{{Name: "web-1", IP: "10.0.0.1", Ports: []int{8080}}}}
 	slow := &stubDoer{byURL: map[string]reply{"http://10.0.0.1:8080/": {status: 200, body: "ok", delay: 80 * time.Millisecond}}}
