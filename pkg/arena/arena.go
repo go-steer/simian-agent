@@ -152,6 +152,21 @@ func roleRules() []rbacv1.PolicyRule {
 			Verbs:     []string{"create", "get", "list", "watch", "patch", "delete"},
 		},
 		{
+			// The kube-state engine causes declarative-state faults by
+			// creating workloads that are born broken. Unlike every other
+			// engine, which perturbs something that is already running, this
+			// one has to be able to put a new object in the arena — so it
+			// needs create and delete, not just read.
+			//
+			// This is the largest grant in the set, and it is bounded the same
+			// way the rest are: only inside a namespace Simian created and
+			// annotated as an arena, never cluster-wide. `simian arena
+			// destroy` removes the Role with the namespace.
+			APIGroups: []string{"apps"},
+			Resources: []string{"deployments"},
+			Verbs:     []string{"create", "get", "list", "watch", "patch", "delete"},
+		},
+		{
 			APIGroups: []string{""},
 			Resources: []string{"pods", "pods/log", "events", "configmaps", "services"},
 			Verbs:     []string{"get", "list", "watch"},

@@ -392,3 +392,121 @@ func TestAMultiLabelSelectorRendersInAStableOrder(t *testing.T) {
 		}
 	}
 }
+
+// --- kube-state ---
+
+func kubeStateManifest(kind string, spec map[string]any) simian.FaultManifest {
+	return simian.FaultManifest{
+		UID:          "01K4ZQ8XABCDEF",
+		Engine:       simian.EngineKubeState,
+		ResourceKind: kind,
+		Spec:         spec,
+		Targets:      []simian.TargetRef{{Namespace: "arena-1"}},
+	}
+}
+
+func TestEveryKubeStateKindIsGatedOnItsOwnFailureState(t *testing.T) {
+	// The reason each kind proves itself on. A gate that fired on something
+	// broader — Pending, or any crash loop — would pass for a fault other than
+	// the one injected, which is the same lie as not gating at all.
+	want := map[string]struct{ probe, reason string }{
+		KubeStateImageUnresolvable:  {ProbeImagePullFailed, "ImagePullBackOff"},
+		KubeStateContainerExitLoop:  {ProbeCrashLooping, "Error"},
+		KubeStateMemoryLimitSqueeze: {ProbeOOMKilled, "OOMKilled"},
+		KubeStateUnschedulable:      {ProbeUnschedulable, "Unschedulable"},
+	}
+	for kind, w := range want {
+		probes := DefaultProbes(kubeStateManifest(kind, nil))
+		if len(probes) != 1 {
+			t.Fatalf("%s: probes = %v, want exactly one", kind, names(probes))
+		}
+		p := probes[0]
+		if p.Name != w.probe {
+			t.Errorf("%s: probe name = %q, want %q", kind, p.Name, w.probe)
+		}
+		if p.Type != simian.ProbeTypeK8s {
+			t.Errorf("%s: type = %q, want k8s", kind, p.Type)
+		}
+		// Settle only. A synthesized workload did not exist before Apply, so
+		// there is no pre-existing condition for an SOT half to rule out.
+		if p.Mode != simian.ProbeModeSettle {
+			t.Errorf("%s: mode = %q, want Settle", kind, p.Mode)
+		}
+		if got := p.Spec["expect_contains"]; got != w.reason {
+			t.Errorf("%s: expect_contains = %v, want %q", kind, got, w.reason)
+		}
+		if got := p.Spec["resource"]; got != "pods" {
+			t.Errorf("%s: resource = %v, want pods", kind, got)
+		}
+		if got, _ := p.Spec["jsonpath"].(string); !strings.HasPrefix(got, "{.items[*].status.") {
+			t.Errorf("%s: jsonpath %q does not read pod status", kind, got)
+		}
+		// state.waiting.reason is a coin flip for anything that restarts: the
+		// kubelet only shows CrashLoopBackOff in a narrow window around each
+		// restart decision, and sits in state.terminated the rest of the time.
+		// Measured on GKE 1.36 at one poll in six. Only the kind that never
+		// starts a container may read the current waiting state.
+		if got, _ := p.Spec["jsonpath"].(string); strings.Contains(got, "state.waiting") && kind != KubeStateImageUnresolvable {
+			t.Errorf("%s: gate reads %q, which is only intermittently populated for a container that restarts", kind, got)
+		}
+		if got := p.Spec["timeout"]; got == "" || got == nil {
+			t.Errorf("%s: gate has no timeout", kind)
+		}
+	}
+}
+
+// The gate runs before Apply and has to select pods that do not exist yet. It
+// can only do that because both sides derive the workload name from the fault
+// UID. If they ever disagree the probe selects nothing, the Settle never
+// passes, and a fault that landed is rolled back and reported as inert.
+func TestTheKubeStateGateSelectsTheWorkloadApplyWillCreate(t *testing.T) {
+	m := kubeStateManifest(KubeStateImageUnresolvable, nil)
+	want := "app=" + KubeStateWorkloadName(KubeStateImageUnresolvable, "", m.UID)
+	if got := DefaultProbes(m)[0].Spec["label_selector"]; got != want {
+		t.Errorf("label_selector = %v, want %q", got, want)
+	}
+
+	named := kubeStateManifest(KubeStateImageUnresolvable, map[string]any{"name": "checkout"})
+	got, _ := DefaultProbes(named)[0].Spec["label_selector"].(string)
+	if !strings.HasPrefix(got, "app=checkout-") {
+		t.Errorf("label_selector = %q, want the requested name plus the UID suffix", got)
+	}
+}
+
+// The same manifest must produce the same selector every time, or the audit
+// record of what was checked differs between two replays of one scenario.
+func TestTheKubeStateWorkloadNameIsAPureFunctionOfTheManifest(t *testing.T) {
+	m := kubeStateManifest(KubeStateUnschedulable, nil)
+	first, _ := DefaultProbes(m)[0].Spec["label_selector"].(string)
+	for i := range 20 {
+		if got, _ := DefaultProbes(m)[0].Spec["label_selector"].(string); got != first {
+			t.Fatalf("run %d: selector = %q, want %q", i, got, first)
+		}
+	}
+	// Two faults of the same kind must not share a workload — the second
+	// Create would collide, and one gate would read the other's pods.
+	other := kubeStateManifest(KubeStateUnschedulable, nil)
+	other.UID = "01K4ZQ8XZZZZZZ"
+	if got, _ := DefaultProbes(other)[0].Spec["label_selector"].(string); got == first {
+		t.Errorf("two fault UIDs produced the same selector %q", got)
+	}
+}
+
+// Only synthesize creates pods. Attaching a gate to a mode that creates none
+// turns a clear driver error into a 90-second probe timeout.
+func TestOnlySynthesizeModeGetsAKubeStateGate(t *testing.T) {
+	if got := DefaultProbes(kubeStateManifest(KubeStateImageUnresolvable, map[string]any{"mode": "synthesize"})); len(got) != 1 {
+		t.Errorf("explicit synthesize: probes = %v, want one", names(got))
+	}
+	for _, mode := range []string{"mutate", "nonsense"} {
+		if got := DefaultProbes(kubeStateManifest(KubeStateImageUnresolvable, map[string]any{"mode": mode})); len(got) != 0 {
+			t.Errorf("mode %q: probes = %v, want none", mode, names(got))
+		}
+	}
+}
+
+func TestAnUnknownKubeStateKindGetsNoGate(t *testing.T) {
+	if got := DefaultProbes(kubeStateManifest("NodeUnready", nil)); len(got) != 0 {
+		t.Errorf("probes = %v, want none for a kind this engine does not synthesize", names(got))
+	}
+}

@@ -76,6 +76,13 @@ const (
 	EngineLitmus        Engine = "litmus"
 	EngineNetworkPolicy Engine = "network-policy"
 	EngineEnvoyFault    Engine = "envoy-fault"
+
+	// EngineKubeState produces declarative-state faults: an object that is
+	// wrong in the API server, rather than a perturbation of a running
+	// dataplane. The other four engines all break traffic or processes; this
+	// one breaks the desired state, which is the half of the failure space an
+	// SRE agent spends most of its time in.
+	EngineKubeState Engine = "kube-state"
 )
 
 // TargetRef denormalizes the namespace/workload information from the engine's

@@ -33,6 +33,10 @@ const (
 	ProbeFastBefore      = "simian-fast-before"
 	ProbeDelayed         = "simian-delayed"
 	ProbeEnvoyRuntime    = "simian-envoy-runtime"
+	ProbeImagePullFailed = "simian-image-pull-failed"
+	ProbeCrashLooping    = "simian-crash-looping"
+	ProbeOOMKilled       = "simian-oom-killed"
+	ProbeUnschedulable   = "simian-unschedulable"
 )
 
 // Envoy runtime keys, mirrored from pkg/sut/envoy's bootstrap. Duplicated
@@ -79,6 +83,22 @@ var gates = map[gateKey]gate{
 	{simian.EngineEnvoyFault, "EnvoyHttpAbort"}: {
 		describe: "the sidecar's admin API must report the abort runtime key at the requested percentage",
 		build:    envoyAbortProbes,
+	},
+	{simian.EngineKubeState, KubeStateImageUnresolvable}: {
+		describe: "the synthesized workload's pods must report ImagePullBackOff",
+		build:    kubeStateProbes,
+	},
+	{simian.EngineKubeState, KubeStateContainerExitLoop}: {
+		describe: "the synthesized workload's pods must report CrashLoopBackOff",
+		build:    kubeStateProbes,
+	},
+	{simian.EngineKubeState, KubeStateMemoryLimitSqueeze}: {
+		describe: "the synthesized workload's containers must report a last termination of OOMKilled",
+		build:    kubeStateProbes,
+	},
+	{simian.EngineKubeState, KubeStateUnschedulable}: {
+		describe: "the synthesized workload's pods must report a PodScheduled condition of Unschedulable",
+		build:    kubeStateProbes,
 	},
 }
 
@@ -224,6 +244,118 @@ func delayPair(selector map[string]string, delay map[string]any) []simian.ProbeS
 			}),
 		},
 	}
+}
+
+// kubeStateGate is the field a synthesized fault kind proves itself on.
+type kubeStateGate struct {
+	probeName string
+	jsonPath  string
+	expect    string
+	timeout   string
+}
+
+var kubeStateGates = map[string]kubeStateGate{
+	KubeStateImageUnresolvable: {
+		probeName: ProbeImagePullFailed,
+		jsonPath:  "{.items[*].status.containerStatuses[*].state.waiting.reason}",
+		// The kubelet reports ErrImagePull on the first failure and
+		// ImagePullBackOff once it starts backing off. Matching the backoff
+		// state rather than the first error is the stabler assertion: it is
+		// where the pod stays, so the probe does not depend on catching a
+		// transient on the right poll.
+		expect:  "ImagePullBackOff",
+		timeout: "90s",
+	},
+	KubeStateContainerExitLoop: {
+		probeName: ProbeCrashLooping,
+		// Not state.waiting.reason == CrashLoopBackOff, which is the obvious
+		// choice and is a coin flip. A container that exits immediately spends
+		// almost all of its time with the *previous* termination showing in
+		// `state.terminated`; the kubelet only flips to `waiting:
+		// CrashLoopBackOff` in a narrow window around each restart decision.
+		// Measured on GKE 1.36: one poll in six saw CrashLoopBackOff, and a
+		// 90s / 44-poll gate missed it entirely on one run and passed in 6.5s
+		// on another. A gate that flaky reports a fault that landed as inert,
+		// which is the exact failure the gates exist to prevent.
+		//
+		// lastState.terminated.reason is stable from the first restart on.
+		jsonPath: "{.items[*].status.containerStatuses[*].lastState.terminated.reason}",
+		// "Error" is the kubelet's reason for a non-zero exit. It reads
+		// generic, and is specific enough here: the workload is synthesized,
+		// so nothing else could have terminated these pods, and the one other
+		// way this engine kills a container reports OOMKilled instead.
+		expect:  "Error",
+		timeout: "90s",
+	},
+	KubeStateMemoryLimitSqueeze: {
+		probeName: ProbeOOMKilled,
+		// lastState, not state, for the reason above, plus one specific to
+		// this kind: by the time the kubelet is backing off, the OOM kill is
+		// only visible as the previous termination. Asserting on the current
+		// state would pass for any crash loop and prove nothing about memory.
+		jsonPath: "{.items[*].status.containerStatuses[*].lastState.terminated.reason}",
+		expect:   "OOMKilled",
+		// Longer than the others: the container has to start, allocate past
+		// its limit, be killed, and be restarted before lastState is
+		// populated at all.
+		timeout: "120s",
+	},
+	KubeStateUnschedulable: {
+		probeName: ProbeUnschedulable,
+		// Unschedulable is the reason on the PodScheduled condition, and it is
+		// the only condition reason with that value, so matching across all
+		// conditions is specific without needing a jsonpath filter
+		// expression. Asserting on phase == Pending instead would also pass
+		// while an image is still being pulled.
+		jsonPath: "{.items[*].status.conditions[*].reason}",
+		expect:   "Unschedulable",
+		timeout:  "60s",
+	},
+}
+
+// kubeStateProbes gates a synthesized declarative-state fault by reading the
+// state back off the pods it created.
+//
+// There is no SOT half here, and its absence is not an oversight. The
+// dataplane gates need one because their Settle assertion is differential:
+// "the target does not answer" proves nothing about a workload that was not
+// answering beforehand. A synthesized workload did not exist before Apply, so
+// "these pods are in ImagePullBackOff" cannot be a pre-existing condition —
+// there is nothing for a precheck to rule out. When `mutate` mode lands it
+// will need the SOT half back, because there the workload was already running
+// and might already have been broken.
+//
+// The selector names pods Apply has not created yet, which is possible because
+// KubeStateWorkloadName derives the workload name from the fault UID.
+func kubeStateProbes(m simian.FaultManifest) []simian.ProbeSpec {
+	g, ok := kubeStateGates[m.ResourceKind]
+	if !ok {
+		return nil
+	}
+	// Only synthesize mode creates the pods this gate reads. Anything else is
+	// either unimplemented or a spec the driver will reject, and attaching a
+	// probe for pods that will never appear would turn a clear driver error
+	// into a probe timeout.
+	if mode := stringField(m.Spec, "mode"); mode != "" && mode != "synthesize" {
+		return nil
+	}
+	name := KubeStateWorkloadName(m.ResourceKind, stringField(m.Spec, "name"), m.UID)
+	if name == "" {
+		return nil
+	}
+	return []simian.ProbeSpec{{
+		Name: g.probeName,
+		Type: simian.ProbeTypeK8s,
+		Mode: simian.ProbeModeSettle,
+		Spec: map[string]any{
+			"resource":        "pods",
+			"label_selector":  "app=" + name,
+			"jsonpath":        g.jsonPath,
+			"expect_contains": g.expect,
+			"timeout":         g.timeout,
+			"interval":        "2s",
+		},
+	}}
 }
 
 func envoyDelayProbes(m simian.FaultManifest) []simian.ProbeSpec {

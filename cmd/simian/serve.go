@@ -39,6 +39,7 @@ import (
 	"github.com/go-steer/simian-agent/pkg/catalog"
 	"github.com/go-steer/simian-agent/pkg/driver/chaosmesh"
 	"github.com/go-steer/simian-agent/pkg/driver/envoyfault"
+	"github.com/go-steer/simian-agent/pkg/driver/kubestate"
 	"github.com/go-steer/simian-agent/pkg/driver/networkpolicy"
 	"github.com/go-steer/simian-agent/pkg/executor"
 	"github.com/go-steer/simian-agent/pkg/lease"
@@ -118,11 +119,17 @@ func newServeCmd() *cobra.Command {
 			// installed by pkg/sut/envoy at SUT-deploy time. Works on
 			// DPv2 because faults are applied above the dataplane.
 			envoyDriver := envoyfault.New(clientset)
+			// kube-state driver — declarative-state faults. The other three
+			// engines perturb a running dataplane; this one synthesizes an
+			// object that is wrong in the API server, which is the half of the
+			// failure space an SRE agent actually lives in.
+			ksDriver := kubestate.New(clientset)
 
 			drivers := map[simian.Engine]simian.ChaosDriver{
 				simian.EngineChaosMesh:     cmDriver,
 				simian.EngineNetworkPolicy: npDriver,
 				simian.EngineEnvoyFault:    envoyDriver,
+				simian.EngineKubeState:     ksDriver,
 			}
 
 			elig, arenaNamespaces := buildEligibility(clientset, eligibleNS, logger)
