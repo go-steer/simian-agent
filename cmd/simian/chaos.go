@@ -66,12 +66,12 @@ Examples:
   simian chaos --list-catalog
   simian chaos --clear f-<uid>`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// 90s accommodates LLM-translated paths that may need a retry round
-			// (each LLM call can take 5-15s on Gemini 2.5 Pro).
-			ctx, cancel := context.WithTimeout(cmd.Context(), 90*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), submitBudget)
 			defer cancel()
 
-			cli, err := newMCPClient(ctx, mcpURL)
+			// The transport has its own 60s default, and the shorter of the two
+			// wins. Both have to be raised or the client hangs up mid-gate.
+			cli, err := newMCPClient(ctx, mcpURL, withResponseTimeout(submitBudget))
 			if err != nil {
 				return err
 			}
@@ -127,6 +127,17 @@ Examples:
 	cmd.Flags().BoolVar(&listCatalog, "list-catalog", false, "List fault catalog")
 	return cmd
 }
+
+// submitBudget bounds a single `simian chaos` call.
+//
+// Sized for what the controller is allowed to do before it answers, not for
+// how long a fault runs: a gated apply waits out its SOT probe (30s by
+// default), applies, then waits out its Settle probe (60s), and an
+// LLM-translated intent can spend another 15s per retry round in front of all
+// that. The old 90s ceiling cut the client off mid-gate — the fault was still
+// being verified, and the operator saw a transport error with no way to tell
+// whether anything had been applied.
+const submitBudget = 5 * time.Minute
 
 // mcpClientOption tunes a single newMCPClient call. Defaults preserve the
 // mark3labs/mcp-go SSE transport built-ins (60s response timeout). Use

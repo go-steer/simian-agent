@@ -29,8 +29,8 @@ Every fault flows through one chokepoint — the Fault Executor — which checks
 `simian chaos --intent "..."` for plain-text directed faults. `simian serve --autonomous` for the LLM-driven planning loop with per-cycle budget caps, baseline health-gating, and clean LLM-down skip behavior.
 {{% /blocks/feature %}}
 
-{{% blocks/feature icon="fa-solid fa-network-wired" title="Works on GKE Dataplane V2" url="docs/dpv2-chaos-engines/" %}}
-The `network-policy` engine handles partitions and the `envoy-fault` engine handles HTTP-layer delay + abort on clusters where Chaos Mesh's NetworkChaos is silently bypassed by the eBPF dataplane.
+{{% blocks/feature icon="fa-solid fa-network-wired" title="Works on GKE Dataplane V2" url="docs/gke-bring-up/" %}}
+Network chaos that the eBPF dataplane quietly drops fails its efficacy gate instead of being reported as applied. Where Chaos Mesh's NetworkChaos can't reach, the `network-policy` and `envoy-fault` engines work above the dataplane.
 {{% /blocks/feature %}}
 
 {{% /blocks/section %}}

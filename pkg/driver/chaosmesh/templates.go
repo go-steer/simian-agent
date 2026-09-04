@@ -38,10 +38,13 @@ NEVER "latency" — that belongs to IOChaos. NetworkChaos uses "delay" for laten
  "delay": {"latency": "250ms", "correlation": "0", "jitter": "0ms"}}
 For "loss":      "loss":      {"loss": "10", "correlation": "0"}
 For "bandwidth": "bandwidth": {"rate": "1mbps", "limit": 20971520, "buffer": 10000}
-NOTE: On GKE Dataplane V2 (eBPF/Cilium) this CRD applies cleanly but the
-network effect is silently bypassed. For real network impact on DPv2,
-use the network-policy engine (partition only) or envoy-fault engine
-(HTTP delay/abort).`,
+NOTE: On some GKE Dataplane V2 (eBPF/Cilium) versions this CRD applies
+cleanly but the network effect never lands, because the eBPF datapath
+bypasses the tc/netem qdisc. It does land on current GKE. You do not have
+to guess: the default efficacy gate measures the effect and rolls the
+fault back if it is absent. If NetworkChaos keeps failing its gate on this
+cluster, use the network-policy engine (partition only) or the
+envoy-fault engine (HTTP delay/abort) instead.`,
 
 	"StressChaos": `no "action" field — use "stressors": {"cpu": {...}} or {"memory": {...}}
 {"mode": "one",

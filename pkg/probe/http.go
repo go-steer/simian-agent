@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -172,7 +174,11 @@ func (s httpSpec) describe() string {
 		parts = append(parts, fmt.Sprintf("%s == %q", s.valueName(), s.expectEquals))
 	}
 	if s.minLatency > 0 {
-		parts = append(parts, fmt.Sprintf("latency >= %s", s.minLatency))
+		part := fmt.Sprintf("latency >= %s", s.minLatency)
+		if s.slowCountsAsTimeout() {
+			part += fmt.Sprintf(" (or no response within %s)", s.requestTimeout)
+		}
+		parts = append(parts, part)
 	}
 	if s.maxLatency > 0 {
 		parts = append(parts, fmt.Sprintf("latency <= %s", s.maxLatency))
@@ -221,7 +227,7 @@ func (s httpSpec) satisfied(a attempt) bool {
 		return a.err != nil
 	}
 	if a.err != nil {
-		return false
+		return s.timedOutSlowly(a)
 	}
 	if s.expectStatus != 0 && a.status != s.expectStatus {
 		return false
@@ -239,6 +245,60 @@ func (s httpSpec) satisfied(a attempt) bool {
 		return false
 	}
 	return true
+}
+
+// slowCountsAsTimeout reports whether this spec is one where a request that
+// never came back is itself the evidence being looked for.
+//
+// Only a pure min_latency probe qualifies. A response that never arrived has
+// no status, no body and no jsonpath to check, so a spec asserting any of
+// those cannot be satisfied by its absence; and the wait has to be at least as
+// long as the threshold or the timeout proves nothing about it.
+func (s httpSpec) slowCountsAsTimeout() bool {
+	return s.minLatency > 0 &&
+		!s.expectReachable &&
+		s.expectStatus == 0 &&
+		s.expectContains == "" &&
+		s.expectEquals == "" &&
+		s.requestTimeout >= s.minLatency
+}
+
+// timedOutSlowly reports whether a failed attempt still answers the question
+// the probe asked.
+//
+// A min_latency gate asks "is the target answering slower than X". A request
+// that has not come back after X has answered it: whatever the target is
+// doing, it is not doing it in under X. Counting that as a failure is how a
+// netem delay that landed hard enough to blow the request timeout gets rolled
+// back and reported as a fault that did nothing — the mirror image of the
+// vacuous pass this gate exists to prevent, and worse, because the fault was
+// live in the cluster for the whole settle window before being disowned.
+//
+// Measured on GKE Dataplane V2: a 250ms delay on Online Boutique's frontend
+// took the page from ~90ms to ~3.9s, because the request fans out into a
+// dozen internal round trips and every one of them pays the delay twice. No
+// per-request timeout derived from the injected latency alone survives that.
+//
+// Only timeouts count. A refused connection comes back immediately and says
+// the target is down, which is not slowness. The SOT half of the gate is what
+// makes the inference safe either way: the target was proven reachable and
+// fast seconds earlier, so "not answering now" is a change rather than a
+// pre-existing condition.
+func (s httpSpec) timedOutSlowly(a attempt) bool {
+	return s.slowCountsAsTimeout() && a.latency >= s.minLatency && isTimeout(a.err)
+}
+
+// isTimeout distinguishes "waited and got nothing" from "asked and was
+// refused". http.Client wraps the request context's deadline in a *url.Error,
+// which reports Timeout() and unwraps to context.DeadlineExceeded; both forms
+// are checked so a change in either layer does not quietly turn a timeout into
+// a refusal.
+func isTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // Run implements Prober.

@@ -5,6 +5,9 @@ weight: 50
 description: "Why we ship network-policy + envoy-fault engines for GKE Dataplane V2 clusters."
 ---
 
+{{% pageinfo %}}
+**Measured update, 2026-09-04.** The premise below — that Dataplane V2 swallows Chaos Mesh's NetworkChaos — no longer reproduces on current GKE. Both `delay` and `partition` landed on GKE 1.36.3-gke.1537000 with Cilium v1.19.4-gke.49 and Chaos Mesh v2.8.2. This page is kept as the design rationale for the `network-policy` and `envoy-fault` engines, which remain the right tool whenever the dataplane *does* swallow netem, and are worth having regardless. Check your own cluster before assuming either way: see [GKE bring-up]({{< relref "gke-bring-up.md" >}}).
+{{% /pageinfo %}}
 
 ## Context
 

@@ -17,13 +17,16 @@ You're in the `simian-agent` reference docs. The site root has the marketing pit
 
 **Picking which chaos engine to use?** → [Using the chaos engines]({{< relref "chaos-engines.md" >}}) covers the directed and autonomous patterns for `chaos-mesh`, `network-policy`, and `envoy-fault` — including which one to reach for on which kind of cluster.
 
-**Hit something weird?** → [Known limitations]({{< relref "known-limitations.md" >}}) collects the GKE Dataplane V2 NetworkChaos bypass, the Envoy injection vs gRPC probe interaction, and other gotchas worth knowing about before you debug.
+**Pointing it at GKE?** → [GKE bring-up]({{< relref "gke-bring-up.md" >}}) covers the Dataplane V2 and Autopilot constraints, and how to measure which fault kinds actually land on your cluster.
+
+**Hit something weird?** → [Known limitations]({{< relref "known-limitations.md" >}}) collects the GKE Dataplane V2 NetworkChaos question, the Envoy injection vs gRPC probe interaction, and other gotchas worth knowing about before you debug.
 
 ## Reference index
 
 ### Getting things done
 - **[Getting started]({{< relref "getting-started.md" >}})** — first chaos in under 10 minutes.
 - **[Deploying with Helm]({{< relref "deploy.md" >}})** — in-cluster install patterns.
+- **[GKE bring-up]({{< relref "gke-bring-up.md" >}})** — the first run against a real GKE cluster, and what lands on Dataplane V2.
 - **[Using the chaos engines]({{< relref "chaos-engines.md" >}})** — directed and autonomous patterns per engine.
 - **[CLI reference]({{< relref "cli-reference.md" >}})** — every flag on every subcommand.
 - **[Helm values reference]({{< relref "helm-values.md" >}})** — every chart value.

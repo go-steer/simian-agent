@@ -7,17 +7,28 @@ description: "Cluster-side gotchas, dataplane caveats, and feature limitations c
 
 This page is the canonical place to land if a fault "applied successfully" but didn't appear to do anything, or if a SUT pod refuses to come up after enabling Envoy injection.
 
-## GKE Dataplane V2 silently breaks Chaos Mesh's NetworkChaos
+## Chaos Mesh's NetworkChaos may or may not work on GKE Dataplane V2 — measure it
 
-Chaos Mesh installs a `netem` qdisc on the pod's `eth0`, which we verified is present at the kernel level. But Dataplane V2 routes pod-to-pod traffic through eBPF maps that bypass the tc qdisc layer, so the latency / loss never gets applied. The `Sent ... pkt` counter on the qdisc stays flat. This is a Chaos Mesh + Cilium incompatibility, not a Simian bug.
+Historically it did not. Chaos Mesh installs a `netem` qdisc on the pod's `eth0`, which we verified is present at the kernel level; Dataplane V2 routed pod-to-pod traffic through eBPF maps that bypassed the tc qdisc layer, so the latency / loss never got applied and the `Sent ... pkt` counter on the qdisc stayed flat.
 
-References: [chaos-mesh#3302](https://github.com/chaos-mesh/chaos-mesh/issues/3302), [cilium#19975](https://github.com/cilium/cilium/issues/19975) — both open since 2022, no fix in sight.
+References: [chaos-mesh#3302](https://github.com/chaos-mesh/chaos-mesh/issues/3302), [cilium#19975](https://github.com/cilium/cilium/issues/19975).
 
-**Workarounds shipped:**
+**That no longer reproduces on current GKE.** Measured 2026-09-04 on a Standard cluster with `datapathProvider: ADVANCED_DATAPATH`, GKE 1.36.3-gke.1537000, Cilium v1.19.4-gke.49 (`anetd`), Chaos Mesh v2.8.2, COS nodes on kernel 6.12.94+:
+
+| Fault | Before | During | After |
+|---|---|---|---|
+| `NetworkChaos` `delay` 250ms on `frontend` | ~90ms per request | ~3.9s | ~90ms |
+| `NetworkChaos` `partition` both on `frontend` | HTTP 200 | connect timeout | HTTP 200 |
+
+Both landed. The delay figure is much larger than the injected 250ms because one Online Boutique page load fans out into a dozen internal round trips and each one pays the delay twice — a useful reminder that injected latency and observed latency are not the same number.
+
+Treat this as version-dependent rather than settled either way. Cilium, the GKE release, and the node image all move, and the failure mode when it does not work is that the fault applies cleanly and does nothing. Simian's [default efficacy gate]({{< relref "efficacy-probes.md" >}}) is what makes that safe to be uncertain about: on a cluster where the qdisc is bypassed, the delay or partition fails its Settle probe and is rolled back rather than reported as applied. To find out where your own cluster stands, apply one gated `NetworkChaos` and read the `fault.efficacy` audit record — the [GKE bring-up]({{< relref "gke-bring-up.md" >}}) page walks through exactly that.
+
+**Alternatives, still shipped and still useful** — they do not depend on the dataplane at all, which is the point:
 
 - The [`network-policy` engine]({{< relref "chaos-engines.md" >}}) handles partition-style chaos. Works on DPv2.
 - The [`envoy-fault` engine]({{< relref "chaos-engines.md" >}}) handles HTTP-layer delay + abort via an injected Envoy sidecar. Works on DPv2 (subject to the limitation immediately below).
-- The word *silently* no longer applies. `NetworkChaos` carries a [default efficacy gate]({{< relref "efficacy-probes.md" >}}): a partition or delay that the qdisc never applied fails at inject time with a named probe and is rolled back, instead of being reported as a fault the agent under test then gets scored on. Same for `NetworkPolicy` on a CNI that does not enforce it.
+- The word *silently* no longer applies to any of it. `NetworkChaos` carries a [default efficacy gate]({{< relref "efficacy-probes.md" >}}): a partition or delay that the qdisc never applied fails at inject time with a named probe and is rolled back, instead of being reported as a fault the agent under test then gets scored on. Same for `NetworkPolicy` on a CNI that does not enforce it.
 
 For non-network chaos, `PodChaos` / `StressChaos` / `TimeChaos` / `IOChaos` / `JVMChaos` continue to work fine on Dataplane V2. See [DPv2-compatible chaos engines]({{< relref "dpv2-chaos-engines.md" >}}) for the full design rationale.
 
