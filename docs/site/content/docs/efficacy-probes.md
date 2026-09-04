@@ -208,6 +208,10 @@ a vote on.
 | `chaos-mesh` | `NetworkChaos` (`delay`) | Fast before, measurably slower after |
 | `envoy-fault` | `EnvoyHttpDelay` | Admin API reports the delay runtime key at the requested percentage |
 | `envoy-fault` | `EnvoyHttpAbort` | Admin API reports the abort runtime key at the requested percentage |
+| `kube-state` | `ImageUnresolvable` | Pods reach `ImagePullBackOff` |
+| `kube-state` | `ContainerExitLoop` | A container's `lastState.terminated.reason` is `Error` (non-zero exit) |
+| `kube-state` | `MemoryLimitSqueeze` | A container's `lastState.terminated.reason` is `OOMKilled` |
+| `kube-state` | `Unschedulable` | A pod condition carries reason `Unschedulable` |
 
 The table is keyed by `(engine, kind)`, not by cluster. The Chaos Mesh catalog
 is derived from live CRD discovery, so anything hand-listed per installation
@@ -222,7 +226,43 @@ A manifest overrides a default only by **naming it** — declaring a probe calle
 additive, so a manifest cannot dissolve its gate by declaring something
 unrelated. The names are reserved and prefixed: `simian-reachable-before`,
 `simian-partitioned`, `simian-fast-before`, `simian-delayed`,
-`simian-envoy-runtime`.
+`simian-envoy-runtime`, `simian-image-pull-failed`, `simian-crash-looping`,
+`simian-oom-killed`, `simian-unschedulable`.
+
+### A synthesized fault has no SOT half, and that is not an oversight
+
+The four `kube-state` gates are Settle-only. Every dataplane gate above needs a
+precheck because its Settle assertion is *differential*: "the target does not
+answer" proves nothing about a workload that was not answering beforehand.
+
+A synthesized workload did not exist before `Apply`. "These pods are in
+`ImagePullBackOff`" cannot be a pre-existing condition, because there was no
+pre-existing anything — there is nothing for a precheck to rule out. When the
+engine's `mutate` mode lands, which patches a workload that was already running,
+the SOT half comes back with it.
+
+That the gate can name pods that do not exist yet is why the synthesized
+workload's name is derived from the fault UID rather than from a fresh random
+value: the executor builds the probe *before* it calls `Apply`, so both sides
+have to compute the same name from the manifest alone.
+
+Each gate asserts the narrowest *stable* field it can, and the second word is
+the one that cost a debugging session. The obvious gate for `ContainerExitLoop`
+is `state.waiting.reason == CrashLoopBackOff`, and it is a coin flip: a
+container that exits immediately spends almost all of its time with the
+previous termination showing in `state.terminated`, and the kubelet flips to
+`waiting: CrashLoopBackOff` only in a narrow window around each restart
+decision. Measured on GKE 1.36 that window caught one poll in six — one run
+passed in 6.5s, the next missed it across 44 polls and rolled back a fault that
+had visibly landed. Both crash-loop kinds now read
+`lastState.terminated.reason`, which is stable from the first restart on:
+`Error` for a non-zero exit, `OOMKilled` for a memory kill.
+
+`ImageUnresolvable` is the exception that may read `state.waiting.reason`: its
+container never starts, so there is no restart cycle to race against and the
+pod stays in `ImagePullBackOff`. `Unschedulable` reads the `PodScheduled`
+condition's reason rather than `phase == Pending`, which would also pass while
+an image is still pulling.
 
 Defaults are on unless the operator turns them off:
 

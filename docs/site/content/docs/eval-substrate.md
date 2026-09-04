@@ -111,6 +111,14 @@ adversary must not share code with the subject's repo.
 
 ## 3. What Simian can reproduce today: none of it
 
+{{% pageinfo %}}
+**Updated 2026-09-04.** The analysis below is the state before the `kube-state`
+engine existed, and the "zero of eleven" number is what motivated building it.
+Four of the eleven — `imagePull`, `crashLoop`, `oomKill`, `unschedulable` — are
+now reproducible and verified against a live GKE cluster; the table's last
+column is marked accordingly. The remaining seven are #57 and #58.
+{{% /pageinfo %}}
+
 Simian's four engines (`chaos-mesh`, `network-policy`, `envoy-fault`, and the
 unimplemented `litmus`) all **perturb a running dataplane**. Every one of the
 eleven fixtures is a **declarative-state fault** — an object that is wrong, or
@@ -118,22 +126,23 @@ born wrong, in the API server.
 
 | # | Fixture | Namespace | Ground truth (Kind / Name / representative Reason) | Severity | Reproducible with a Simian engine today? |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `imagePull` | `fault-imagepull` | Pod / `checkout-api` / `ImagePullBackOff` | Critical | No |
-| 2 | `crashLoop` | `fault-crashloop` | Pod / `payments-worker` / `CrashLoopBackOff` | Critical | No — `PodChaos pod-failure` yields a pause-image pod, a different reason |
-| 3 | `oomKill` | `fault-oomkill` | Pod / `cache-warmer` / `OOMKilled` | Critical | No — `StressChaos` needs a pre-set limit to OOM against |
-| 4 | `unschedulable` | `fault-unschedulable` | Pod / `analytics-etl` / `Unschedulable`, `FailedScheduling` | Critical | No |
+| 1 | `imagePull` | `fault-imagepull` | Pod / `checkout-api` / `ImagePullBackOff` | Critical | **Yes** — `kube-state` `ImageUnresolvable` |
+| 2 | `crashLoop` | `fault-crashloop` | Pod / `payments-worker` / `CrashLoopBackOff` | Critical | **Yes** — `kube-state` `ContainerExitLoop`. (`PodChaos pod-failure` does not: it yields a pause-image pod, a different reason) |
+| 3 | `oomKill` | `fault-oomkill` | Pod / `cache-warmer` / `OOMKilled` | Critical | **Yes** — `kube-state` `MemoryLimitSqueeze`, which brings its own limit. (`StressChaos` does not: it needs a pre-set limit to OOM against) |
+| 4 | `unschedulable` | `fault-unschedulable` | Pod / `analytics-etl` / `Unschedulable`, `FailedScheduling` | Critical | **Yes** — `kube-state` `Unschedulable` |
 | 5 | `failedJob` | `fault-failedjob` | Job / `nightly-report` / `BackoffLimitExceeded` | Warning | No |
 | 6 | `serviceSelectorMismatch` | `fault-badselector` | Service / `frontend` / `NoEndpoints` | Warning | No |
 | 7 | `healthy` | `fault-none` | *(none — control)* | OK | Trivially |
-| 8 | `multipleFaults` | `fault-storefront` | 3 findings: `orders-api` imagepull, `recommendation-etl` unschedulable, `inventory-sync` job failure | Critical | No |
+| 8 | `multipleFaults` | `fault-storefront` | 3 findings: `orders-api` imagepull, `recommendation-etl` unschedulable, `inventory-sync` job failure | Critical | Partly — two of three; the job failure is #57 |
 | 9 | `cascade` | `fault-sessions` | Pod / `session-store` / `CrashLoopBackOff` **(root)** → Service / `session-store` / `NoEndpoints` | Critical | No |
 | 10 | `unboundVolume` | `fault-ledger` | PersistentVolumeClaim / `ledger-data` / `VolumeBindingFailed` | Critical | No |
 | 11 | `silentFailure` | `fault-invoicing` | Pod / `invoice-reconciler` / `DependencyFailure` — Deployment Available, Service has endpoints, every broad check reports clean | Critical | No |
 
-**Zero of eleven.** This is the single most useful fact in this document. It
-is not an indictment of the engines — Chaos Mesh is excellent at what it does —
-it is a statement that Simian has been building one half of the fault space
-and the eval rig needs the other half first.
+**Zero of eleven** when this was written, and the single most useful fact in
+the document. It was not an indictment of the engines — Chaos Mesh is excellent
+at what it does — it was a statement that Simian had been building one half of
+the fault space and the eval rig needed the other half first. Deliverable A
+below is the answer, and its first four kinds have shipped.
 
 Conversely, `internal/faults` structurally cannot produce anything Simian's
 existing engines are good at. Applying YAML cannot create latency, packet
@@ -145,6 +154,10 @@ there is currently no way to put one in front of the agents at all.
 So the two halves are complementary, and Simian should own both.
 
 ## 4. Deliverable A — the `kube-state` engine
+
+*Shipped for `synthesize` mode and the first four kinds (#56). `mutate` mode and
+the remaining kinds are #57 / #58; the driver rejects `mode: mutate` with an
+explanatory error rather than ignoring the field.*
 
 A fifth driver, `EngineKubeState Engine = "kube-state"`, that produces
 declarative-state faults. It slots in behind the existing `ChaosDriver`
@@ -606,7 +619,7 @@ within a group is independent of its siblings.
 | #54 | `ProbeSpec` `Settle` mode, `k8s` probe type, executor gate, `fault.efficacy` audit event | M | — |
 | #55 | Probes on the existing engines' catalog entries — DPv2 `NetworkChaos` now fails loudly | M | #54 |
 | **Phase 2 — the `kube-state` engine** |
-| #56 | Driver skeleton + `synthesize` mode + 4 kinds: `ImageUnresolvable`, `ContainerExitLoop`, `MemoryLimitSqueeze`, `Unschedulable` | L | #54 |
+| #56 | ✅ Driver skeleton + `synthesize` mode + 4 kinds: `ImageUnresolvable`, `ContainerExitLoop`, `MemoryLimitSqueeze`, `Unschedulable`, each with a default efficacy gate; verified on GKE | L | #54 |
 | #57 | Remaining parity kinds: `JobFailure`, `SelectorDrift`, `UnboundClaim`, `DependencyStall`, `NoOp` | L | #56 |
 | #58 | Lookout-only kinds: `NodeUnready`, `PDBGridlock`, `CertExpiry`, `RolloutStuck` | M | #56 |
 | #59 | `mutate` mode + revert-on-lease-expiry | L | #56 |

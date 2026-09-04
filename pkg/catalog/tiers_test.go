@@ -124,3 +124,24 @@ func mustCIDR(t *testing.T, s string) *net.IPNet {
 	}
 	return n
 }
+
+func TestClassifyKubeStateKinds(t *testing.T) {
+	// Each synthesizes one Deployment in the arena and touches nothing that
+	// existed before it.
+	for _, kind := range []string{
+		KubeStateImageUnresolvable,
+		KubeStateContainerExitLoop,
+		KubeStateMemoryLimitSqueeze,
+		KubeStateUnschedulable,
+	} {
+		if got := Classify(simian.EngineKubeState, kind); got != simian.TierNamespace {
+			t.Errorf("Classify(kube-state, %s) = %q, want %q", kind, got, simian.TierNamespace)
+		}
+	}
+	// #57/#58 bring NodeUnready under this same engine name. It cordons a
+	// node, and it must not inherit namespace tier — and so the default
+	// policy's permission — just by arriving here.
+	if got := Classify(simian.EngineKubeState, "NodeUnready"); got != simian.TierExternal {
+		t.Errorf("Classify(kube-state, NodeUnready) = %q, want %q — new kinds must fail closed", got, simian.TierExternal)
+	}
+}

@@ -15,7 +15,7 @@ An autonomous chaos-engineering agent for Kubernetes. Provision an arena, deploy
 
 {{% blocks/lead color="primary" %}}
 
-`simian-agent` ships **directed-mode chaos** (plain-text intent → LLM-translated FaultManifest), an **autonomous planning loop** (health gate → topology snapshot → LLM-generated AttackPlan → bounded execution), three chaos engines (`chaos-mesh`, `network-policy`, `envoy-fault`), and a **safety stage** at the executor chokepoint that enforces eligibility, blast-radius tier, duration, and concurrency caps on every fault before it lands.
+`simian-agent` ships **directed-mode chaos** (plain-text intent → LLM-translated FaultManifest), an **autonomous planning loop** (health gate → topology snapshot → LLM-generated AttackPlan → bounded execution), four chaos engines (`chaos-mesh`, `network-policy`, `envoy-fault`, `kube-state`), and a **safety stage** at the executor chokepoint that enforces eligibility, blast-radius tier, duration, and concurrency caps on every fault before it lands.
 
 {{% /blocks/lead %}}
 

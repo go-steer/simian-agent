@@ -32,9 +32,41 @@ AI-native chaos engineering orchestrator for Kubernetes. **Milestone 1 shipped**
 - **Envoy injection** — `simian sut deploy` injects the Envoy sidecar + iptables init container ONLY when explicitly requested (chart default `sutInjection.envoyFaults: false`; CLI `--no-envoy-faults` is the inverted flag). Opt out per-workload at injection time with the `simian.chaos/no-envoy-injection: "true"` pod-template annotation. The topology snapshot flags injected workloads as `envoy=true` so the autonomous planner only proposes envoy-fault chaos against eligible workloads.
 - **Background:** see [DPv2-compatible chaos engines](https://go-steer.github.io/simian-agent/docs/dpv2-chaos-engines/) for the full rationale (chaos-mesh#3302, cilium#19975) and design decisions.
 
+### `kube-state` engine — declarative-state faults
+
+The three engines above all perturb a **running dataplane**: traffic, processes,
+resources. That is half the failure space, and not the half an SRE agent spends
+most of its time in. A wedged rollout, an image that does not exist, a pod
+nothing can schedule and a container that dies on startup are *states*, not
+events, and none of them can be produced by delaying a packet.
+
+`kube-state` produces the other half. In `synthesize` mode it applies a workload
+into the arena that is born broken — nothing already running is touched, so a
+baseline captured before the fault is still comparable afterwards. Four kinds,
+each with its own default efficacy gate:
+
+| Kind | Produces | Gated on |
+|---|---|---|
+| `ImageUnresolvable` | image reference that resolves to no manifest | `ImagePullBackOff` |
+| `ContainerExitLoop` | process exits non-zero on startup | `lastState` reason `Error` |
+| `MemoryLimitSqueeze` | working set larger than the container's own limit | `OOMKilled` |
+| `Unschedulable` | pod the scheduler cannot place | `Unschedulable` pod condition |
+
+Every field of every spec is optional — `{}` produces the failure state. Needs
+no Chaos Mesh and no sidecar; it does need `create` on `apps/deployments` in the
+arena Role, which `simian arena create` and the Helm chart both grant.
+
+```bash
+simian chaos --engine kube-state --kind ImageUnresolvable --api-version apps/v1 \
+  --namespace boutique-m3 --duration 5m
+```
+
+Verified on GKE 1.36.3-gke.1537000 (2026-09-04): all four reached their target
+state and passed their gate in 2–14s.
+
 #### Using the new engines (deterministic-control mode)
 
-Both engines accept `simian chaos --engine ... --kind ... --spec '<inline JSON>'`. Examples:
+All four engines accept `simian chaos --engine ... --kind ... --spec '<inline JSON>'`. Examples:
 
 ```bash
 # network-policy: 60s ingress+egress partition of cartservice

@@ -66,6 +66,21 @@ var chaosMeshNonFaultKinds = map[string]bool{
 	"PodHttpChaos":    true,
 }
 
+// kubeStateNamespaceKinds are the kube-state fault kinds whose effect is
+// confined to the arena namespace. Each synthesizes one Deployment there and
+// touches nothing that existed before it.
+//
+// Listed here rather than derived from the driver's own kind table so that
+// classification is a decision this package records, not a side effect of a
+// driver adding a map entry. A new kind is TierExternal — refused under the
+// default policy — until someone states otherwise here.
+var kubeStateNamespaceKinds = map[string]bool{
+	"ImageUnresolvable":  true,
+	"ContainerExitLoop":  true,
+	"MemoryLimitSqueeze": true,
+	"Unschedulable":      true,
+}
+
 // IsUserFault reports whether the given engine+kind is a user-facing fault
 // type the LLM should consider proposing. Drivers should skip non-fault CRDs
 // when building the catalog.
@@ -98,6 +113,16 @@ func Classify(engine simian.Engine, kind string) simian.BlastRadiusTier {
 		// Envoy fault filters operate inside the per-pod sidecar — scoped
 		// to the workload's namespace.
 		return simian.TierNamespace
+	case simian.EngineKubeState:
+		// Only kinds the driver actually synthesizes are namespace-scoped.
+		// Falling through for anything else keeps the fail-closed default
+		// meaningful as kinds are added: #57 and #58 bring NodeUnready, which
+		// cordons a node and is emphatically not namespace tier, and it must
+		// not inherit a namespace classification just because it arrived under
+		// this engine name.
+		if kubeStateNamespaceKinds[kind] {
+			return simian.TierNamespace
+		}
 	}
 	return simian.TierExternal
 }

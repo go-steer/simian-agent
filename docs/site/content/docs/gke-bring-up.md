@@ -83,6 +83,13 @@ bin/simian chaos --engine network-policy --kind NetworkPolicy \
   --api-version networking.k8s.io/v1 \
   --namespace simian-gke-1 --workload cartservice --duration 90s \
   --spec '{"labelSelectors":{"app":"cartservice"},"directions":["ingress","egress"]}'
+
+# Declarative state, no dataplane at all: a workload synthesized broken.
+# Every field of the spec is optional; run each of the four kinds.
+for kind in ImageUnresolvable ContainerExitLoop MemoryLimitSqueeze Unschedulable; do
+  bin/simian chaos --engine kube-state --kind "$kind" --api-version apps/v1 \
+    --namespace simian-gke-1 --duration 4m
+done
 ```
 
 What the run above produced:
@@ -95,6 +102,10 @@ What the run above produced:
 | `NetworkChaos` `partition` | landed | HTTP 200 → connect timeout → HTTP 200 |
 | `network-policy` partition | gate passed in 5.2s | SOT saw the target answer, Settle saw the connection time out |
 | `envoy-fault` | not exercised | needs Envoy injection, which Online Boutique's gRPC probes will not tolerate |
+| `kube-state` `ImageUnresolvable` | gate passed in 13.1s | pods reached `ImagePullBackOff` after 7 polls |
+| `kube-state` `ContainerExitLoop` | gate passed 4 runs of 4, 2.2s–4.4s | `lastState.terminated.reason: Error`, exit 1 |
+| `kube-state` `MemoryLimitSqueeze` | gate passed in 4.4s | `lastState.terminated.reason: OOMKilled`, exit 137 |
+| `kube-state` `Unschedulable` | gate passed in 2.2s | `PodScheduled=False`, reason `Unschedulable`; node count unchanged, no `TriggeredScaleUp` |
 
 `NetworkChaos` landing on Dataplane V2 contradicts what this project documented for the last year. It is a real measurement, not a correction of a mistake: the bypass was verified at the time on an older Cilium. Treat it as version-dependent and re-check per cluster — see [known limitations]({{< relref "known-limitations.md" >}}#chaos-meshs-networkchaos-may-or-may-not-work-on-gke-dataplane-v2--measure-it). Reading the audit record is the check:
 
@@ -103,6 +114,65 @@ What the run above produced:
 # passed: false means it was rolled back and nothing is running.
 grep fault.efficacy controller.log | jq '.payload | {probe, passed, expected, observed}'
 ```
+
+### `Unschedulable` and Node Auto-Provisioning
+
+The `Unschedulable` kind defaults to a CPU request of `1000`, which looks absurd
+until you consider what a *merely* large request does on GKE. 64 CPU is
+unschedulable on today's nodes but perfectly **satisfiable by a bigger one**, so
+the cluster autoscaler or Node Auto-Provisioning reads it as a provisioning
+signal: it adds a node, the pod schedules, and the fault heals partway through
+the experiment — with a machine on the bill. A request nothing can satisfy is
+declared unschedulable and left alone. On the run above the node count stayed at
+4 and no `TriggeredScaleUp` event was emitted.
+
+If your scenario is about placement rather than capacity, use `node_selector`
+instead; the two are mutually exclusive, and setting both would make the
+`FailedScheduling` message name whichever predicate the scheduler checked first.
+
+### `CrashLoopBackOff` is not a state you can poll for
+
+The obvious gate for `ContainerExitLoop` is `state.waiting.reason ==
+CrashLoopBackOff`. It passed in 6.5s on the first run here and then missed
+entirely on the second — 44 polls over 91s, every one of them reading empty,
+against a pod the event log showed was visibly backing off.
+
+A container that exits immediately spends almost all of its time with the
+*previous* termination showing in `state.terminated`; the kubelet flips to
+`waiting: CrashLoopBackOff` only in a narrow window around each restart
+decision. Polling the same pod by hand every 10s caught it once in six:
+
+```
+last=[Error] restarts=[4] wait=[]
+last=[Error] restarts=[4] wait=[]
+last=[Error] restarts=[4] wait=[]
+last=[Error] restarts=[4] wait=[]
+last=[Error] restarts=[4] wait=[CrashLoopBackOff]
+last=[Error] restarts=[5] wait=[]
+```
+
+`lastState.terminated.reason` is stable from the first restart on, so that is
+what the gate reads. Four consecutive runs against the same cluster passed in
+2.2s, 4.4s, 2.2s and 2.3s — two or three polls each, no spread worth the name.
+If you write your own probe against a restarting workload, read `lastState`, not
+`state`.
+
+### What the `MemoryLimitSqueeze` shakedown found
+
+The first implementation wrote into a `medium: Memory` emptyDir, on the correct
+theory that tmpfs pages are charged to the writing container's cgroup. On GKE
+that produced `StartError`, not `OOMKilled`, at every limit tried — because a
+tmpfs emptyDir belongs to the **pod**, not the container. Its pages outlive the
+OOM kill, so the restarted container's `runc init` is killed against a cgroup
+that is already full (`container init was OOM-killed (memory limit too low?)`)
+before any of the workload's own code runs.
+
+The gate caught it: `probe "simian-oom-killed" never passed in 2m0s (57 polls):
+wanted "OOMKilled" in output, last saw "StartError"`, and the fault was rolled
+back rather than reported as applied. The kind now allocates anonymous memory,
+which is freed with the process, so every restart cycle reproduces the same
+clean `OOMKilled`. This is the failure mode the whole efficacy story exists for
+— without the gate it would have shipped as a fault that "worked".
 
 ## Sizing a delay so the gate can see it
 
