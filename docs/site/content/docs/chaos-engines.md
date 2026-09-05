@@ -14,7 +14,7 @@ The first three perturb a *running dataplane* — traffic, processes, resources.
 | `chaos-mesh` | The full Chaos Mesh CRD catalog: PodChaos, StressChaos, IOChaos, TimeChaos, NetworkChaos, etc. | Default for everything. Whether NetworkChaos lands on GKE Dataplane V2 depends on the Cilium version — it does on current GKE, and its efficacy gate tells you either way. See [Known limitations]({{< relref "known-limitations.md" >}}). |
 | `network-policy` | Standard `networking.k8s.io/v1` NetworkPolicy partitions (deny ingress / egress / both). | Network partition chaos on any cluster where NetworkChaos isn't reliable. Partition only — no delay / loss / jitter. |
 | `envoy-fault` | HTTP-layer delay + abort via an injected Envoy sidecar. Two kinds: `EnvoyHttpDelay`, `EnvoyHttpAbort`. | HTTP/gRPC delay or error injection on DPv2. Requires the SUT to be deployed with `--no-envoy-faults=false` (off by default — see [Known limitations]({{< relref "known-limitations.md" >}}#envoy-injection-breaks-grpc-kubelet-probes)). |
-| `kube-state` | Declarative-state faults: synthesizes a workload that is born broken. Four kinds: `ImageUnresolvable`, `ContainerExitLoop`, `MemoryLimitSqueeze`, `Unschedulable`. | Wedged rollouts, bad image references, crash loops, OOM kills and unschedulable pods — states rather than events, and the ones an SRE agent triages most. Works on any cluster; needs no Chaos Mesh and no sidecar. |
+| `kube-state` | Declarative-state faults: synthesizes a bundle of objects that is born broken. Eight kinds: `ImageUnresolvable`, `ContainerExitLoop`, `MemoryLimitSqueeze`, `Unschedulable`, `JobFailure`, `SelectorDrift`, `UnboundClaim`, and `NoOp` (the control). | Wedged rollouts, bad image references, crash loops, OOM kills, unschedulable pods, failed batch jobs, endpointless Services and claims that never bind — states rather than events, and the ones an SRE agent triages most. Works on any cluster; needs no Chaos Mesh and no sidecar. |
 
 ## Directed-control patterns
 
@@ -58,6 +58,17 @@ simian chaos --engine kube-state \
   --kind Unschedulable --api-version apps/v1 \
   --namespace boutique-1 --duration 5m \
   --spec '{"node_selector":{"failure-domain.example.com/zone":"nowhere"}}'
+
+# kube-state: a Service in front of nothing. Every pod Running and Ready, the
+# traffic going nowhere — the shape that catches an agent grading `get pods`.
+simian chaos --engine kube-state \
+  --kind SelectorDrift --api-version apps/v1 \
+  --namespace boutique-1 --duration 5m
+
+# kube-state: the control. Synthesizes a healthy workload, on purpose.
+simian chaos --engine kube-state \
+  --kind NoOp --api-version apps/v1 \
+  --namespace boutique-1 --duration 5m
 ```
 
 `kube-state` targets a namespace, not a workload: it creates its own. `--workload`
@@ -147,6 +158,6 @@ error: arena: 1 simian-managed chaos resource(s) still active in "boutique-1"
 ## Background reading
 
 - [DPv2-compatible chaos engines]({{< relref "dpv2-chaos-engines.md" >}}) — full design rationale for `network-policy` and `envoy-fault`.
-- [Efficacy probes]({{< relref "efficacy-probes.md" >}}) — the default gates, including the four `kube-state` ones.
+- [Efficacy probes]({{< relref "efficacy-probes.md" >}}) — the default gates, including all eight `kube-state` ones.
 - [GKE bring-up]({{< relref "gke-bring-up.md" >}}) — measuring which of these engines actually land on your own GKE cluster.
 - [Known limitations]({{< relref "known-limitations.md" >}}) — the GKE DPv2 NetworkChaos question and the Envoy injection / gRPC probe interaction.

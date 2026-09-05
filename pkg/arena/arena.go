@@ -167,8 +167,34 @@ func roleRules() []rbacv1.PolicyRule {
 			Verbs:     []string{"create", "get", "list", "watch", "patch", "delete"},
 		},
 		{
+			// The rest of the kube-state engine's bundle. Half the interesting
+			// declarative-state faults are relationships between objects — a
+			// Service in front of nothing, a claim that never binds — so the
+			// engine writes more than Deployments and has to be able to take
+			// each of them out again.
+			APIGroups: []string{"batch"},
+			Resources: []string{"jobs"},
+			Verbs:     []string{"create", "get", "list", "watch", "patch", "delete"},
+		},
+		{
+			// Services and claims are read-only for every other engine and
+			// writable for this one, so they are listed apart from the
+			// read-only core rule below rather than folded into it.
 			APIGroups: []string{""},
-			Resources: []string{"pods", "pods/log", "events", "configmaps", "services"},
+			Resources: []string{"services", "persistentvolumeclaims"},
+			Verbs:     []string{"create", "get", "list", "watch", "patch", "delete"},
+		},
+		{
+			APIGroups: []string{""},
+			Resources: []string{"pods", "pods/log", "events", "configmaps"},
+			Verbs:     []string{"get", "list", "watch"},
+		},
+		{
+			// Read-only, and only for the efficacy gate: SelectorDrift proves
+			// itself by finding no endpoint addresses behind its Service.
+			// Nothing writes these — the endpointslice controller does.
+			APIGroups: []string{"discovery.k8s.io"},
+			Resources: []string{"endpointslices"},
 			Verbs:     []string{"get", "list", "watch"},
 		},
 	}

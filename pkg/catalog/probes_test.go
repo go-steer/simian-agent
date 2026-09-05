@@ -15,8 +15,12 @@
 package catalog
 
 import (
+	"bytes"
+	"slices"
 	"strings"
 	"testing"
+
+	"k8s.io/client-go/util/jsonpath"
 
 	"github.com/go-steer/simian-agent/pkg/simian"
 )
@@ -508,5 +512,156 @@ func TestOnlySynthesizeModeGetsAKubeStateGate(t *testing.T) {
 func TestAnUnknownKubeStateKindGetsNoGate(t *testing.T) {
 	if got := DefaultProbes(kubeStateManifest("NodeUnready", nil)); len(got) != 0 {
 		t.Errorf("probes = %v, want none for a kind this engine does not synthesize", names(got))
+	}
+}
+
+// The Ready gate is the one gate in this package that uses a jsonpath filter,
+// and a filter that does not parse fails at probe time in a cluster rather
+// than here. It is also the only thing standing between "the workload is
+// serving" and "the workload has been scheduled": without the filter the
+// expression renders every condition's status, and PodScheduled=True would
+// satisfy expect_contains "True" for a pod that has not pulled its image.
+func TestThePodReadyGateRendersOnlyTheReadyCondition(t *testing.T) {
+	pod := func(conds ...[2]string) any {
+		out := make([]any, 0, len(conds))
+		for _, c := range conds {
+			out = append(out, map[string]any{"type": c[0], "status": c[1]})
+		}
+		return map[string]any{"status": map[string]any{"conditions": out}}
+	}
+	render := func(t *testing.T, items ...any) string {
+		t.Helper()
+		jp := jsonpath.New("ready")
+		jp.AllowMissingKeys(true)
+		if err := jp.Parse(podReadyJSONPath); err != nil {
+			t.Fatalf("parse %q: %v", podReadyJSONPath, err)
+		}
+		var buf bytes.Buffer
+		if err := jp.Execute(&buf, map[string]any{"items": items}); err != nil {
+			t.Fatalf("execute: %v", err)
+		}
+		return buf.String()
+	}
+
+	scheduledNotReady := pod([2]string{"PodScheduled", "True"}, [2]string{"Ready", "False"})
+	if got := render(t, scheduledNotReady); strings.Contains(got, "True") {
+		t.Errorf("a scheduled-but-not-ready pod renders %q, which satisfies the gate", got)
+	}
+	ready := pod([2]string{"PodScheduled", "True"}, [2]string{"Ready", "True"})
+	if got := render(t, ready); !strings.Contains(got, "True") {
+		t.Errorf("a Ready pod renders %q, which does not satisfy the gate", got)
+	}
+	// A pod the kubelet has not reported on yet has no conditions at all.
+	// AllowMissingKeys has to carry that, or the gate errors on its first poll
+	// instead of waiting for the workload to come up.
+	if got := render(t, map[string]any{"status": map[string]any{}}); strings.Contains(got, "True") {
+		t.Errorf("a pod with no conditions renders %q", got)
+	}
+}
+
+// Some kinds need more than one probe, and the order is load-bearing: an
+// expect_empty gate passes against a namespace where nothing has been created
+// yet, so it must be preceded by one that proves the objects are there.
+func TestAGateWhoseEvidenceIsAnAbsenceIsNeverFirst(t *testing.T) {
+	for kind, gs := range kubeStateGates {
+		for i, g := range gs {
+			if g.expectEmpty && i == 0 {
+				t.Errorf("%s: %q asserts an absence and runs first, so it passes before anything exists", kind, g.probeName)
+			}
+			if g.expectEmpty && g.expect != "" {
+				t.Errorf("%s: %q sets both expect and expectEmpty", kind, g.probeName)
+			}
+			if !g.expectEmpty && g.expect == "" {
+				t.Errorf("%s: %q asserts nothing", kind, g.probeName)
+			}
+			if g.timeout == "" {
+				t.Errorf("%s: %q has no timeout", kind, g.probeName)
+			}
+		}
+	}
+}
+
+// The multi-probe kinds, spelled out. Each pair is the thing the kind is about
+// plus the thing that keeps it from being vacuous.
+func TestTheBundleKindsAreGatedOnEveryHalfOfTheirFault(t *testing.T) {
+	for _, tc := range []struct {
+		kind   string
+		probes []string
+	}{
+		{KubeStateJobFailure, []string{ProbeJobFailed}},
+		{KubeStateSelectorDrift, []string{ProbeWorkloadReady, ProbeNoEndpoints}},
+		{KubeStateUnboundClaim, []string{ProbeClaimPending, ProbeUnschedulable}},
+		{KubeStateNoOp, []string{ProbeWorkloadReady}},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			got := DefaultProbes(kubeStateManifest(tc.kind, nil))
+			if !slices.Equal(names(got), tc.probes) {
+				t.Fatalf("probes = %v, want %v in that order", names(got), tc.probes)
+			}
+			for _, p := range got {
+				if p.Mode != simian.ProbeModeSettle {
+					t.Errorf("%s: mode = %q, want Settle", p.Name, p.Mode)
+				}
+				if p.Type != simian.ProbeTypeK8s {
+					t.Errorf("%s: type = %q, want k8s", p.Name, p.Type)
+				}
+			}
+		})
+	}
+}
+
+// Each probe has to read the resource its evidence lives on, and select it the
+// way that resource is actually labelled. EndpointSlices are the trap: they are
+// written by the endpointslice controller, which knows nothing about
+// simian.chaos labels and stamps only the Service name.
+func TestEachBundleGateReadsTheRightResource(t *testing.T) {
+	m := kubeStateManifest(KubeStateSelectorDrift, nil)
+	name := KubeStateWorkloadName(KubeStateSelectorDrift, "", m.UID)
+	probes := DefaultProbes(m)
+	if got := probes[0].Spec["resource"]; got != "pods" {
+		t.Errorf("readiness probe reads %v, want pods", got)
+	}
+	if got := probes[0].Spec["label_selector"]; got != "app="+name {
+		t.Errorf("readiness selector = %v, want app=%s", got, name)
+	}
+	if got := probes[1].Spec["resource"]; got != "endpointslices" {
+		t.Errorf("endpoint probe reads %v, want endpointslices", got)
+	}
+	if got := probes[1].Spec["label_selector"]; got != "kubernetes.io/service-name="+name {
+		t.Errorf("endpoint selector = %v, want the Service name label", got)
+	}
+	// The addresses, not the slices. A Service that selects nothing still gets
+	// a placeholder EndpointSlice, so asserting no slice exists would fail
+	// against a fault that landed perfectly.
+	if got, _ := probes[1].Spec["jsonpath"].(string); !strings.Contains(got, "addresses") {
+		t.Errorf("endpoint probe jsonpath %q does not read the addresses", got)
+	}
+	if probes[1].Spec["expect_empty"] != true || probes[1].Spec["expect_contains"] != nil {
+		t.Errorf("endpoint probe conditions = %v", probes[1].Spec)
+	}
+
+	claim := DefaultProbes(kubeStateManifest(KubeStateUnboundClaim, nil))
+	if got := claim[0].Spec["resource"]; got != "persistentvolumeclaims" {
+		t.Errorf("claim probe reads %v, want persistentvolumeclaims", got)
+	}
+	if got := DefaultProbes(kubeStateManifest(KubeStateJobFailure, nil))[0].Spec["resource"]; got != "jobs" {
+		t.Errorf("job probe reads %v, want jobs", got)
+	}
+}
+
+// The control is gated too, and on the opposite of a fault. Without it a
+// control would "inject" successfully against a cluster too broken to run
+// anything, and the subject's correct report of nothing would be scored as a
+// correct answer instead of the vacuous pass it is.
+func TestTheControlIsGatedOnItsWorkloadBeingHealthy(t *testing.T) {
+	got := DefaultProbes(kubeStateManifest(KubeStateNoOp, nil))
+	if len(got) != 1 {
+		t.Fatalf("probes = %v, want one", names(got))
+	}
+	if got[0].Spec["expect_contains"] != "True" {
+		t.Errorf("control gate expects %v, want True", got[0].Spec["expect_contains"])
+	}
+	if EfficacyGate(simian.EngineKubeState, KubeStateNoOp) == "" {
+		t.Error("the control advertises no efficacy gate")
 	}
 }

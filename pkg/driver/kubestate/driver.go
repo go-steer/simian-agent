@@ -44,7 +44,9 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 
@@ -68,6 +70,12 @@ const FaultUIDLabel = "simian.chaos/fault-uid"
 // KindLabel records which fault kind synthesized it, so `kubectl get deploy -L`
 // in a wrecked arena says what happened without a round trip to the audit log.
 const KindLabel = "simian.chaos/kind"
+
+// BundleLabel groups the objects one fault synthesized. A fault is not always
+// one object — a Service pointing at nothing needs the workload it misses, a
+// claim that never binds needs something to mount it — and this is what lets
+// Clear find all of them from the engineUID alone.
+const BundleLabel = "simian.chaos/bundle"
 
 // ExpiryAnnotation carries the fault's deadline as an RFC3339 timestamp.
 //
@@ -137,23 +145,87 @@ func (d *Driver) Apply(ctx context.Context, m simian.FaultManifest) (string, err
 	if replicas < 1 || replicas > maxReplicas {
 		return "", fmt.Errorf("kube-state apply: spec.replicas must be between 1 and %d, got %d", maxReplicas, replicas)
 	}
-	pod, err := build(m.Spec)
+	objs, err := build(synthesis{
+		name:      name,
+		namespace: ns,
+		replicas:  int32(replicas),
+		spec:      m.Spec,
+	})
 	if err != nil {
 		return "", fmt.Errorf("kube-state apply: %w", err)
 	}
 
-	dep := newDeployment(name, ns, int32(replicas), m.ResourceKind, m.UID,
-		expiryAnnotation(d.now(), m.Duration), pod)
-	created, err := d.clientset.AppsV1().Deployments(ns).Create(ctx, dep, metav1.CreateOptions{})
-	if err != nil {
-		return "", fmt.Errorf("kube-state apply: create deployment %s/%s: %w", ns, name, err)
+	labels := bundleLabels(name, m.ResourceKind, m.UID)
+	annotations := expiryAnnotation(d.now(), m.Duration)
+	for i, obj := range objs {
+		if err := stamp(obj, labels, annotations); err != nil {
+			return "", fmt.Errorf("kube-state apply: %w", err)
+		}
+		if err := createObject(ctx, d.clientset, ns, obj); err != nil {
+			// Roll back what did land. A failed Apply is never leased, so
+			// nothing will ever call Clear for it, and a half-applied bundle
+			// left in the arena is a fault nobody is tracking and nobody will
+			// take out.
+			if cerr := d.clearBundle(ctx, ns, name); cerr != nil {
+				return "", fmt.Errorf("kube-state apply: create %s %s/%s: %w (and rolling back the %d object(s) already created: %v)",
+					describeObject(obj), ns, name, err, i, cerr)
+			}
+			return "", fmt.Errorf("kube-state apply: create %s %s/%s: %w", describeObject(obj), ns, name, err)
+		}
 	}
-	return engineUID(created.GetNamespace(), created.GetName()), nil
+	return engineUID(ns, name), nil
 }
 
-// Clear implements ChaosDriver. Idempotent — NotFound is treated as success.
+// bundleLabels are stamped onto every object a fault synthesizes.
 //
-// Deleting the Deployment garbage-collects its ReplicaSet and pods, so a
+// BundleLabel is what makes Clear possible without recording anything: the
+// engineUID names the bundle, and the label is how the objects in it are found
+// again. Deleting by name across every type this engine creates would be
+// simpler and is not what this does — the label is a promise that Simian only
+// removes objects it put there.
+func bundleLabels(name, kind, faultUID string) map[string]string {
+	return map[string]string{
+		ManagedLabel:  "true",
+		BundleLabel:   name,
+		FaultUIDLabel: faultUID,
+		KindLabel:     kind,
+	}
+}
+
+// stamp merges the bundle's shared labels and annotations onto one object,
+// leaving whatever the builder set in place.
+func stamp(obj runtime.Object, labels, annotations map[string]string) error {
+	acc, err := meta.Accessor(obj)
+	if err != nil {
+		return fmt.Errorf("cannot read metadata of %T: %w", obj, err)
+	}
+	existing := acc.GetLabels()
+	if existing == nil {
+		existing = map[string]string{}
+	}
+	for k, v := range labels {
+		existing[k] = v
+	}
+	acc.SetLabels(existing)
+
+	if len(annotations) == 0 {
+		return nil
+	}
+	ann := acc.GetAnnotations()
+	if ann == nil {
+		ann = map[string]string{}
+	}
+	for k, v := range annotations {
+		ann[k] = v
+	}
+	acc.SetAnnotations(ann)
+	return nil
+}
+
+// Clear implements ChaosDriver. Idempotent — an object already gone is
+// treated as success.
+//
+// Deleting the workload garbage-collects its ReplicaSet and pods, so a
 // synthesized fault leaves nothing behind. That is the whole recovery story
 // for synthesize mode: nothing that existed before the fault was touched, so
 // there is nothing to restore.
@@ -162,11 +234,37 @@ func (d *Driver) Clear(ctx context.Context, engineUIDStr string) error {
 	if err != nil {
 		return err
 	}
-	err = d.clientset.AppsV1().Deployments(ns).Delete(ctx, name, metav1.DeleteOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
+	if err := d.clearBundle(ctx, ns, name); err != nil {
 		return fmt.Errorf("kube-state clear %s/%s: %w", ns, name, err)
 	}
 	return nil
+}
+
+// clearBundle removes every object wearing this bundle's label.
+//
+// It asks each type in turn rather than deleting by name, so that the only
+// objects it can possibly remove are ones this engine labelled. A bundle with
+// nothing of a given type in it costs one empty list, which is the price of
+// not needing to have recorded what the bundle contained.
+func (d *Driver) clearBundle(ctx context.Context, ns, name string) error {
+	selector := ManagedLabel + "=true," + BundleLabel + "=" + name
+	var errs []error
+	for _, r := range managedResources {
+		found, err := r.list(ctx, d.clientset, ns, selector)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			errs = append(errs, fmt.Errorf("list %s: %w", r.plural, err))
+			continue
+		}
+		for _, obj := range found {
+			if err := r.del(ctx, d.clientset, ns, obj.Name); err != nil && !apierrors.IsNotFound(err) {
+				errs = append(errs, fmt.Errorf("delete %s/%s: %w", r.plural, obj.Name, err))
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // ReapExpired deletes every Simian-managed Deployment in the given namespaces
@@ -180,34 +278,51 @@ func (d *Driver) Clear(ctx context.Context, engineUIDStr string) error {
 func (d *Driver) ReapExpired(ctx context.Context, namespaces []string, now time.Time) ([]string, error) {
 	var (
 		cleared []string
+		seen    = map[string]bool{}
 		errs    []error
 	)
 	for _, ns := range namespaces {
-		list, err := d.clientset.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{
-			LabelSelector: ManagedLabel + "=true",
-		})
-		if err != nil {
-			if apierrors.IsNotFound(err) {
+		for _, r := range managedResources {
+			found, err := r.list(ctx, d.clientset, ns, ManagedLabel+"=true")
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				errs = append(errs, fmt.Errorf("kube-state reap: list %s in %s: %w", r.plural, ns, err))
 				continue
 			}
-			errs = append(errs, fmt.Errorf("kube-state reap: list in %s: %w", ns, err))
-			continue
-		}
-		for i := range list.Items {
-			dep := &list.Items[i]
-			expiry, ok := parseExpiry(dep.Annotations)
-			if !ok || !expiry.Before(now) {
-				continue
+			for _, obj := range found {
+				expiry, ok := parseExpiry(obj.Annotations)
+				if !ok || !expiry.Before(now) {
+					continue
+				}
+				if err := r.del(ctx, d.clientset, ns, obj.Name); err != nil && !apierrors.IsNotFound(err) {
+					errs = append(errs, fmt.Errorf("kube-state reap: delete %s %s/%s: %w", r.plural, ns, obj.Name, err))
+					continue
+				}
+				// Reported once per bundle, not once per object. The caller
+				// clears a lease per engineUID, and a bundle of three expired
+				// objects is one fault that has ended, not three.
+				uid := engineUID(ns, bundleNameOf(obj))
+				if seen[uid] {
+					continue
+				}
+				seen[uid] = true
+				cleared = append(cleared, uid)
 			}
-			err := d.clientset.AppsV1().Deployments(ns).Delete(ctx, dep.Name, metav1.DeleteOptions{})
-			if err != nil && !apierrors.IsNotFound(err) {
-				errs = append(errs, fmt.Errorf("kube-state reap: delete %s/%s: %w", ns, dep.Name, err))
-				continue
-			}
-			cleared = append(cleared, engineUID(ns, dep.Name))
 		}
 	}
 	return cleared, errors.Join(errs...)
+}
+
+// bundleNameOf reads the bundle an object belongs to. Falls back to the
+// object's own name, which is what an object written by an older Simian —
+// before bundles existed, when every fault was one Deployment — carries.
+func bundleNameOf(obj metav1.ObjectMeta) string {
+	if b := obj.Labels[BundleLabel]; b != "" {
+		return b
+	}
+	return obj.Name
 }
 
 // Catalog implements ChaosDriver. The entries are static: this engine creates
@@ -234,6 +349,10 @@ var descriptions = map[string]string{
 	KindContainerExitLoop:  "Synthesize a workload whose process exits non-zero on startup, producing CrashLoopBackOff.",
 	KindMemoryLimitSqueeze: "Synthesize a workload whose working set exceeds its own memory limit, producing OOMKilled.",
 	KindUnschedulable:      "Synthesize a workload the scheduler cannot place, producing a Pending pod and FailedScheduling events.",
+	KindJobFailure:         "Synthesize a Job whose pods exit non-zero until it exhausts its backoff limit, producing a Failed Job with reason BackoffLimitExceeded.",
+	KindSelectorDrift:      "Synthesize a healthy workload behind a Service whose selector does not match it, producing an endpointless Service in front of Running pods.",
+	KindUnboundClaim:       "Synthesize a PersistentVolumeClaim on a StorageClass that does not exist, and a workload that mounts it, producing a Pending claim and an unschedulable pod.",
+	KindNoOp:               "Synthesize a workload with nothing wrong with it. The control case: a namespace that looks like every other scenario and holds no fault.",
 }
 
 // commonSpecNotes is appended to every kind's template. Repeating it per entry
@@ -297,6 +416,61 @@ Spec (every field optional):
   - node_selector: alternative mechanism; use when the scenario is about
                    placement rather than capacity. Mutually exclusive with
                    request_cpu — if set, request_cpu is ignored.
+` + commonSpecNotes,
+
+	KindJobFailure: `Creates a Job whose pods exit non-zero until it gives up.
+
+Spec (every field optional):
+  {"exit_code": 1, "backoff_limit": 2, "message": "fatal: migration step 3 failed"}
+
+  - exit_code:     1-255. Must be non-zero, or the Job succeeds.
+  - backoff_limit: 0-6. Retries before the Job reports Failed. The delay
+                   between retries doubles, so each extra retry pushes the
+                   failure further out and the fault's lease has to outlast it.
+  - message:       written to stderr by each attempt.
+` + commonSpecNotes,
+
+	KindSelectorDrift: `Creates a healthy Deployment and a Service that does not select it.
+
+Spec (every field optional):
+  {"selector_value": "checkout-v2", "port": 8080}
+
+  - selector_value: what the Service asks for in its app selector. Defaults to
+                    the workload's own name with "-v2" appended — the shape of
+                    a rename that updated one object and not the other.
+                    Refused if it equals the workload's own label value.
+  - port:           the port the Service publishes. Nothing answers on it
+                    either way; the fault is the absence of endpoints.
+
+Every pod is Running and Ready and the Deployment is Available. The fault is
+in the relationship between the two objects and is invisible in either alone.
+` + commonSpecNotes,
+
+	KindUnboundClaim: `Creates a PersistentVolumeClaim that can never bind, and a Deployment
+that mounts it.
+
+Spec (every field optional):
+  {"storage_class": "fast-ssd-retain", "size": "1Gi"}
+
+  - storage_class: a class the cluster does not have. Named explicitly rather
+                   than left empty, because an empty class means the cluster
+                   default, which on a managed cluster binds within seconds
+                   and heals the fault.
+  - size:          the requested capacity.
+
+The claim is what is wrong and the pod is where it shows. A diagnosis that
+stops at "the pod is Pending" has found the symptom, not the cause.
+` + commonSpecNotes,
+
+	KindNoOp: `Creates a Deployment with nothing wrong with it.
+
+Spec (every field optional):
+  {}
+
+The control case. It exists so that "no fault" is a scenario the subject has
+to reach by diagnosis rather than by noticing an empty namespace: a control
+that applied nothing could be scored correctly by counting objects. A subject
+that reports a finding here has hallucinated it.
 ` + commonSpecNotes,
 }
 

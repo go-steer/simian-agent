@@ -85,8 +85,12 @@ bin/simian chaos --engine network-policy --kind NetworkPolicy \
   --spec '{"labelSelectors":{"app":"cartservice"},"directions":["ingress","egress"]}'
 
 # Declarative state, no dataplane at all: a workload synthesized broken.
-# Every field of the spec is optional; run each of the four kinds.
-for kind in ImageUnresolvable ContainerExitLoop MemoryLimitSqueeze Unschedulable; do
+# Every field of the spec is optional; run each of the eight kinds. NoOp is the
+# control — it synthesizes a *healthy* workload, and its gate passing is what
+# tells you a later empty finding means "nothing was wrong" and not "the probe
+# never worked here".
+for kind in ImageUnresolvable ContainerExitLoop MemoryLimitSqueeze Unschedulable \
+            JobFailure SelectorDrift UnboundClaim NoOp; do
   bin/simian chaos --engine kube-state --kind "$kind" --api-version apps/v1 \
     --namespace simian-gke-1 --duration 4m
 done
@@ -106,6 +110,22 @@ What the run above produced:
 | `kube-state` `ContainerExitLoop` | gate passed 4 runs of 4, 2.2s–4.4s | `lastState.terminated.reason: Error`, exit 1 |
 | `kube-state` `MemoryLimitSqueeze` | gate passed in 4.4s | `lastState.terminated.reason: OOMKilled`, exit 137 |
 | `kube-state` `Unschedulable` | gate passed in 2.2s | `PodScheduled=False`, reason `Unschedulable`; node count unchanged, no `TriggeredScaleUp` |
+| `kube-state` `JobFailure` | gate passed in 37.0s over 18 polls | the Job's condition reached `BackoffLimitExceeded` after its retries ran out — the slowest gate in the set, because the backoff is the fault |
+| `kube-state` `SelectorDrift` | both gates passed, 2.2s then 0.1s | pods `Ready=True`, and *then* the Service's EndpointSlices carried no addresses |
+| `kube-state` `UnboundClaim` | both gates passed, 0.1s then 0.1s | claim `Pending`, and the pod that mounts it `Unschedulable` |
+| `kube-state` `NoOp` | gate passed in 2.2s | pods `Ready=True` — the control, and it is supposed to pass |
+
+The last four rows were measured a day later, 2026-09-05, on the same cluster and
+in a scratch namespace; everything above them came from the single run described
+at the top. Efficacy rate across those four was 1.00.
+
+The two-gate kinds are worth a second look. `SelectorDrift` and `UnboundClaim`
+each prove their fault in two steps, in order, because the second step's evidence
+is an *absence* — no endpoint addresses, no schedulable pod — and an absence on
+its own is also what you get when nothing was created at all. Settle probes run
+in sequence and stop at the first failure, so the first gate ("the workload is
+Ready", "the claim exists and is Pending") is what makes the second one mean
+something. See [efficacy probes]({{< relref "efficacy-probes.md" >}}#when-the-evidence-is-an-absence-something-else-has-to-prove-it-is-not-vacuous).
 
 `NetworkChaos` landing on Dataplane V2 contradicts what this project documented for the last year. It is a real measurement, not a correction of a mistake: the bypass was verified at the time on an older Cilium. Treat it as version-dependent and re-check per cluster — see [known limitations]({{< relref "known-limitations.md" >}}#chaos-meshs-networkchaos-may-or-may-not-work-on-gke-dataplane-v2--measure-it). Reading the audit record is the check:
 
