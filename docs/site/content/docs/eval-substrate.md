@@ -342,13 +342,13 @@ operator binary that runs in-cluster with chaos RBAC, and mirroring
 
 ```
 simian-eval \
-  --pack parity,dataplane \
+  --pack packs/parity,packs/dataplane \
   --subject exec:./bin/sre-agent \
   --cluster kind \
   --out runs/2026-08-18/
 ```
 
-Flow, per scenario, on a fresh cluster:
+Flow, per scenario:
 
 1. Provision the arena (and SUT, for `mutate`-mode scenarios).
 2. Inject via the **normal executor path** — same validation, same audit, same
@@ -359,6 +359,40 @@ Flow, per scenario, on a fresh cluster:
 4. Hand the subject the prompt.
 5. Collect the report; score.
 6. Watch for external remediation (§6.5); revert; verify reverted.
+
+**What "fresh cluster" means in practice.** Fresh *arena* per scenario, not a
+fresh cluster: a kind cluster takes minutes to stand up and a pack has dozens
+of scenarios. `--cluster kind` stands one throwaway cluster up for the whole
+run and deletes it afterwards, including on Ctrl-C; `--cluster current` (the
+default) uses the kubeconfig's cluster and leaves it standing. The isolation
+scenarios actually need is namespace isolation, and that is enforced rather
+than assumed: a scenario holds every namespace it touches for its whole
+lifetime, so two scenarios never share one, and a control — which names no
+namespace — takes the whole cluster to itself. A control running beside a live
+fault would see real breakage, report it correctly, and be scored as having
+hallucinated it.
+
+**It destroys only what it created.** A scenario naming a namespace that
+already exists gets that namespace annotated as an arena and left standing at
+the end, with a log line saying so. A rig that deletes namespaces it merely
+found is one bad scenario file away from deleting something that mattered.
+
+**Both artifacts, written as it goes.** `audit.log` is opened before the
+cluster is touched, and the scorecard printed at the end is produced by reading
+the two files back through the same `pkg/eval` code `simian evaluate` uses
+(§6.6) — not from the runs still in memory. If the artifacts could not be
+scored tomorrow, the run finds out now, while the cluster is still there to
+look at. Every scenario the harness attempts emits an `eval.scenario_started`
+line, so a scenario that failed before any fault event existed is still in the
+log the join runs against: the offline read reports a harness failure rather
+than a corrupt pair of files.
+
+**Refusals that happen before a cluster is touched.** An `--only` ID that is
+not in the pack (a typo that silently grades nothing is how a suite comes back
+green having measured nothing); a fault shorter than `--subject-timeout`,
+because the lease expires mid-investigation, the reaper clears it, and the
+harness records that disappearance as the subject having remediated a fault it
+never touched — `--allow-short-faults` accepts the measurement out loud.
 
 ### 6.4 The subject seam
 
@@ -373,9 +407,12 @@ type Subject interface {
 
 Adapters:
 
-* **`exec:`** — run a binary, read a JSON report on stdout. Covers
+* **`exec:`** ✅ — run a binary, read a JSON report on stdout. Covers
   `core-sre-agent`, `mast` workload bundles, `claude -p`, `gemini-cli`, and a
-  shell script. Build this one first; it covers everything that matters.
+  shell script. Built first; it covers everything that matters.
+* **`noop:`** ✅ — the null subject: reports nothing, ever. The zero-score floor
+  a scorecard is read against, and the cheapest way to find out whether a pack
+  actually manifests before an agent is pointed at it.
 * **`http:`** — REST + SSE. Covers `mast-web` and, notably, ChaosBlade's Blade
   AI, which turns a competitor into a benchmarkable subject.
 * **`mcp:`** — for subjects that expose themselves as tools.
@@ -383,6 +420,16 @@ Adapters:
 `Report` mirrors the machine-stable triple and nothing else. The `exec`
 adapter translates `core-sre-agent`'s `schema.HealthReport` into it; that
 translation is ~30 lines and lives on Simian's side of the fence.
+
+The `exec:` adapter hands the prompt over three ways at once — on stdin, in
+`$SIMIAN_PROMPT`, and substituted for a `{prompt}` placeholder in the argv if
+one is there — so a subject can be a Go binary, a shell one-liner or an agent
+CLI without a wrapper script in between. It reads the **last** JSON object on
+stdout, which is what lets a subject narrate: agents print reasoning as they
+go, and requiring clean stdout would mean grading whichever tool happened to
+be quiet. A subject that exits non-zero, prints nothing parseable, or runs past
+`--subject-timeout` is a `SubjectError` — scored as a hard zero, never skipped,
+because a subject must not be able to improve its mean by crashing.
 
 ### 6.5 Scoring
 
@@ -701,7 +748,7 @@ within a group is independent of its siblings.
 | #61 | Lookout pack (10) + parity pack (11) + the equivalence-matrix test | M | #57, #58, #60 |
 | **Phase 4 — the rig** |
 | #62 ✅ | `pkg/eval`: `Report`, `Subject`, and the seven measures | M | #60 |
-| #63 | `cmd/simian-eval` + `exec:` adapter + cluster lifecycle | M | #53, #62 |
+| #63 ✅ | `cmd/simian-eval` + `exec:`/`noop:` adapters + arena lifecycle, namespace fencing, and the artifacts scored back through #66 | M | #53, #62 |
 | #64 | **Lookout subject + the scored e2e in CI** — §6.7 | M | #61, #63 |
 | #65 | `core-sre-agent` subject; reproduce its existing baseline through this rig | M | #64 |
 | #66 ✅ | `simian evaluate`: audit + report artifacts joined on `ScenarioID`, `NOT SCORED` rows, `--min-efficacy` refusal | S | #62 |

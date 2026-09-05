@@ -15,7 +15,8 @@
 SHELL := /usr/bin/env bash
 GO    := go
 PKGS  := ./...
-BIN   := bin/simian
+BIN      := bin/simian
+EVAL_BIN := bin/simian-eval
 
 # Container image publishing — see also .github/workflows/release.yml which
 # auto-publishes on `v*` tag push. The Makefile targets are for ad-hoc dev
@@ -36,9 +37,12 @@ all: vet test build
 ci:
 	dev/tools/ci
 
+# Two binaries: the operator, and the evaluation harness that drives packs
+# against a subject. The harness stays out of the operator image on purpose.
 build:
 	@mkdir -p bin
 	$(GO) build -o $(BIN) ./cmd/simian
+	$(GO) build -o $(EVAL_BIN) ./cmd/simian-eval
 
 test:
 	$(GO) test -count=1 -race $(PKGS)
