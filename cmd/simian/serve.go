@@ -170,6 +170,7 @@ func newServeCmd() *cobra.Command {
 			prober := probe.NewMux(map[string]probe.Prober{
 				simian.ProbeTypeK8s:  probe.NewK8sProber(dyn, restmapper.NewDeferredDiscoveryRESTMapper(cached)),
 				simian.ProbeTypeHTTP: probe.NewKubernetesHTTPProber(clientset),
+				simian.ProbeTypeLogs: probe.NewKubernetesLogsProber(clientset),
 			})
 			execOpts := []executor.Option{
 				executor.WithHistory(history),

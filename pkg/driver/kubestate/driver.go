@@ -352,6 +352,7 @@ var descriptions = map[string]string{
 	KindJobFailure:         "Synthesize a Job whose pods exit non-zero until it exhausts its backoff limit, producing a Failed Job with reason BackoffLimitExceeded.",
 	KindSelectorDrift:      "Synthesize a healthy workload behind a Service whose selector does not match it, producing an endpointless Service in front of Running pods.",
 	KindUnboundClaim:       "Synthesize a PersistentVolumeClaim on a StorageClass that does not exist, and a workload that mounts it, producing a Pending claim and an unschedulable pod.",
+	KindDependencyStall:    "Synthesize a workload that serves normally and logs upstream failures. Every API-server check is clean — Ready, Available, endpointed — and the only evidence is in the pod log.",
 	KindNoOp:               "Synthesize a workload with nothing wrong with it. The control case: a namespace that looks like every other scenario and holds no fault.",
 }
 
@@ -460,6 +461,25 @@ Spec (every field optional):
 
 The claim is what is wrong and the pod is where it shows. A diagnosis that
 stops at "the pod is Pending" has found the symptom, not the cause.
+` + commonSpecNotes,
+
+	KindDependencyStall: `Creates a Deployment that serves normally and writes upstream-failure
+lines to its log, behind a Service that selects it correctly.
+
+Spec (every field optional):
+  {"message": "level=error msg=\"upstream request failed\" upstream=payments-api",
+   "interval_seconds": 10, "port": 8080}
+
+  - message:          the line written to stderr. Must be a single line: the
+                      efficacy gate matches it against one line of the log.
+  - interval_seconds: 1-60, how often it repeats.
+  - port:             the port the workload serves and the Service publishes.
+
+Nothing in the API server is wrong. The Deployment is Available, every pod is
+Running and Ready, the Service has ready endpoints, nothing has restarted and
+no event has fired. Use this when the scenario is about whether the subject
+reads logs at all — a diagnosis built from ` + "`kubectl get`" + ` alone reports the
+namespace healthy.
 ` + commonSpecNotes,
 
 	KindNoOp: `Creates a Deployment with nothing wrong with it.

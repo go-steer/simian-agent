@@ -571,8 +571,11 @@ func TestAGateWhoseEvidenceIsAnAbsenceIsNeverFirst(t *testing.T) {
 			if g.expectEmpty && g.expect != "" {
 				t.Errorf("%s: %q sets both expect and expectEmpty", kind, g.probeName)
 			}
-			if !g.expectEmpty && g.expect == "" {
+			if !g.expectEmpty && g.expect == "" && g.expectFrom == nil {
 				t.Errorf("%s: %q asserts nothing", kind, g.probeName)
+			}
+			if g.expect != "" && g.expectFrom != nil {
+				t.Errorf("%s: %q sets both expect and expectFrom", kind, g.probeName)
 			}
 			if g.timeout == "" {
 				t.Errorf("%s: %q has no timeout", kind, g.probeName)
@@ -584,26 +587,34 @@ func TestAGateWhoseEvidenceIsAnAbsenceIsNeverFirst(t *testing.T) {
 // The multi-probe kinds, spelled out. Each pair is the thing the kind is about
 // plus the thing that keeps it from being vacuous.
 func TestTheBundleKindsAreGatedOnEveryHalfOfTheirFault(t *testing.T) {
+	k8s, logs := simian.ProbeTypeK8s, simian.ProbeTypeLogs
 	for _, tc := range []struct {
 		kind   string
 		probes []string
+		types  []string
 	}{
-		{KubeStateJobFailure, []string{ProbeJobFailed}},
-		{KubeStateSelectorDrift, []string{ProbeWorkloadReady, ProbeNoEndpoints}},
-		{KubeStateUnboundClaim, []string{ProbeClaimPending, ProbeUnschedulable}},
-		{KubeStateNoOp, []string{ProbeWorkloadReady}},
+		{KubeStateJobFailure, []string{ProbeJobFailed}, []string{k8s}},
+		{KubeStateSelectorDrift, []string{ProbeWorkloadReady, ProbeNoEndpoints}, []string{k8s, k8s}},
+		{KubeStateUnboundClaim, []string{ProbeClaimPending, ProbeUnschedulable}, []string{k8s, k8s}},
+		// The only kind with a probe that is not a k8s read, because it is the
+		// only kind with no field to read: the two healthy assertions come off
+		// objects, the fault itself only off the log.
+		{KubeStateDependencyStall,
+			[]string{ProbeWorkloadReady, ProbeEndpointsReady, ProbeDependencyStall},
+			[]string{k8s, k8s, logs}},
+		{KubeStateNoOp, []string{ProbeWorkloadReady}, []string{k8s}},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			got := DefaultProbes(kubeStateManifest(tc.kind, nil))
 			if !slices.Equal(names(got), tc.probes) {
 				t.Fatalf("probes = %v, want %v in that order", names(got), tc.probes)
 			}
-			for _, p := range got {
+			for i, p := range got {
 				if p.Mode != simian.ProbeModeSettle {
 					t.Errorf("%s: mode = %q, want Settle", p.Name, p.Mode)
 				}
-				if p.Type != simian.ProbeTypeK8s {
-					t.Errorf("%s: type = %q, want k8s", p.Name, p.Type)
+				if p.Type != tc.types[i] {
+					t.Errorf("%s: type = %q, want %q", p.Name, p.Type, tc.types[i])
 				}
 			}
 		})
@@ -663,5 +674,95 @@ func TestTheControlIsGatedOnItsWorkloadBeingHealthy(t *testing.T) {
 	}
 	if EfficacyGate(simian.EngineKubeState, KubeStateNoOp) == "" {
 		t.Error("the control advertises no efficacy gate")
+	}
+}
+
+// The negative test DependencyStall exists for: while the fault is live, every
+// object-level check an agent would run comes back healthy.
+//
+// Written against the same jsonpath evaluator the probes use, over the state
+// the synthesized bundle really reaches, so it is a claim about the fault and
+// not about the gate table. If a future change to this kind makes the
+// workload's failure visible on any object, one of these assertions inverts and
+// the kind has quietly become an easier one.
+func TestDependencyStallLeavesNothingWrongOnAnyObject(t *testing.T) {
+	render := func(t *testing.T, expr string, items ...any) string {
+		t.Helper()
+		jp := jsonpath.New("gate")
+		jp.AllowMissingKeys(true)
+		if err := jp.Parse(expr); err != nil {
+			t.Fatalf("parse %q: %v", expr, err)
+		}
+		var buf bytes.Buffer
+		if err := jp.Execute(&buf, map[string]any{"items": items}); err != nil {
+			t.Fatalf("execute %q: %v", expr, err)
+		}
+		return buf.String()
+	}
+
+	// One pod of a stalling workload: Running, both conditions true, no
+	// restarts, no termination, no waiting reason. There is nothing here to
+	// find, which is the point.
+	stalledPod := map[string]any{
+		"status": map[string]any{
+			"phase": "Running",
+			"conditions": []any{
+				map[string]any{"type": "PodScheduled", "status": "True"},
+				map[string]any{"type": "Ready", "status": "True"},
+			},
+			"containerStatuses": []any{map[string]any{
+				"ready": true, "restartCount": int64(0),
+				"state": map[string]any{"running": map[string]any{}},
+			}},
+		},
+	}
+	readySlice := map[string]any{
+		"endpoints": []any{map[string]any{
+			"addresses":  []any{"10.4.1.7"},
+			"conditions": map[string]any{"ready": true},
+		}},
+	}
+
+	gs := kubeStateGates[KubeStateDependencyStall]
+	if len(gs) != 3 {
+		t.Fatalf("gates = %d, want the two healthy assertions plus the log", len(gs))
+	}
+	if got := render(t, gs[0].jsonPath, stalledPod); !strings.Contains(got, gs[0].expect) {
+		t.Errorf("readiness gate renders %q, want %q: the workload must be Ready while stalling", got, gs[0].expect)
+	}
+	if got := render(t, gs[1].jsonPath, readySlice); !strings.Contains(got, gs[1].expect) {
+		t.Errorf("endpoint gate renders %q, want %q: the Service must be serving while stalling", got, gs[1].expect)
+	}
+
+	// The checks a subject would reach for first, and what they say. Every one
+	// of them is the same answer it would give for the NoOp control.
+	for _, tc := range []struct{ what, expr string }{
+		{"crash loop", "{.items[*].status.containerStatuses[*].lastState.terminated.reason}"},
+		{"waiting reason", "{.items[*].status.containerStatuses[*].state.waiting.reason}"},
+		{"restart count", "{.items[*].status.containerStatuses[?(@.restartCount>0)].restartCount}"},
+		{"not-ready condition", `{.items[*].status.conditions[?(@.status=="False")].type}`},
+	} {
+		if got := render(t, tc.expr, stalledPod); strings.TrimSpace(got) != "" {
+			t.Errorf("a %s check on a stalling workload renders %q, want nothing", tc.what, got)
+		}
+	}
+
+	// And the third gate is the one that can see it. It is a logs probe, it
+	// looks for the line the driver writes, and it is last because the two
+	// above it are what make "only the log is wrong" a claim rather than an
+	// assumption.
+	log := gs[2]
+	if log.probeType != simian.ProbeTypeLogs {
+		t.Errorf("the evidence gate is a %q probe, want logs", log.probeType)
+	}
+	if log.expectFrom == nil {
+		t.Fatal("the log gate has no expectation derived from the manifest")
+	}
+	if got := log.expectFrom(kubeStateManifest(KubeStateDependencyStall, nil)); got != KubeStateDefaultStallMessage {
+		t.Errorf("the log gate looks for %q, want the line the driver writes", got)
+	}
+	custom := "level=error upstream=ledger"
+	if got := log.expectFrom(kubeStateManifest(KubeStateDependencyStall, map[string]any{"message": custom})); got != custom {
+		t.Errorf("with a custom message the log gate looks for %q, want %q", got, custom)
 	}
 }

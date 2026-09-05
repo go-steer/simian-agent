@@ -25,6 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/go-steer/simian-agent/pkg/catalog"
 )
 
 // testSynthesis is the identity the driver hands a builder. Fixed rather than
@@ -393,11 +395,13 @@ func TestJobFailureAcceptsZeroRetries(t *testing.T) {
 	}
 }
 
-func serviceOf(t *testing.T, spec map[string]any) (*corev1.Service, *appsv1.Deployment) {
+// serviceOf pulls the Service and the Deployment out of the two kinds whose
+// fault is the relationship between them.
+func serviceOf(t *testing.T, kind string, spec map[string]any) (*corev1.Service, *appsv1.Deployment) {
 	t.Helper()
 	var svc *corev1.Service
 	var dep *appsv1.Deployment
-	for _, obj := range bundle(t, KindSelectorDrift, spec) {
+	for _, obj := range bundle(t, kind, spec) {
 		switch o := obj.(type) {
 		case *corev1.Service:
 			svc = o
@@ -406,13 +410,13 @@ func serviceOf(t *testing.T, spec map[string]any) (*corev1.Service, *appsv1.Depl
 		}
 	}
 	if svc == nil || dep == nil {
-		t.Fatalf("SelectorDrift bundle = %T, want a Service and a Deployment", bundle(t, KindSelectorDrift, spec))
+		t.Fatalf("%s bundle = %T, want a Service and a Deployment", kind, bundle(t, kind, spec))
 	}
 	return svc, dep
 }
 
 func TestSelectorDriftPointsTheServicePastItsOwnWorkload(t *testing.T) {
-	svc, dep := serviceOf(t, nil)
+	svc, dep := serviceOf(t, KindSelectorDrift, nil)
 	pods := dep.Spec.Template.Labels
 	if svc.Spec.Selector["app"] == pods["app"] {
 		t.Fatalf("service selects its own pods (%v): there is no fault here", svc.Spec.Selector)
@@ -512,5 +516,125 @@ func TestEveryKindSynthesizesObjectsTheEngineCanCreate(t *testing.T) {
 				t.Errorf("%s: create %T: %v", kind, obj, err)
 			}
 		}
+	}
+}
+
+func TestDependencyStallLooksHealthyFromEveryAngleButTheLog(t *testing.T) {
+	svc, dep := serviceOf(t, KindDependencyStall, nil)
+	pod := dep.Spec.Template.Spec
+	c := pod.Containers[0]
+
+	// The inverse of SelectorDrift, and it has to be: half of what makes this
+	// fault what it is is that the Service in front of it works.
+	if got, want := svc.Spec.Selector["app"], dep.Spec.Template.Labels["app"]; got != want {
+		t.Errorf("service selects %q, pods are labelled %q: this kind's Service must select its own pods", got, want)
+	}
+	if svc.Name != dep.Name {
+		t.Errorf("service %q and deployment %q must share the bundle name", svc.Name, dep.Name)
+	}
+
+	// Ready has to mean something. A pod with no readiness probe is Ready the
+	// moment its process starts, so a subject that dialled the Service would
+	// get a refused connection and correctly report the workload down — which
+	// is a different diagnosis than the one this kind poses.
+	rp := c.ReadinessProbe
+	if rp == nil || rp.HTTPGet == nil {
+		t.Fatalf("readiness probe = %v, want an HTTP GET: without one the workload is Ready without serving", rp)
+	}
+	if got := rp.HTTPGet.Port.IntValue(); got != defaultServicePort {
+		t.Errorf("readiness probe port = %d, want the served port %d", got, defaultServicePort)
+	}
+	if len(c.Ports) == 0 || c.Ports[0].ContainerPort != defaultServicePort {
+		t.Errorf("container ports = %v, want the served port declared", c.Ports)
+	}
+	if got := svc.Spec.Ports[0].TargetPort.IntValue(); got != defaultServicePort {
+		t.Errorf("service targetPort = %d, want the served port", got)
+	}
+
+	// Nothing else about the workload may be wrong. Each of these would give a
+	// subject a field to find the fault in, and the kind would stop measuring
+	// what it exists to measure.
+	if len(c.Resources.Limits) != 0 || len(c.Resources.Requests) != 0 {
+		t.Errorf("resources = %v, want none: a limit is something a diagnosis can read off the object", c.Resources)
+	}
+	if pod.NodeSelector != nil {
+		t.Errorf("nodeSelector = %v, want none", pod.NodeSelector)
+	}
+	if len(pod.Volumes) != 0 {
+		t.Errorf("volumes = %v, want none", pod.Volumes)
+	}
+	if pod.RestartPolicy != "" {
+		t.Errorf("restartPolicy = %q, want the default", pod.RestartPolicy)
+	}
+}
+
+func TestDependencyStallCarriesItsMessageOutOfBandOfTheCommand(t *testing.T) {
+	_, dep := serviceOf(t, KindDependencyStall, nil)
+	c := dep.Spec.Template.Spec.Containers[0]
+
+	var msg string
+	for _, e := range c.Env {
+		if e.Name == stallMessageEnv {
+			msg = e.Value
+		}
+	}
+	if msg != catalog.KubeStateDefaultStallMessage {
+		t.Errorf("env %s = %q, want the catalog's default line", stallMessageEnv, msg)
+	}
+	// The gate greps for exactly this string, and computes it from the same
+	// spec through the same function. If the driver stopped resolving it the
+	// catalog's way, the fault would land and the gate would look for a line
+	// nothing wrote.
+	if got := catalog.KubeStateStallMessage(""); got != msg {
+		t.Errorf("the gate will look for %q, the container writes %q", got, msg)
+	}
+
+	cmd := strings.Join(c.Command, " ")
+	if strings.Contains(cmd, msg) {
+		t.Errorf("the message is interpolated into the command: %q", cmd)
+	}
+	if !strings.Contains(cmd, "$"+stallMessageEnv) {
+		t.Errorf("command %q does not reference the message variable", cmd)
+	}
+	// httpd first and the log loop second, joined so a failure to bind stops
+	// the chain. A container that logged without serving would fail its own
+	// readiness gate, which is the right direction to fail in.
+	if i, j := strings.Index(cmd, "httpd"), strings.Index(cmd, "while"); i < 0 || j < 0 || i > j {
+		t.Errorf("command %q must start the server before the log loop", cmd)
+	}
+
+	custom := "level=error upstream=ledger err=\"connection refused\""
+	_, dep = serviceOf(t, KindDependencyStall, map[string]any{"message": custom})
+	if got := dep.Spec.Template.Spec.Containers[0].Env[0].Value; got != custom {
+		t.Errorf("custom message = %q, want %q", got, custom)
+	}
+}
+
+func TestDependencyStallRejects(t *testing.T) {
+	// A multi-line message is written as several lines, and the gate matches
+	// against one. The fault would land and be reported as inert.
+	if err := buildErr(t, KindDependencyStall, map[string]any{"message": "one\ntwo"}); !strings.Contains(err.Error(), "single line") {
+		t.Errorf("multi-line message: %v", err)
+	}
+	// Whitespace is not a message. The gate is a substring match, and almost
+	// every log line contains a space.
+	if _, dep := serviceOf(t, KindDependencyStall, map[string]any{"message": "   "}); dep.Spec.Template.Spec.Containers[0].Env[0].Value != catalog.KubeStateDefaultStallMessage {
+		t.Error("a whitespace-only message must fall back to the default, not become a gate that matches everything")
+	}
+	for _, tc := range []struct {
+		name string
+		spec map[string]any
+		want string
+	}{
+		{"zero interval", map[string]any{"interval_seconds": float64(0)}, "interval_seconds"},
+		{"interval past the gate's timeout", map[string]any{"interval_seconds": float64(600)}, "interval_seconds"},
+		{"zero port", map[string]any{"port": float64(0)}, "port"},
+		{"out of range port", map[string]any{"port": float64(70000)}, "port"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := buildErr(t, KindDependencyStall, tc.spec); !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want it to name %q", err, tc.want)
+			}
+		})
 	}
 }

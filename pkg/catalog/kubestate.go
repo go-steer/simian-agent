@@ -30,6 +30,7 @@ const (
 	KubeStateJobFailure         = "JobFailure"
 	KubeStateSelectorDrift      = "SelectorDrift"
 	KubeStateUnboundClaim       = "UnboundClaim"
+	KubeStateDependencyStall    = "DependencyStall"
 	KubeStateNoOp               = "NoOp"
 )
 
@@ -43,7 +44,37 @@ var kubeStateDefaultNames = map[string]string{
 	KubeStateJobFailure:         "schema-migrate",
 	KubeStateSelectorDrift:      "storefront",
 	KubeStateUnboundClaim:       "media-store",
+	KubeStateDependencyStall:    "checkout-api",
 	KubeStateNoOp:               "inventory-api",
+}
+
+// KubeStateDefaultStallMessage is what a DependencyStall workload writes when
+// the manifest does not choose a line.
+//
+// It names a dependency, a port and a timeout, because that is what the
+// diagnosis turns on: the workload is fine and the thing behind it is not. It
+// deliberately does not mention Simian. The log is the only evidence this fault
+// leaves, so a subject that could recognise the injector by its wording would be
+// pattern-matching on the rig instead of reading the failure.
+const KubeStateDefaultStallMessage = `level=error msg="upstream request failed" upstream=payments-api addr=10.0.0.31:8443 err="context deadline exceeded after 30s"`
+
+// KubeStateStallMessage resolves the line a DependencyStall workload writes to
+// its log.
+//
+// Like KubeStateWorkloadName, it lives here because two callers have to agree
+// on it before the pod exists: the driver, which puts it in the container's
+// environment, and the default efficacy gate, which greps it back out of the
+// log. A gate matching a different string than the container writes would fail
+// against a fault that landed perfectly.
+//
+// Trimmed, and an empty or whitespace-only request falls back to the default.
+// The gate is a substring match, so "" and " " would both pass against any log
+// at all — see the anti-vacuity rule in pkg/probe's logs prober.
+func KubeStateStallMessage(requested string) string {
+	if s := strings.TrimSpace(requested); s != "" {
+		return s
+	}
+	return KubeStateDefaultStallMessage
 }
 
 // KubeStateWorkloadName derives the name of the workload a kube-state fault

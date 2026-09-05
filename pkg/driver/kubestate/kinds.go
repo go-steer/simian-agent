@@ -27,6 +27,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation"
+
+	"github.com/go-steer/simian-agent/pkg/catalog"
 )
 
 // The fault kinds this engine synthesizes.
@@ -45,6 +47,7 @@ const (
 	KindJobFailure         = "JobFailure"
 	KindSelectorDrift      = "SelectorDrift"
 	KindUnboundClaim       = "UnboundClaim"
+	KindDependencyStall    = "DependencyStall"
 	KindNoOp               = "NoOp"
 )
 
@@ -134,6 +137,27 @@ const (
 	claimVolumeName = "data"
 	claimMountPath  = "/var/lib/data"
 
+	// stallMessageEnv carries the caller's dependency-error line into the
+	// container, for the same reason exitMessageEnv does: interpolating
+	// caller-supplied text into a shell string is how a scenario pack that
+	// wants a specific log line becomes a command injection.
+	stallMessageEnv = "SIMIAN_STALL_MESSAGE"
+
+	// defaultStallSeconds is how often the workload repeats its error line.
+	// Frequent enough that a gate polling every two seconds finds it inside its
+	// first few polls, slow enough to read like an application retrying an
+	// upstream rather than a log generator.
+	defaultStallSeconds = 10
+
+	// maxStallSeconds keeps the interval inside the gate's own timeout. A
+	// workload that logs once a minute would make the fault land and the gate
+	// give up, which reads as a fault that did not land.
+	maxStallSeconds = 60
+
+	// stallServeRoot is where the synthesized workload's one static page lives.
+	// Under /tmp so the container needs no writable image layer and no volume.
+	stallServeRoot = "/tmp/www"
+
 	// maxReplicas caps how many broken pods one fault may create.
 	//
 	// A declarative-state fault is about the state, not the volume: one
@@ -182,6 +206,7 @@ var builders = map[string]builder{
 	KindJobFailure:         jobFailureBundle,
 	KindSelectorDrift:      selectorDriftBundle,
 	KindUnboundClaim:       unboundClaimBundle,
+	KindDependencyStall:    dependencyStallBundle,
 }
 
 // deploymentOf adapts a pod-spec builder to the bundle interface.
@@ -549,6 +574,98 @@ func unboundClaimBundle(s synthesis) ([]runtime.Object, error) {
 	// exist yet reports a different failure — FailedMount rather than an
 	// unschedulable pod — and the gate reads the second one.
 	return []runtime.Object{pvc, newDeployment(s, pod)}, nil
+}
+
+// dependencyStallBundle: a workload that serves, and complains. It answers its
+// readiness probe on every poll, sits behind a Service that selects it
+// correctly, and writes an upstream-failure line to its log every few seconds.
+//
+// This is the hardest kind in the engine and the one worth the most. Every
+// check an agent runs against the API server comes back clean: the Deployment
+// is Available, every pod is Running and Ready, the Service has endpoints,
+// nothing has restarted, no event has fired, and there is no reason token
+// anywhere to grep for. The only evidence is what the application says about
+// itself, so the fault separates a subject that diagnoses from one that
+// transcribes `kubectl get` — which is the whole point of having a control and
+// a scoring rig at all.
+//
+// The workload really serves rather than merely lacking a readiness probe. A
+// pod that is Ready only because nothing checks would be found by a subject
+// that dialled the Service and got a connection refused, and it would be found
+// for the wrong reason: the diagnosis this kind poses is "the thing behind it
+// is broken", not "this is broken".
+func dependencyStallBundle(s synthesis) ([]runtime.Object, error) {
+	port, err := optInt(s.spec, "port", defaultServicePort)
+	if err != nil {
+		return nil, err
+	}
+	if port < 1 || port > 65535 {
+		return nil, fmt.Errorf("spec.port must be between 1 and 65535, got %d", port)
+	}
+	every, err := optInt(s.spec, "interval_seconds", defaultStallSeconds)
+	if err != nil {
+		return nil, err
+	}
+	if every < 1 || every > maxStallSeconds {
+		return nil, fmt.Errorf("spec.interval_seconds must be between 1 and %d, got %d", maxStallSeconds, every)
+	}
+	// Resolved through the catalog because the efficacy gate greps for exactly
+	// this string and has to compute it from the same spec, before the pod
+	// exists. See catalog.KubeStateStallMessage.
+	msg := catalog.KubeStateStallMessage(optString(s.spec, "message", ""))
+	if strings.ContainsAny(msg, "\n\r") {
+		// The gate matches a substring of one log line. A message carrying a
+		// newline would be written as several, and the gate would look for a
+		// string that appears nowhere — the fault would land and be reported as
+		// inert.
+		return nil, fmt.Errorf("spec.message must be a single line: the efficacy gate matches it against one line of the log")
+	}
+
+	pod := corev1.PodSpec{
+		Containers: []corev1.Container{{
+			Name:  containerName,
+			Image: optString(s.spec, "image", defaultRunnerImage),
+			Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: int32(port)}},
+			Env:   []corev1.EnvVar{{Name: stallMessageEnv, Value: msg}},
+			// busybox httpd daemonizes, so the `&&` chain reaches the loop and
+			// the loop is what keeps PID 1 alive. If httpd cannot bind, the
+			// chain stops there and the container exits: the fault fails its own
+			// readiness gate rather than landing as a workload that only looks
+			// healthy.
+			Command: []string{"/bin/sh", "-c", fmt.Sprintf(
+				"mkdir -p %[1]s && echo ok > %[1]s/index.html && httpd -p %[2]d -h %[1]s && "+
+					"while :; do echo \"$%[3]s\" >&2; sleep %[4]d; done",
+				stallServeRoot, port, stallMessageEnv, every)},
+			ReadinessProbe: &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{
+					HTTPGet: &corev1.HTTPGetAction{Path: "/", Port: intstr.FromInt32(int32(port))},
+				},
+				PeriodSeconds:    2,
+				TimeoutSeconds:   2,
+				FailureThreshold: 3,
+			},
+		}},
+	}
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      s.name,
+			Namespace: s.namespace,
+			Labels:    map[string]string{"app": s.name},
+		},
+		Spec: corev1.ServiceSpec{
+			// Correct, deliberately, and the inverse of SelectorDrift. The
+			// Service having endpoints is half of what makes this fault what it
+			// is, and the gate asserts it.
+			Selector: map[string]string{"app": s.name},
+			Ports: []corev1.ServicePort{{
+				Name:       "http",
+				Port:       int32(port),
+				TargetPort: intstr.FromInt32(int32(port)),
+			}},
+		},
+	}
+	return []runtime.Object{newDeployment(s, pod), svc}, nil
 }
 
 // newDeployment wraps a pod spec in the Deployment that carries it.

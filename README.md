@@ -43,7 +43,7 @@ events, and none of them can be produced by delaying a packet.
 `kube-state` produces the other half. In `synthesize` mode it applies a bundle
 of objects into the arena that is born broken — nothing already running is
 touched, so a baseline captured before the fault is still comparable afterwards.
-Eight kinds, each with its own default efficacy gate:
+Nine kinds, each with its own default efficacy gate:
 
 | Kind | Produces | Gated on |
 |---|---|---|
@@ -54,13 +54,21 @@ Eight kinds, each with its own default efficacy gate:
 | `JobFailure` | Job whose pods exhaust its backoff limit | `BackoffLimitExceeded` |
 | `SelectorDrift` | Service whose selector misses its own healthy pods | pods Ready **and** no endpoint addresses |
 | `UnboundClaim` | claim on a StorageClass the cluster does not have | claim `Pending` and the pod mounting it `Unschedulable` |
+| `DependencyStall` | workload that serves fine and logs a failing call to something it needs | pods Ready **and** endpoints Ready **and** the line in the log |
 | `NoOp` | a workload with nothing wrong with it — the control | pods Ready |
 
-The last three are why a fault is a *bundle* rather than one Deployment. A
+The last four are why a fault is a *bundle* rather than one Deployment. A
 Service in front of nothing and a claim that never binds are relationships
 between objects, and the fault is the relationship: `SelectorDrift` in
 particular is the shape that catches an agent grading `kubectl get pods`, since
 every pod is Running and Ready and the traffic is going nowhere.
+
+`DependencyStall` goes one further, and is the only kind where *no object is
+wrong at all*. The Deployment is Available, the pods are Ready against a real
+HTTP readiness probe, the Service has endpoints, and no event fired. The fault
+exists only in what the workload says about itself, so the only subject that
+finds it is one that read the log — which is what the `logs` probe type exists
+to gate, and the discrimination this kind was added to make.
 
 `NoOp` is the control, and it synthesizes a healthy workload rather than
 applying nothing. An empty namespace is trivially distinguishable from a broken

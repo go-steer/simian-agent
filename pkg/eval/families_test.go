@@ -94,6 +94,18 @@ var faultKindReports = map[string]kindVocabulary{
 			"Pending", "Unschedulable", "FailedScheduling",
 		},
 	},
+	kubestate.KindDependencyStall: {
+		families: []string{"dependency"},
+		// Nothing the control plane wrote is in this list, because the control
+		// plane wrote nothing: the pods are Ready, the Service is endpointed,
+		// no event fired. Every token here is one a subject can only produce by
+		// having read the log, which is exactly the discrimination this kind
+		// exists to make.
+		reasons: []string{
+			"UpstreamTimeout", "UpstreamUnavailable", "DependencyFailure",
+			"ConnectionRefused", "ContextDeadlineExceeded",
+		},
+	},
 	// The control, and the only entry that is empty on purpose. There is
 	// nothing wrong in the namespace, so there is no token a correct report
 	// contains — a report about NoOp is the empty one, which is what

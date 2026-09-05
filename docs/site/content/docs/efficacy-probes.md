@@ -185,6 +185,45 @@ within the deadline" is a change Simian caused, not a property of the workload.
 The `Expected` string says so out loud — `latency >= 125ms (or no response
 within 1s)` — so the audit record never claims a measurement it does not have.
 
+### The `logs` probe type
+
+The `k8s` probe reads a field and the `http` probe dials a port. Neither can
+see a fault that leaves *every field on every object correct*: a workload whose
+dependency has stopped answering is Ready, Available and endpointed, and says
+so only in what it writes about itself. The `logs` probe reads that — `kubectl
+logs` in a loop, over the pods the fault's own selector resolves.
+
+| Field | Required | Meaning |
+|---|---|---|
+| `expect_contains` | yes | Substring that must appear in some pod's log |
+| `namespace` | no | Defaults to the fault's own target namespace |
+| `label_selector` | no | Which pods to read; defaults to the fault's own target labels |
+| `name` | no | Read one named pod instead of listing |
+| `container` | no | Defaults to the pod's first container |
+| `tail_lines` | no | How deep to read, default `200` |
+| `previous` | no | Read the previous container instance instead |
+| `timeout` | no | Duration string, default `90s` |
+| `interval` | no | Duration string, default `2s` |
+
+A round passes if **any** pod matches, and the `Observed` string names which
+one — `checkout-api-x-5bcf5f5cd5-s7btf: level=error msg="upstream request
+failed" …`. It reads at most ten pods and 256KiB per pod, and one pod whose log
+cannot be read does not sink a round the others can answer; an error surfaces
+only when *nothing* was readable. Unlike the `http` probe's lister it does not
+filter on phase or pod IP — a Pending or terminated pod still has a log, and is
+often the one worth reading.
+
+There is deliberately **no `expect_empty`**, and it is the one asymmetry with
+the `k8s` probe. "The log does not say X" is satisfied by a container that
+never started, by a pod that was never created, and by a typo in the
+expectation — the vacuous pass with no way left to tell it from a real one. For
+the same reason an empty or whitespace-only `expect_contains` is rejected at
+parse time rather than at poll time: every log contains `""`, and almost every
+log contains `" "`.
+
+The probe needs `pods/log` on the arena Role, which `simian arena create`, the
+manifests and the Helm chart already grant.
+
 ### Why not `cmd`
 
 An `exec`-into-the-pod probe would read `tc -s qdisc` and settle a whole class
@@ -215,6 +254,7 @@ a vote on.
 | `kube-state` | `JobFailure` | The Job carries a condition of reason `BackoffLimitExceeded` |
 | `kube-state` | `SelectorDrift` | Pods are Ready **and** the Service's EndpointSlices carry no addresses |
 | `kube-state` | `UnboundClaim` | The claim is `Pending` **and** the pod mounting it reports `Unschedulable` |
+| `kube-state` | `DependencyStall` | Pods are Ready **and** the Service's EndpointSlices report ready endpoints **and** the workload's log carries the failing-call line |
 | `kube-state` | `NoOp` | Pods are Ready — the control's gate is the one every other kind fails |
 
 The table is keyed by `(engine, kind)`, not by cluster. The Chaos Mesh catalog
@@ -232,7 +272,8 @@ unrelated. The names are reserved and prefixed: `simian-reachable-before`,
 `simian-partitioned`, `simian-fast-before`, `simian-delayed`,
 `simian-envoy-runtime`, `simian-image-pull-failed`, `simian-crash-looping`,
 `simian-oom-killed`, `simian-unschedulable`, `simian-job-failed`,
-`simian-workload-ready`, `simian-no-endpoints`, `simian-claim-pending`.
+`simian-workload-ready`, `simian-no-endpoints`, `simian-claim-pending`,
+`simian-endpoints-ready`, `simian-dependency-stalled`.
 
 ### A synthesized fault has no SOT half, and that is not an oversight
 
@@ -294,6 +335,17 @@ after the first passes.
 `Unschedulable`, which the scheduler also writes for taints, node selectors and
 genuine resource shortage — so the gate reads the claim's own `Pending` phase
 first. The cause before the symptom.
+
+`DependencyStall` gets three probes, and its evidence is not an absence at all
+— it is the *opposite* problem. A gate that only grepped the log would pass
+just as happily against a crash-looping workload that happened to print the
+line once on its way down, which is the wrong fault entirely.
+`simian-workload-ready` and `simian-endpoints-ready` run first, and what they
+buy is the word **only**: with both green, the log gate means "and only the log
+is wrong", which is the whole claim this kind makes. They are also the cheapest
+possible check that the fault is the one advertised, since a stall that
+accidentally broke readiness would fail its own gate rather than land as a
+workload that merely looks healthy.
 
 `NoOp`, the control, is gated on its workload being **healthy**. A control needs
 a gate as much as a fault does: without one it would "inject" successfully
