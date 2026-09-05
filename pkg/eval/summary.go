@@ -151,13 +151,28 @@ func Summarize(subject string, pack scenario.Pack, runs []Run) (Summary, error) 
 	return sum, nil
 }
 
-// MeasureNames returns the measures present in the summary, sorted, so a
-// report can be rendered in a stable order.
+// MeasureNames returns the measures this summary actually has a mean for, in
+// report order, so a scorecard's rows and its columns are ordered the same way
+// and two runs of the same pack are diffable.
+//
+// Measures outside the default set — a caller's own, passed to Summarize —
+// have no report order to follow, so they come last, sorted.
 func (s Summary) MeasureNames() []string {
 	names := make([]string, 0, len(s.Means))
-	for n := range s.Means {
-		names = append(names, n)
+	known := map[string]bool{}
+	for _, n := range MeasureNames() {
+		known[n] = true
+		if _, ok := s.Means[n]; ok {
+			names = append(names, n)
+		}
 	}
-	sort.Strings(names)
-	return names
+
+	extra := make([]string, 0, len(s.Means))
+	for n := range s.Means {
+		if !known[n] {
+			extra = append(extra, n)
+		}
+	}
+	sort.Strings(extra)
+	return append(names, extra...)
 }

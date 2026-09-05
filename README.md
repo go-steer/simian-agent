@@ -125,7 +125,19 @@ Workaround for testing envoy-fault against an arbitrary workload: deploy the SUT
 - **Pluggable LLM** — Gemini default (Vertex/ADC and API key both supported); stub provider for tests.
 - **Audit log** — structured events at every pipeline stage, JSON-formatted via `slog`.
 
-`simian evaluate` ships as a stub until M5 (scenario data export). The `simian provision` command is deprecated; use `simian arena` and `simian sut` directly.
+The `simian provision` command is deprecated; use `simian arena` and `simian sut` directly.
+
+### Scoring a subject against the chaos
+
+Simian breaks things; `pkg/eval` grades what an agent made of it.
+
+```bash
+simian evaluate --pack packs/parity --audit run.log --report agent.json
+```
+
+- **Two artifacts, joined on the scenario ID** the audit sink stamps onto every event. The audit log is Simian's record of breaking things — which faults landed, and when. The report is the subject's side — what it found, and when. Neither half can be taken from the other.
+- **Pure** — no cluster, no clock, no network. The same artifacts produce the same scorecard on any machine, hours later.
+- **A vacuous pass is refused.** A scenario whose fault has no *passing* efficacy record prints as `NOT SCORED — <why>` rather than as a miss: the cluster was never broken, so a zero would mean "nothing to find" while reading as "the agent missed it". Below `--min-efficacy` (default `0.8`) the scorecard prints and the command then exits non-zero, because those numbers measure the harness and not the subject.
 
 ## Quick start
 

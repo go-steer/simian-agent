@@ -25,7 +25,7 @@ simian sut deploy --help
 | `simian serve` | Run the controller: Fault Executor + MCP server + autonomous loop. |
 | `simian chaos` | Submit a fault either as plain-text intent (LLM-translated) or as a hand-built FaultManifest (deterministic-control). Also list/clear active faults. |
 | `simian plan` | Generate an `AttackPlan` against a real arena and emit it as JSON. Default `--dry-run=true` does not apply. |
-| `simian evaluate` | Stub until M5 (scenario data export). |
+| `simian evaluate` | Score a finished run offline from its audit log and the subject's report. Contacts no cluster. |
 
 ## Common flag patterns
 
@@ -99,6 +99,25 @@ simian chaos --clear f-<UID>   # clear before lease expiry
 ```
 
 `--spec`, `--spec-file`, and `--stdin-spec` are mutually exclusive — set at most one. The CLI rejects overlapping inputs upfront rather than silently picking one.
+
+### Scoring a run
+
+```bash
+simian evaluate --pack packs/parity --audit run.log --report agent.json
+simian evaluate --pack packs/parity --audit - --report agent.json --format json
+```
+
+Two artifacts, joined on the scenario ID the audit sink stamps onto every
+event: the audit log says which faults landed and when, the report says what
+the subject found and when. Nothing is executed and no kubeconfig is read, so
+the same artifacts produce the same scorecard on any machine, any time later.
+
+A scenario whose fault has no passing efficacy record prints as `NOT SCORED`
+rather than as a miss — the cluster was never broken, so a zero would mean
+"nothing to find" while reading as "the agent missed it". Below
+`--min-efficacy` (default `0.8`) the scorecard is still printed, then the
+command exits non-zero: the numbers measure the harness, not the subject. Pass
+`--min-efficacy 0` to report anyway; the warning stays either way.
 
 ### Tearing down
 

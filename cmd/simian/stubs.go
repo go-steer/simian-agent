@@ -32,14 +32,3 @@ func newProvisionCmd() *cobra.Command {
 		},
 	}
 }
-
-// newEvaluateCmd is a placeholder for the external-harness driver that lands in M5.
-func newEvaluateCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "evaluate",
-		Short: "Drive an external evaluation harness against scenario records (M5)",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return fmt.Errorf("simian evaluate: not implemented (delivered in M5 — scenario data export)")
-		},
-	}
-}

@@ -263,14 +263,14 @@ func TestScenarioResultScoreLookup(t *testing.T) {
 	}
 }
 
-func TestMeasureNamesAreSorted(t *testing.T) {
+func TestMeasureNamesAreInReportOrder(t *testing.T) {
 	sum := Summary{Means: map[string]float64{
 		MeasureSeverity:      1,
 		MeasureRecall:        1,
 		MeasureHallucination: 1,
 	}}
 	got := sum.MeasureNames()
-	want := []string{MeasureHallucination, MeasureRecall, MeasureSeverity}
+	want := []string{MeasureRecall, MeasureSeverity, MeasureHallucination}
 	if !slices.Equal(got, want) {
 		t.Errorf("MeasureNames() = %v, want %v", got, want)
 	}
