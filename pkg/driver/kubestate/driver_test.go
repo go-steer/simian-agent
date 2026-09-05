@@ -18,11 +18,13 @@ import (
 	"context"
 	"errors"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -68,6 +70,44 @@ func getDeployment(t *testing.T, d *Driver, engineUIDStr string) *appsv1.Deploym
 	return dep
 }
 
+// getBundle returns the metadata of every object the fault created, found the
+// way Clear finds them: by the bundle label, across every type this engine
+// manages.
+func getBundle(t *testing.T, d *Driver, engineUIDStr string) []metav1.ObjectMeta {
+	t.Helper()
+	ns, name, err := decodeEngineUID(engineUIDStr)
+	if err != nil {
+		t.Fatalf("decodeEngineUID(%q): %v", engineUIDStr, err)
+	}
+	var out []metav1.ObjectMeta
+	for _, r := range managedResources {
+		objs, err := r.list(context.Background(), d.clientset, ns, BundleLabel+"="+name)
+		if err != nil {
+			t.Fatalf("list %s: %v", r.plural, err)
+		}
+		out = append(out, objs...)
+	}
+	return out
+}
+
+// podTemplateOf returns the pod template the bundle carries, wherever it lives.
+// Most kinds put it on a Deployment; JobFailure puts it on a Job.
+func podTemplateOf(t *testing.T, d *Driver, engineUIDStr string) corev1.PodSpec {
+	t.Helper()
+	ns, name, err := decodeEngineUID(engineUIDStr)
+	if err != nil {
+		t.Fatalf("decodeEngineUID(%q): %v", engineUIDStr, err)
+	}
+	if dep, err := d.clientset.AppsV1().Deployments(ns).Get(context.Background(), name, metav1.GetOptions{}); err == nil {
+		return dep.Spec.Template.Spec
+	}
+	job, err := d.clientset.BatchV1().Jobs(ns).Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("bundle %s/%s carries no pod template: %v", ns, name, err)
+	}
+	return job.Spec.Template.Spec
+}
+
 func TestEngine(t *testing.T) {
 	if got := newTestDriver().Engine(); got != simian.EngineKubeState {
 		t.Errorf("Engine()=%q, want %q", got, simian.EngineKubeState)
@@ -86,15 +126,21 @@ func TestApplyEveryKindWithEmptySpec(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Apply(%s, nil spec): %v", kind, err)
 			}
-			dep := getDeployment(t, d, uid)
-			if got := dep.Labels[KindLabel]; got != kind {
-				t.Errorf("kind label = %q, want %q", got, kind)
+			objs := getBundle(t, d, uid)
+			if len(objs) == 0 {
+				t.Fatalf("Apply(%s) created nothing", kind)
 			}
-			if len(dep.Spec.Template.Spec.Containers) != 1 {
-				t.Fatalf("want exactly one container, got %d", len(dep.Spec.Template.Spec.Containers))
+			for _, obj := range objs {
+				if got := obj.Labels[KindLabel]; got != kind {
+					t.Errorf("%s: kind label = %q, want %q", obj.Name, got, kind)
+				}
 			}
-			if dep.Spec.Template.Spec.Containers[0].Name != containerName {
-				t.Errorf("container name = %q, want %q", dep.Spec.Template.Spec.Containers[0].Name, containerName)
+			pod := podTemplateOf(t, d, uid)
+			if len(pod.Containers) != 1 {
+				t.Fatalf("want exactly one container, got %d", len(pod.Containers))
+			}
+			if pod.Containers[0].Name != containerName {
+				t.Errorf("container name = %q, want %q", pod.Containers[0].Name, containerName)
 			}
 		})
 	}
@@ -461,7 +507,11 @@ func TestKindsMatchCatalogConstants(t *testing.T) {
 	inCatalog := []string{
 		catalog.KubeStateContainerExitLoop,
 		catalog.KubeStateImageUnresolvable,
+		catalog.KubeStateJobFailure,
 		catalog.KubeStateMemoryLimitSqueeze,
+		catalog.KubeStateNoOp,
+		catalog.KubeStateSelectorDrift,
+		catalog.KubeStateUnboundClaim,
 		catalog.KubeStateUnschedulable,
 	}
 	kinds := Kinds()
@@ -486,5 +536,140 @@ func TestKindsMatchCatalogConstants(t *testing.T) {
 	}
 	if Supports("NodeUnready") {
 		t.Error("Supports() claims a kind this driver does not build")
+	}
+}
+
+// --- bundles ---
+
+// Every object in a bundle has to carry the bundle label, because that label
+// is the whole of Clear's memory. The driver records nothing: it finds the
+// objects again from the engineUID and this label, so an object that misses it
+// is an object that survives the fault it belongs to.
+func TestEveryObjectInABundleIsLabelledWithIt(t *testing.T) {
+	for _, kind := range Kinds() {
+		t.Run(kind, func(t *testing.T) {
+			d := newTestDriver()
+			uid, err := d.Apply(context.Background(), manifest(kind, nil))
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			_, name, _ := decodeEngineUID(uid)
+			for _, obj := range getBundle(t, d, uid) {
+				if got := obj.Labels[BundleLabel]; got != name {
+					t.Errorf("%s: bundle label = %q, want %q", obj.Name, got, name)
+				}
+				if got := obj.Labels[ManagedLabel]; got != "true" {
+					t.Errorf("%s: managed label = %q, want true", obj.Name, got)
+				}
+				if got := obj.Labels[FaultUIDLabel]; got != "01K4ZQ8XABCDEF" {
+					t.Errorf("%s: fault-uid label = %q", obj.Name, got)
+				}
+				if _, ok := obj.Annotations[ExpiryAnnotation]; !ok {
+					t.Errorf("%s: no expiry annotation; the reaper cannot clean it up after a restart", obj.Name)
+				}
+			}
+		})
+	}
+}
+
+func TestClearRemovesEveryObjectInTheBundle(t *testing.T) {
+	// The two kinds that are more than one object, and the one that is more
+	// than one *type* — a Clear that only knew about Deployments would leave
+	// the Service and the claim behind, and the next scenario in that arena
+	// would inherit them.
+	for _, kind := range []string{KindSelectorDrift, KindUnboundClaim, KindJobFailure} {
+		t.Run(kind, func(t *testing.T) {
+			d := newTestDriver()
+			uid, err := d.Apply(context.Background(), manifest(kind, nil))
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if n := len(getBundle(t, d, uid)); n == 0 {
+				t.Fatalf("Apply created nothing")
+			}
+			if err := d.Clear(context.Background(), uid); err != nil {
+				t.Fatalf("Clear: %v", err)
+			}
+			if left := getBundle(t, d, uid); len(left) != 0 {
+				t.Errorf("after Clear, %d object(s) remain: %v", len(left), left)
+			}
+		})
+	}
+}
+
+// A bundle whose second object cannot be created must not leave the first one
+// standing. A failed Apply is never leased, so nothing will ever call Clear for
+// it: the rollback here is the only thing between a Forbidden create and a
+// broken workload nobody is tracking.
+func TestAPartiallyCreatedBundleIsRolledBack(t *testing.T) {
+	d := newTestDriver()
+	cs := d.clientset.(*fake.Clientset)
+	cs.PrependReactor("create", "services", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Resource: "services"}, "x", errors.New("nope"))
+	})
+	_, err := d.Apply(context.Background(), manifest(KindSelectorDrift, nil))
+	if err == nil {
+		t.Fatal("Apply succeeded despite a Forbidden create")
+	}
+	if !strings.Contains(err.Error(), "create service") {
+		t.Errorf("error %q does not name what failed", err)
+	}
+	deps, lerr := d.clientset.AppsV1().Deployments(testNS).List(context.Background(), metav1.ListOptions{})
+	if lerr != nil {
+		t.Fatalf("list deployments: %v", lerr)
+	}
+	if len(deps.Items) != 0 {
+		t.Errorf("the Deployment created before the failure is still there: %v", deps.Items[0].Name)
+	}
+}
+
+// The reaper clears leases, and a lease is per fault. A bundle of three
+// expired objects is one fault that has ended, not three — reporting it three
+// times would have the executor clear a lease twice against nothing.
+func TestReapExpiredReportsOneBundleOnce(t *testing.T) {
+	d := newTestDriver()
+	uid, err := d.Apply(context.Background(), manifest(KindUnboundClaim, nil))
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if n := len(getBundle(t, d, uid)); n < 2 {
+		t.Fatalf("bundle has %d objects; this test needs more than one", n)
+	}
+	// An hour past the five-minute duration the manifest asked for.
+	cleared, err := d.ReapExpired(context.Background(), []string{testNS}, time.Date(2026, 9, 4, 13, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("ReapExpired: %v", err)
+	}
+	if len(cleared) != 1 || cleared[0] != uid {
+		t.Errorf("cleared = %v, want exactly [%s]", cleared, uid)
+	}
+	if left := getBundle(t, d, uid); len(left) != 0 {
+		t.Errorf("%d object(s) survived the reap: %v", len(left), left)
+	}
+}
+
+// The reaper reports one engineUID per bundle, and the bundle label is how it
+// knows which objects belong to which. The two cases that pull in opposite
+// directions: an object whose own name is not the bundle's, and an object with
+// no bundle label at all — written by a Simian from before bundles existed,
+// when every fault was one Deployment named after itself.
+func TestReapExpiredNamesTheBundleAndNotTheObject(t *testing.T) {
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-time.Minute).Format(time.RFC3339)
+
+	member := managedDeployment("arena-1", "sidecar-x", map[string]string{ExpiryAnnotation: past})
+	member.Labels[BundleLabel] = "storefront-abc"
+	legacy := managedDeployment("arena-1", "catalog-sync-old", map[string]string{ExpiryAnnotation: past})
+
+	d := newTestDriver(member, legacy)
+	cleared, err := d.ReapExpired(context.Background(), []string{"arena-1"}, now)
+	if err != nil {
+		t.Fatalf("ReapExpired: %v", err)
+	}
+	slices.Sort(cleared)
+	want := []string{engineUID("arena-1", "catalog-sync-old"), engineUID("arena-1", "storefront-abc")}
+	if !slices.Equal(cleared, want) {
+		t.Errorf("cleared = %v, want %v", cleared, want)
 	}
 }

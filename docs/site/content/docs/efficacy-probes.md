@@ -212,6 +212,10 @@ a vote on.
 | `kube-state` | `ContainerExitLoop` | A container's `lastState.terminated.reason` is `Error` (non-zero exit) |
 | `kube-state` | `MemoryLimitSqueeze` | A container's `lastState.terminated.reason` is `OOMKilled` |
 | `kube-state` | `Unschedulable` | A pod condition carries reason `Unschedulable` |
+| `kube-state` | `JobFailure` | The Job carries a condition of reason `BackoffLimitExceeded` |
+| `kube-state` | `SelectorDrift` | Pods are Ready **and** the Service's EndpointSlices carry no addresses |
+| `kube-state` | `UnboundClaim` | The claim is `Pending` **and** the pod mounting it reports `Unschedulable` |
+| `kube-state` | `NoOp` | Pods are Ready — the control's gate is the one every other kind fails |
 
 The table is keyed by `(engine, kind)`, not by cluster. The Chaos Mesh catalog
 is derived from live CRD discovery, so anything hand-listed per installation
@@ -227,11 +231,12 @@ additive, so a manifest cannot dissolve its gate by declaring something
 unrelated. The names are reserved and prefixed: `simian-reachable-before`,
 `simian-partitioned`, `simian-fast-before`, `simian-delayed`,
 `simian-envoy-runtime`, `simian-image-pull-failed`, `simian-crash-looping`,
-`simian-oom-killed`, `simian-unschedulable`.
+`simian-oom-killed`, `simian-unschedulable`, `simian-job-failed`,
+`simian-workload-ready`, `simian-no-endpoints`, `simian-claim-pending`.
 
 ### A synthesized fault has no SOT half, and that is not an oversight
 
-The four `kube-state` gates are Settle-only. Every dataplane gate above needs a
+Every `kube-state` gate is Settle-only. Every dataplane gate above needs a
 precheck because its Settle assertion is *differential*: "the target does not
 answer" proves nothing about a workload that was not answering beforehand.
 
@@ -263,6 +268,38 @@ container never starts, so there is no restart cycle to race against and the
 pod stays in `ImagePullBackOff`. `Unschedulable` reads the `PodScheduled`
 condition's reason rather than `phase == Pending`, which would also pass while
 an image is still pulling.
+
+### When the evidence is an absence, something else has to prove it is not vacuous
+
+`SelectorDrift` breaks a Service by pointing it past its own pods, so the state
+that proves the fault landed is *no endpoint addresses* — and an empty read is
+also what a namespace where nothing has been created yet produces. Gated on that
+alone, the probe would pass in the moment before the workload existed and report
+a fault that never landed as verified. That is the exact failure the gates exist
+to prevent, arriving through the gate itself.
+
+So the kinds whose evidence is an absence get two probes, and Settle probes run
+**in order**, stopping at the first that does not pass. `simian-workload-ready`
+runs first and only passes once the pods report `Ready`; `simian-no-endpoints`
+runs second, against a namespace the first probe has just proved is populated.
+A test in `pkg/catalog` refuses any gate that puts an `expect_empty` probe
+first.
+
+The window between the two is narrow enough to measure: on GKE 1.36 a Service
+whose selector *does* match has its addresses published by the time
+`kubectl wait --for=condition=Ready` returns, and the second probe polls ~100ms
+after the first passes.
+
+`UnboundClaim` is paired for a different reason. The pod it blocks reports
+`Unschedulable`, which the scheduler also writes for taints, node selectors and
+genuine resource shortage — so the gate reads the claim's own `Pending` phase
+first. The cause before the symptom.
+
+`NoOp`, the control, is gated on its workload being **healthy**. A control needs
+a gate as much as a fault does: without one it would "inject" successfully
+against a cluster too broken to run anything, and the subject's correct report
+of nothing wrong would be scored as a correct answer rather than as the vacuous
+pass it is.
 
 Defaults are on unless the operator turns them off:
 

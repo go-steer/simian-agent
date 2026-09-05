@@ -69,6 +69,36 @@ var faultKindReports = map[string]kindVocabulary{
 		families: []string{"resource-pressure"},
 		reasons:  []string{"Unschedulable", "FailedScheduling", "InsufficientMemory", "InsufficientCPU", "Pending"},
 	},
+	kubestate.KindJobFailure: {
+		families: []string{"job-failed"},
+		// "Error" is what the kubelet writes on each failed attempt, and
+		// "Failed" is the Job's own condition type. Both are generic, and both
+		// are what an honest report about this fault reaches for first.
+		reasons: []string{"BackoffLimitExceeded", "JobFailed", "Error", "Failed"},
+	},
+	kubestate.KindSelectorDrift: {
+		families: []string{"no-endpoints"},
+		// No pod-level token here, and that is the fault: every pod is Running
+		// and Ready. A subject with nothing to say beyond the pods has not
+		// found this one.
+		reasons: []string{"NoEndpoints", "SelectorMismatch", "NoMatchingPods", "EmptyEndpoints", "ServiceHasNoEndpoints"},
+	},
+	kubestate.KindUnboundClaim: {
+		families: []string{"volume-binding"},
+		// The scheduler's own tokens for a pod blocked behind a claim are
+		// generic, deliberately — see genericReasons. Only a report that names
+		// the binding is making a claim that could be wrong.
+		reasons: []string{
+			"Unbound", "UnboundImmediatePersistentVolumeClaims", "VolumeBindingFailed",
+			"StorageClassNotFound", "MissingStorageClass",
+			"Pending", "Unschedulable", "FailedScheduling",
+		},
+	},
+	// The control, and the only entry that is empty on purpose. There is
+	// nothing wrong in the namespace, so there is no token a correct report
+	// contains — a report about NoOp is the empty one, which is what
+	// HallucinatedFault grades and what recall has nothing to ask for.
+	kubestate.KindNoOp: {},
 }
 
 // TestEveryFaultKindNamesItsOwnFamily is the guard familyOf's doc comment

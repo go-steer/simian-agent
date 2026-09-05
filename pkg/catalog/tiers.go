@@ -67,8 +67,8 @@ var chaosMeshNonFaultKinds = map[string]bool{
 }
 
 // kubeStateNamespaceKinds are the kube-state fault kinds whose effect is
-// confined to the arena namespace. Each synthesizes one Deployment there and
-// touches nothing that existed before it.
+// confined to the arena namespace. Each synthesizes a bundle of objects there
+// and touches nothing that existed before it.
 //
 // Listed here rather than derived from the driver's own kind table so that
 // classification is a decision this package records, not a side effect of a
@@ -79,6 +79,15 @@ var kubeStateNamespaceKinds = map[string]bool{
 	"ContainerExitLoop":  true,
 	"MemoryLimitSqueeze": true,
 	"Unschedulable":      true,
+	"JobFailure":         true,
+	"SelectorDrift":      true,
+	"UnboundClaim":       true,
+	// The control. It breaks nothing at all, which makes it the narrowest
+	// blast radius there is — but it is still listed rather than special-cased,
+	// because a kind absent from this table is TierExternal and would be
+	// refused, and a control that cannot be applied is a scoring path that
+	// cannot be exercised.
+	"NoOp": true,
 }
 
 // IsUserFault reports whether the given engine+kind is a user-facing fault

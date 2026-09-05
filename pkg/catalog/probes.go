@@ -37,6 +37,10 @@ const (
 	ProbeCrashLooping    = "simian-crash-looping"
 	ProbeOOMKilled       = "simian-oom-killed"
 	ProbeUnschedulable   = "simian-unschedulable"
+	ProbeJobFailed       = "simian-job-failed"
+	ProbeWorkloadReady   = "simian-workload-ready"
+	ProbeNoEndpoints     = "simian-no-endpoints"
+	ProbeClaimPending    = "simian-claim-pending"
 )
 
 // Envoy runtime keys, mirrored from pkg/sut/envoy's bootstrap. Duplicated
@@ -98,6 +102,22 @@ var gates = map[gateKey]gate{
 	},
 	{simian.EngineKubeState, KubeStateUnschedulable}: {
 		describe: "the synthesized workload's pods must report a PodScheduled condition of Unschedulable",
+		build:    kubeStateProbes,
+	},
+	{simian.EngineKubeState, KubeStateJobFailure}: {
+		describe: "the synthesized Job must report a Failed condition of reason BackoffLimitExceeded",
+		build:    kubeStateProbes,
+	},
+	{simian.EngineKubeState, KubeStateSelectorDrift}: {
+		describe: "the synthesized workload's pods must be Ready and the Service in front of them must have no endpoint addresses",
+		build:    kubeStateProbes,
+	},
+	{simian.EngineKubeState, KubeStateUnboundClaim}: {
+		describe: "the synthesized claim must be Pending and the pod mounting it must report Unschedulable",
+		build:    kubeStateProbes,
+	},
+	{simian.EngineKubeState, KubeStateNoOp}: {
+		describe: "the control workload's pods must be Ready — the gate a control passes is the one every other kind fails",
 		build:    kubeStateProbes,
 	},
 }
@@ -246,16 +266,38 @@ func delayPair(selector map[string]string, delay map[string]any) []simian.ProbeS
 	}
 }
 
-// kubeStateGate is the field a synthesized fault kind proves itself on.
+// kubeStateGate is one assertion a synthesized fault kind proves itself on.
 type kubeStateGate struct {
 	probeName string
-	jsonPath  string
-	expect    string
-	timeout   string
+
+	// resource the probe reads. Empty means pods, which is what most of these
+	// kinds show their failure on.
+	resource string
+
+	// selectorKey is the label key the probe selects the workload name on.
+	// Empty means "app", which is what the driver puts on every object it
+	// synthesizes. EndpointSlices are the exception: they are written by the
+	// endpointslice controller, which labels them with the Service they belong
+	// to and nothing else.
+	selectorKey string
+
+	jsonPath string
+	expect   string
+
+	// expectEmpty asserts the jsonpath renders nothing, for a gate whose
+	// evidence is an absence. Mutually exclusive with expect, and never the
+	// only gate on a kind — an empty read is also what a resource that does
+	// not exist yet produces, so an expectEmpty probe has to be preceded by
+	// one that proves the objects are there.
+	expectEmpty bool
+
+	timeout string
 }
 
-var kubeStateGates = map[string]kubeStateGate{
-	KubeStateImageUnresolvable: {
+// kubeStateGates are run in order and stop at the first failure, which is what
+// lets a later gate depend on what an earlier one established.
+var kubeStateGates = map[string][]kubeStateGate{
+	KubeStateImageUnresolvable: {{
 		probeName: ProbeImagePullFailed,
 		jsonPath:  "{.items[*].status.containerStatuses[*].state.waiting.reason}",
 		// The kubelet reports ErrImagePull on the first failure and
@@ -265,8 +307,8 @@ var kubeStateGates = map[string]kubeStateGate{
 		// transient on the right poll.
 		expect:  "ImagePullBackOff",
 		timeout: "90s",
-	},
-	KubeStateContainerExitLoop: {
+	}},
+	KubeStateContainerExitLoop: {{
 		probeName: ProbeCrashLooping,
 		// Not state.waiting.reason == CrashLoopBackOff, which is the obvious
 		// choice and is a coin flip. A container that exits immediately spends
@@ -286,8 +328,8 @@ var kubeStateGates = map[string]kubeStateGate{
 		// way this engine kills a container reports OOMKilled instead.
 		expect:  "Error",
 		timeout: "90s",
-	},
-	KubeStateMemoryLimitSqueeze: {
+	}},
+	KubeStateMemoryLimitSqueeze: {{
 		probeName: ProbeOOMKilled,
 		// lastState, not state, for the reason above, plus one specific to
 		// this kind: by the time the kubelet is backing off, the OOM kill is
@@ -299,8 +341,8 @@ var kubeStateGates = map[string]kubeStateGate{
 		// its limit, be killed, and be restarted before lastState is
 		// populated at all.
 		timeout: "120s",
-	},
-	KubeStateUnschedulable: {
+	}},
+	KubeStateUnschedulable: {{
 		probeName: ProbeUnschedulable,
 		// Unschedulable is the reason on the PodScheduled condition, and it is
 		// the only condition reason with that value, so matching across all
@@ -310,8 +352,86 @@ var kubeStateGates = map[string]kubeStateGate{
 		jsonPath: "{.items[*].status.conditions[*].reason}",
 		expect:   "Unschedulable",
 		timeout:  "60s",
+	}},
+	KubeStateJobFailure: {{
+		probeName: ProbeJobFailed,
+		resource:  "jobs",
+		// The Job's own Failed condition, not the state of its pods. Dead pods
+		// are what a crash loop looks like too; BackoffLimitExceeded is the
+		// moment the Job gives up, which is the thing this kind is about and
+		// the thing whatever was waiting on the Job will never recover from.
+		jsonPath: "{.items[*].status.conditions[*].reason}",
+		expect:   "BackoffLimitExceeded",
+		// Generous, because the wait is structural: the Job controller delays
+		// 10s before the first retry and doubles from there, so even the
+		// default backoff_limit of 2 is three pod starts and 30s of deliberate
+		// idling before the condition appears.
+		timeout: "180s",
+	}},
+	KubeStateSelectorDrift: {
+		{
+			// First, and not optional. This kind's evidence is an absence, and
+			// an absence proves nothing until something is there to be absent
+			// from: pods that are Running and Ready are what make "no
+			// endpoints" mean a broken Service rather than a namespace that
+			// has not finished starting.
+			probeName: ProbeWorkloadReady,
+			jsonPath:  podReadyJSONPath,
+			expect:    "True",
+			timeout:   "120s",
+		},
+		{
+			probeName: ProbeNoEndpoints,
+			resource:  "endpointslices",
+			// Written by the endpointslice controller, which labels each slice
+			// with the Service it belongs to. The Service shares the bundle's
+			// name, so this finds the drifted Service's slices and no others.
+			selectorKey: "kubernetes.io/service-name",
+			// The addresses, not the slices. A Service selecting nothing still
+			// gets a placeholder EndpointSlice, so asserting no slice exists
+			// would fail against a fault that landed perfectly.
+			jsonPath:    "{.items[*].endpoints[*].addresses[*]}",
+			expectEmpty: true,
+			timeout:     "30s",
+		},
 	},
+	KubeStateUnboundClaim: {
+		{
+			// The cause before the symptom. A Pending claim is unambiguous;
+			// the pod below it can be Pending for reasons that have nothing to
+			// do with storage.
+			probeName: ProbeClaimPending,
+			resource:  "persistentvolumeclaims",
+			jsonPath:  "{.items[*].status.phase}",
+			expect:    "Pending",
+			timeout:   "60s",
+		},
+		{
+			probeName: ProbeUnschedulable,
+			jsonPath:  "{.items[*].status.conditions[*].reason}",
+			expect:    "Unschedulable",
+			timeout:   "120s",
+		},
+	},
+	KubeStateNoOp: {{
+		// The control gets a gate like everything else, and it asserts the
+		// opposite of one: the workload came up and is serving. Without it a
+		// control would "inject" successfully against a cluster that was too
+		// broken to run anything, and the subject's correct finding of nothing
+		// would be scored as a correct finding rather than as the vacuous pass
+		// it is.
+		probeName: ProbeWorkloadReady,
+		jsonPath:  podReadyJSONPath,
+		expect:    "True",
+		timeout:   "120s",
+	}},
 }
+
+// podReadyJSONPath renders the status of each pod's Ready condition. The
+// filter is what keeps it honest: without it the expression would render every
+// condition's status and match "True" from PodScheduled alone, which is true
+// of a pod that has not pulled its image yet.
+const podReadyJSONPath = `{.items[*].status.conditions[?(@.type=="Ready")].status}`
 
 // kubeStateProbes gates a synthesized declarative-state fault by reading the
 // state back off the pods it created.
@@ -328,7 +448,7 @@ var kubeStateGates = map[string]kubeStateGate{
 // The selector names pods Apply has not created yet, which is possible because
 // KubeStateWorkloadName derives the workload name from the fault UID.
 func kubeStateProbes(m simian.FaultManifest) []simian.ProbeSpec {
-	g, ok := kubeStateGates[m.ResourceKind]
+	gs, ok := kubeStateGates[m.ResourceKind]
 	if !ok {
 		return nil
 	}
@@ -343,19 +463,36 @@ func kubeStateProbes(m simian.FaultManifest) []simian.ProbeSpec {
 	if name == "" {
 		return nil
 	}
-	return []simian.ProbeSpec{{
-		Name: g.probeName,
-		Type: simian.ProbeTypeK8s,
-		Mode: simian.ProbeModeSettle,
-		Spec: map[string]any{
-			"resource":        "pods",
-			"label_selector":  "app=" + name,
-			"jsonpath":        g.jsonPath,
-			"expect_contains": g.expect,
-			"timeout":         g.timeout,
-			"interval":        "2s",
-		},
-	}}
+	out := make([]simian.ProbeSpec, 0, len(gs))
+	for _, g := range gs {
+		resource := g.resource
+		if resource == "" {
+			resource = "pods"
+		}
+		key := g.selectorKey
+		if key == "" {
+			key = "app"
+		}
+		spec := map[string]any{
+			"resource":       resource,
+			"label_selector": key + "=" + name,
+			"jsonpath":       g.jsonPath,
+			"timeout":        g.timeout,
+			"interval":       "2s",
+		}
+		if g.expectEmpty {
+			spec["expect_empty"] = true
+		} else {
+			spec["expect_contains"] = g.expect
+		}
+		out = append(out, simian.ProbeSpec{
+			Name: g.probeName,
+			Type: simian.ProbeTypeK8s,
+			Mode: simian.ProbeModeSettle,
+			Spec: spec,
+		})
+	}
+	return out
 }
 
 func envoyDelayProbes(m simian.FaultManifest) []simian.ProbeSpec {

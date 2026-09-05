@@ -27,6 +27,10 @@ const (
 	KubeStateContainerExitLoop  = "ContainerExitLoop"
 	KubeStateMemoryLimitSqueeze = "MemoryLimitSqueeze"
 	KubeStateUnschedulable      = "Unschedulable"
+	KubeStateJobFailure         = "JobFailure"
+	KubeStateSelectorDrift      = "SelectorDrift"
+	KubeStateUnboundClaim       = "UnboundClaim"
+	KubeStateNoOp               = "NoOp"
 )
 
 // kubeStateDefaultNames give each synthesized workload a plausible name when
@@ -36,6 +40,10 @@ var kubeStateDefaultNames = map[string]string{
 	KubeStateContainerExitLoop:  "report-worker",
 	KubeStateMemoryLimitSqueeze: "session-cache",
 	KubeStateUnschedulable:      "batch-runner",
+	KubeStateJobFailure:         "schema-migrate",
+	KubeStateSelectorDrift:      "storefront",
+	KubeStateUnboundClaim:       "media-store",
+	KubeStateNoOp:               "inventory-api",
 }
 
 // KubeStateWorkloadName derives the name of the workload a kube-state fault

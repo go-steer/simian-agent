@@ -40,10 +40,10 @@ most of its time in. A wedged rollout, an image that does not exist, a pod
 nothing can schedule and a container that dies on startup are *states*, not
 events, and none of them can be produced by delaying a packet.
 
-`kube-state` produces the other half. In `synthesize` mode it applies a workload
-into the arena that is born broken — nothing already running is touched, so a
-baseline captured before the fault is still comparable afterwards. Four kinds,
-each with its own default efficacy gate:
+`kube-state` produces the other half. In `synthesize` mode it applies a bundle
+of objects into the arena that is born broken — nothing already running is
+touched, so a baseline captured before the fault is still comparable afterwards.
+Eight kinds, each with its own default efficacy gate:
 
 | Kind | Produces | Gated on |
 |---|---|---|
@@ -51,18 +51,36 @@ each with its own default efficacy gate:
 | `ContainerExitLoop` | process exits non-zero on startup | `lastState` reason `Error` |
 | `MemoryLimitSqueeze` | working set larger than the container's own limit | `OOMKilled` |
 | `Unschedulable` | pod the scheduler cannot place | `Unschedulable` pod condition |
+| `JobFailure` | Job whose pods exhaust its backoff limit | `BackoffLimitExceeded` |
+| `SelectorDrift` | Service whose selector misses its own healthy pods | pods Ready **and** no endpoint addresses |
+| `UnboundClaim` | claim on a StorageClass the cluster does not have | claim `Pending` and the pod mounting it `Unschedulable` |
+| `NoOp` | a workload with nothing wrong with it — the control | pods Ready |
+
+The last three are why a fault is a *bundle* rather than one Deployment. A
+Service in front of nothing and a claim that never binds are relationships
+between objects, and the fault is the relationship: `SelectorDrift` in
+particular is the shape that catches an agent grading `kubectl get pods`, since
+every pod is Running and Ready and the traffic is going nowhere.
+
+`NoOp` is the control, and it synthesizes a healthy workload rather than
+applying nothing. An empty namespace is trivially distinguishable from a broken
+one, so a control that applied nothing could be scored correctly by counting
+objects instead of by diagnosing anything.
 
 Every field of every spec is optional — `{}` produces the failure state. Needs
-no Chaos Mesh and no sidecar; it does need `create` on `apps/deployments` in the
-arena Role, which `simian arena create` and the Helm chart both grant.
+no Chaos Mesh and no sidecar; it does need `create` on `apps/deployments`,
+`batch/jobs`, `services` and `persistentvolumeclaims` in the arena Role, which
+`simian arena create` and the Helm chart both grant.
 
 ```bash
 simian chaos --engine kube-state --kind ImageUnresolvable --api-version apps/v1 \
   --namespace boutique-m3 --duration 5m
 ```
 
-Verified on GKE 1.36.3-gke.1537000 (2026-09-04): all four reached their target
-state and passed their gate in 2–14s.
+Verified on GKE 1.36.3-gke.1537000: the first four on 2026-09-04, reaching their
+target state and passing their gate in 2–14s; the bundle kinds on 2026-09-05, in
+0.1–2.2s except `JobFailure`, which needs 37s because the Job controller's retry
+delay doubles and the Job does not admit defeat until it has run out of retries.
 
 #### Using the new engines (deterministic-control mode)
 
