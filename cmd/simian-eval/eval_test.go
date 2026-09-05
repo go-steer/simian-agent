@@ -113,6 +113,10 @@ func TestTheDefaultsAreTheCarefulOnes(t *testing.T) {
 	if o.keepArenas || o.skipDurationOK {
 		t.Errorf("options = %+v, want the leave-nothing-behind defaults", o)
 	}
+	if o.terminatingWait != harness.DefaultTerminatingWait {
+		t.Errorf("terminatingWait = %v, want %v; running a pack twice in a row must not fail on the first run's teardown",
+			o.terminatingWait, harness.DefaultTerminatingWait)
+	}
 }
 
 func TestValidateRefusesInvocationsThatCannotBeScored(t *testing.T) {
@@ -126,6 +130,10 @@ func TestValidateRefusesInvocationsThatCannotBeScored(t *testing.T) {
 		{"bad format", func(o *options) { o.format = "yaml" }, "want text or json"},
 		{"bad cluster", func(o *options) { o.cluster = "gke" }, "want current or kind"},
 		{"negative concurrency", func(o *options) { o.concurrency = -1 }, "must not be negative"},
+		// Zero reads as "do not wait" and means "wait the default" to the
+		// field it feeds, so it is refused rather than quietly inverted.
+		{"zero terminating wait", func(o *options) { o.terminatingWait = 0 }, "--terminating-wait"},
+		{"negative terminating wait", func(o *options) { o.terminatingWait = -time.Second }, "must be positive"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -473,6 +481,7 @@ func TestTheFlagsBindToTheOptionsTheRunUses(t *testing.T) {
 		"--subject-env", "API_KEY=x",
 		"--eligible-namespace", "shop,pay",
 		"--keep-arenas",
+		"--terminating-wait", "45s",
 		"--format", "json",
 		"--min-efficacy", "0.5",
 		"--score=false",
@@ -499,8 +508,32 @@ func TestTheFlagsBindToTheOptionsTheRunUses(t *testing.T) {
 	if !o.keepArenas || o.format != "json" || o.minEfficacy != 0.5 || o.score {
 		t.Errorf("options = %+v", o)
 	}
+	if o.terminatingWait != 45*time.Second {
+		t.Errorf("terminatingWait = %v, want 45s", o.terminatingWait)
+	}
 	if err := o.validate(); err != nil {
 		t.Errorf("a plausible argv did not validate: %v", err)
+	}
+}
+
+// The arena is where a flag either reaches the cluster or quietly does not.
+// Built from a function rather than a literal inside run() precisely so this
+// can be checked without standing up a cluster.
+func TestTheArenaIsBuiltFromTheFlagsAndNotFromItsOwnDefaults(t *testing.T) {
+	o := testOptions("packs/parity")
+	o.keepArenas = true
+	o.terminatingWait = 45 * time.Second
+
+	a := newArena(o, &plane{}, "20260101-000000", discardLogger())
+
+	if !a.KeepArenas {
+		t.Error("--keep-arenas did not reach the arena; the run would delete namespaces it was told to leave")
+	}
+	if a.TerminatingWait != 45*time.Second {
+		t.Errorf("TerminatingWait = %v, want 45s: unwired, the arena silently falls back to its own default", a.TerminatingWait)
+	}
+	if a.Annotations[EvalRunAnnotation] != "20260101-000000" {
+		t.Errorf("annotations = %v, want the run ID, or an abandoned arena cannot be traced back", a.Annotations)
 	}
 }
 
