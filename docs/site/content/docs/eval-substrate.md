@@ -394,15 +394,42 @@ provide:
 | --- | --- |
 | Recall | expected findings matched |
 | Root cause | did the report name the root, not just the symptom |
-| Severity | one-directional tolerance (over-calling is a lesser sin) |
-| Precision / false positive | driven by `NoOp` and by findings outside ground truth |
+| Severity | distance, not exact match; the direction is in the comment |
+| Hallucinated fault | claiming a concrete failure mode that was not injected |
 | **Time to detect** | injection timestamp is Simian's, not inferred |
 | **Time to remediate** | the reaper finding a fault already cleared is not an error — it is the agent having fixed it, timestamped |
 | **Efficacy rate** | fraction of scenarios that actually manifested; the harness's own report card |
 
+The fourth measure was drafted as general precision — "findings outside ground
+truth" — and shipped as something narrower, because general precision is the
+wrong metric here. A scenario's manifests are minimal: no liveness probes, no
+PDBs, no resource limits on the deliberately-broken workloads. A subject that
+notes those is *correct*, and precision would mark it down for thoroughness,
+which pushes us to prompt subjects to say less. So exactly one class of finding
+is charged: claiming one of the concrete failure modes the fault kinds know how
+to inject, in a scenario that did not inject it. Calling a `Pending` pod a
+`CrashLoopBackOff` is a misdiagnosis; noting that it also has no resource limits
+is not. That is what makes a healthy control cost something, and it matches what
+`core-sre-agent` actually scores.
+
+The vocabulary of concrete failure modes is ported from the agent rig rather
+than re-derived, exclusions included. Most of those exclusions were paid for
+with a live run that scored an honest report as an invention: `Unschedulable`
+and `FailedScheduling` say scheduling failed and not why, `NotReady` is written
+about pods, containers and nodes alike, and `DeadlineExceeded` is a substring of
+what the Deployment controller writes on a stalled rollout. Matching is on the
+exact normalized token in consequence — a bare family member must not annex
+every longer token containing it.
+
 Time-to-remediate falls out for free and is worth saying plainly: the lease
 reaper, built to stop Simian leaking faults, becomes a measuring instrument
 the moment the subject is allowed to write.
+
+Scoring is pure. Nothing in `pkg/eval` touches a cluster, a clock or a network:
+a `Run` carries the expectations, the report, the timestamps and whether the
+fault landed, so the same inputs always produce the same scores. That is what
+lets `simian evaluate` (§6.6) reproduce a live run's numbers offline, hours
+later, from artifacts alone.
 
 ### 6.6 `simian evaluate`
 
@@ -636,7 +663,7 @@ within a group is independent of its siblings.
 | #60 ✅ | `Scenario` type, `ScenarioID` plumbed through executor + audit, pack loader | M | — |
 | #61 | Lookout pack (10) + parity pack (11) + the equivalence-matrix test | M | #57, #58, #60 |
 | **Phase 4 — the rig** |
-| #62 | `pkg/eval`: `Report`, `Subject`, and the seven measures | M | #60 |
+| #62 ✅ | `pkg/eval`: `Report`, `Subject`, and the seven measures | M | #60 |
 | #63 | `cmd/simian-eval` + `exec:` adapter + cluster lifecycle | M | #53, #62 |
 | #64 | **Lookout subject + the scored e2e in CI** — §6.7 | M | #61, #63 |
 | #65 | `core-sre-agent` subject; reproduce its existing baseline through this rig | M | #64 |
