@@ -100,6 +100,14 @@ type Finding struct {
 	ResourceName string   `json:"resource_name"`
 	Reason       string   `json:"reason"`
 	Severity     Severity `json:"severity"`
+
+	// Namespace scopes the finding. It is not part of the graded triple and
+	// expectations do not carry one — an expectation describes an object
+	// inside its own scenario and would otherwise repeat the namespace on
+	// every entry. Scoring uses it only to discard findings about somewhere
+	// else. Empty is accepted rather than rejected: the subject was asked
+	// about one namespace, so omitting it is terse, not wrong.
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // ExpectedFinding is one finding a correct report must contain.
