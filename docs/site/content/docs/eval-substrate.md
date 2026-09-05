@@ -140,13 +140,14 @@ born wrong, in the API server.
 | 8 | `multipleFaults` | `fault-storefront` | 3 findings: `orders-api` imagepull, `recommendation-etl` unschedulable, `inventory-sync` job failure | Critical | **Yes** — three faults in one scenario, all three kinds now exist |
 | 9 | `cascade` | `fault-sessions` | Pod / `session-store` / `CrashLoopBackOff` **(root)** → Service / `session-store` / `NoEndpoints` | Critical | Not yet — needs a crash-looping workload *behind its own Service*, so the missing endpoints are a consequence and not the fault. `SelectorDrift` has the Service and a healthy workload; `ContainerExitLoop` has the crash loop and no Service |
 | 10 | `unboundVolume` | `fault-ledger` | PersistentVolumeClaim / `ledger-data` / `VolumeBindingFailed` | Critical | **Yes** — `kube-state` `UnboundClaim` |
-| 11 | `silentFailure` | `fault-invoicing` | Pod / `invoice-reconciler` / `DependencyFailure` — Deployment Available, Service has endpoints, every broad check reports clean | Critical | Not yet — `DependencyStall`'s only signal is in the container's logs, and no probe type reads logs |
+| 11 | `silentFailure` | `fault-invoicing` | Pod / `invoice-reconciler` / `DependencyFailure` — Deployment Available, Service has endpoints, every broad check reports clean | Critical | **Yes** — `kube-state` `DependencyStall`, gated through the `logs` probe type |
 
 **Zero of eleven** when this was written, and the single most useful fact in
 the document. It was not an indictment of the engines — Chaos Mesh is excellent
 at what it does — it was a statement that Simian had been building one half of
 the fault space and the eval rig needed the other half first. Deliverable A
-below is the answer, and eight of its kinds have shipped.
+below is the answer, and all nine of its kinds have shipped — ten of eleven
+fixtures are reproducible today, with only the `cascade` shape (9) still open.
 
 Conversely, `internal/faults` structurally cannot produce anything Simian's
 existing engines are good at. Applying YAML cannot create latency, packet
@@ -159,9 +160,9 @@ So the two halves are complementary, and Simian should own both.
 
 ## 4. Deliverable A — the `kube-state` engine
 
-*Shipped for `synthesize` mode and eight kinds (#56, #57). `mutate` mode,
-`DependencyStall` and the node-level kinds are #57 / #58; the driver rejects
-`mode: mutate` with an explanatory error rather than ignoring the field.*
+*Shipped for `synthesize` mode and all nine kinds (#56, #57). `mutate` mode is
+#59 and the node-level kinds are #58; the driver rejects `mode: mutate` with an
+explanatory error rather than ignoring the field.*
 
 A fifth driver, `EngineKubeState Engine = "kube-state"`, that produces
 declarative-state faults. It slots in behind the existing `ChaosDriver`
@@ -195,14 +196,15 @@ reverts on TTL expiry the same way a Chaos Mesh CR is deleted.
 | `JobFailure` | create/patch a Job that exhausts `backoffLimit` | `BackoffLimitExceeded` | 5, 8 |
 | `SelectorDrift` | patch `Service.spec.selector` off the workload's labels | empty EndpointSlice | 6, 9 |
 | `UnboundClaim` | PVC referencing a nonexistent StorageClass, plus a consumer pod | `VolumeBindingFailed` / unbound | 10 |
-| `DependencyStall` | patch env/args so the app logs dependency errors while staying Ready and Available | log-only signal, all field checks clean | 11 |
+| `DependencyStall` | synthesize a workload that serves real HTTP and logs a failing upstream call while staying Ready and Available | log-only signal, all field checks clean | 11 |
 | `NoOp` | applies nothing; still leases and audits | healthy control | 7 |
 
 `NoOp` is not a curiosity. It is how the eval measures false positives, and it
 must flow through the identical code path so that nothing about the run
 distinguishes it from a real fault.
 
-`DependencyStall` is the hardest and the most valuable. Getting it right in
+`DependencyStall` is the hardest and the most valuable, and it shipped in
+`synthesize` mode with the `logs` probe type that gates it. Getting it right in
 `mutate` mode against a real SUT is the difference between a rig that grades
 `kubectl` transcription and one that grades diagnosis.
 
@@ -217,7 +219,8 @@ revert. The driver is assembly, not invention.
 > **Shipped.** `Mode: "Settle"`, the `k8s` probe type, the `Apply` gate and the
 > `fault.efficacy` audit event are implemented — see
 > [Efficacy probes]({{< relref "efficacy-probes.md" >}}) for the user-facing
-> reference. The `cmd`/`http`/`prometheus` probe types below remain future work.
+> reference. The `http` and `logs` types have since shipped too; `cmd` is
+> deliberately not implemented and `prometheus` remains future work.
 
 `FaultManifest.Probes []ProbeSpec` becomes the settle/efficacy mechanism.
 
@@ -744,7 +747,7 @@ within a group is independent of its siblings.
 | #55 | Probes on the existing engines' catalog entries — DPv2 `NetworkChaos` now fails loudly | M | #54 |
 | **Phase 2 — the `kube-state` engine** |
 | #56 | ✅ Driver skeleton + `synthesize` mode + 4 kinds: `ImageUnresolvable`, `ContainerExitLoop`, `MemoryLimitSqueeze`, `Unschedulable`, each with a default efficacy gate; verified on GKE | L | #54 |
-| #57 | Remaining parity kinds: ✅ `JobFailure`, `SelectorDrift`, `UnboundClaim`, `NoOp`, each gated and verified on GKE; `DependencyStall` still open, pending a `logs` probe type | L | #56 |
+| #57 ✅ | Remaining parity kinds: `JobFailure`, `SelectorDrift`, `UnboundClaim`, `NoOp`, and `DependencyStall` with the `logs` probe type it needed — each gated and verified on GKE | L | #56 |
 | #58 | Lookout-only kinds: `NodeUnready`, `PDBGridlock`, `CertExpiry`, `RolloutStuck` | M | #56 |
 | #59 | `mutate` mode + revert-on-lease-expiry | L | #56 |
 | **Phase 3 — scenarios** |

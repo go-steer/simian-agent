@@ -506,6 +506,7 @@ func TestCatalog(t *testing.T) {
 func TestKindsMatchCatalogConstants(t *testing.T) {
 	inCatalog := []string{
 		catalog.KubeStateContainerExitLoop,
+		catalog.KubeStateDependencyStall,
 		catalog.KubeStateImageUnresolvable,
 		catalog.KubeStateJobFailure,
 		catalog.KubeStateMemoryLimitSqueeze,

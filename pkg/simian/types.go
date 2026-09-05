@@ -128,6 +128,12 @@ const (
 	// condition Simian needs so far is expressible this way.
 	ProbeTypeK8s = "k8s"
 
+	// ProbeTypeLogs greps the target's own logs. It is the only probe type that
+	// can see a fault which leaves every field on every object correct — a
+	// workload whose dependency has stopped answering is Ready, Available and
+	// endpointed, and says so only in what it writes about itself.
+	ProbeTypeLogs = "logs"
+
 	ProbeTypeCmd        = "cmd"
 	ProbeTypeHTTP       = "http"
 	ProbeTypePrometheus = "prometheus"
@@ -139,7 +145,7 @@ const (
 // pkg/probe for the k8s shape.
 type ProbeSpec struct {
 	Name string         `json:"name"`
-	Type string         `json:"type"` // cmd | http | k8s | prometheus
+	Type string         `json:"type"` // cmd | http | k8s | logs | prometheus
 	Mode string         `json:"mode"` // Settle | SOT | EOT | Edge | Continuous | OnChaos
 	Spec map[string]any `json:"spec"`
 }

@@ -41,6 +41,8 @@ const (
 	ProbeWorkloadReady   = "simian-workload-ready"
 	ProbeNoEndpoints     = "simian-no-endpoints"
 	ProbeClaimPending    = "simian-claim-pending"
+	ProbeEndpointsReady  = "simian-endpoints-ready"
+	ProbeDependencyStall = "simian-dependency-stalled"
 )
 
 // Envoy runtime keys, mirrored from pkg/sut/envoy's bootstrap. Duplicated
@@ -114,6 +116,10 @@ var gates = map[gateKey]gate{
 	},
 	{simian.EngineKubeState, KubeStateUnboundClaim}: {
 		describe: "the synthesized claim must be Pending and the pod mounting it must report Unschedulable",
+		build:    kubeStateProbes,
+	},
+	{simian.EngineKubeState, KubeStateDependencyStall}: {
+		describe: "the synthesized workload's pods must be Ready and its Service endpoints ready, and its log must carry the upstream-failure line — healthy everywhere but in what the application says",
 		build:    kubeStateProbes,
 	},
 	{simian.EngineKubeState, KubeStateNoOp}: {
@@ -270,8 +276,14 @@ func delayPair(selector map[string]string, delay map[string]any) []simian.ProbeS
 type kubeStateGate struct {
 	probeName string
 
+	// probeType is the prober that runs this gate. Empty means k8s, which is
+	// what every gate that reads a field off an object uses. The exception is
+	// DependencyStall, whose defining property is that no field is wrong.
+	probeType string
+
 	// resource the probe reads. Empty means pods, which is what most of these
-	// kinds show their failure on.
+	// kinds show their failure on. Ignored by a logs gate, which reads pods
+	// either way.
 	resource string
 
 	// selectorKey is the label key the probe selects the workload name on.
@@ -281,8 +293,16 @@ type kubeStateGate struct {
 	// to and nothing else.
 	selectorKey string
 
+	// jsonPath is what a k8s gate renders. A logs gate has no use for it: a log
+	// is text, not an object.
 	jsonPath string
-	expect   string
+
+	expect string
+
+	// expectFrom computes the expected value from the manifest, for a gate
+	// whose evidence is something the manifest chose rather than something the
+	// control plane writes. Wins over expect when set.
+	expectFrom func(simian.FaultManifest) string
 
 	// expectEmpty asserts the jsonpath renders nothing, for a gate whose
 	// evidence is an absence. Mutually exclusive with expect, and never the
@@ -413,6 +433,45 @@ var kubeStateGates = map[string][]kubeStateGate{
 			timeout:   "120s",
 		},
 	},
+	KubeStateDependencyStall: {
+		{
+			// Not preamble. This kind's whole claim is that everything an agent
+			// normally checks is clean, and a gate that only read the log would
+			// pass just as happily against a workload that was crash-looping —
+			// which is a different fault, and one the subject would find without
+			// reading anything. The two healthy assertions are what make the
+			// third one mean "and *only* the log is wrong".
+			probeName: ProbeWorkloadReady,
+			jsonPath:  podReadyJSONPath,
+			expect:    "True",
+			timeout:   "120s",
+		},
+		{
+			probeName:   ProbeEndpointsReady,
+			resource:    "endpointslices",
+			selectorKey: "kubernetes.io/service-name",
+			// The endpoint's own ready condition, not merely that an address
+			// exists. A Service in front of a pod that is not serving still gets
+			// a slice; the condition is what says traffic would be sent there.
+			jsonPath: "{.items[*].endpoints[*].conditions.ready}",
+			expect:   "true",
+			timeout:  "60s",
+		},
+		{
+			probeName: ProbeDependencyStall,
+			probeType: simian.ProbeTypeLogs,
+			// The only evidence this fault leaves, and the reason the logs probe
+			// type exists. Computed from the manifest because the line is the
+			// manifest's to choose — see catalog.KubeStateStallMessage, which
+			// the driver resolves the same way before it writes the pod.
+			expectFrom: func(m simian.FaultManifest) string {
+				return KubeStateStallMessage(stringField(m.Spec, "message"))
+			},
+			// Short. The workload writes its first line as soon as httpd is up,
+			// and the two gates before this one have already waited for that.
+			timeout: "60s",
+		},
+	},
 	KubeStateNoOp: {{
 		// The control gets a gate like everything else, and it asserts the
 		// opposite of one: the workload came up and is serving. Without it a
@@ -465,29 +524,45 @@ func kubeStateProbes(m simian.FaultManifest) []simian.ProbeSpec {
 	}
 	out := make([]simian.ProbeSpec, 0, len(gs))
 	for _, g := range gs {
-		resource := g.resource
-		if resource == "" {
-			resource = "pods"
-		}
 		key := g.selectorKey
 		if key == "" {
 			key = "app"
 		}
+		want := g.expect
+		if g.expectFrom != nil {
+			want = g.expectFrom(m)
+		}
 		spec := map[string]any{
-			"resource":       resource,
 			"label_selector": key + "=" + name,
-			"jsonpath":       g.jsonPath,
 			"timeout":        g.timeout,
 			"interval":       "2s",
 		}
-		if g.expectEmpty {
-			spec["expect_empty"] = true
+		typ := g.probeType
+		if typ == "" {
+			typ = simian.ProbeTypeK8s
+		}
+		if typ == simian.ProbeTypeLogs {
+			// A log is text. There is no resource to name and no jsonpath to
+			// render, and no expect_empty either: "the log does not say X" is
+			// satisfied by a container that never started, which is the vacuous
+			// pass the gates exist to refuse. See pkg/probe's logs prober.
+			spec["expect_contains"] = want
 		} else {
-			spec["expect_contains"] = g.expect
+			resource := g.resource
+			if resource == "" {
+				resource = "pods"
+			}
+			spec["resource"] = resource
+			spec["jsonpath"] = g.jsonPath
+			if g.expectEmpty {
+				spec["expect_empty"] = true
+			} else {
+				spec["expect_contains"] = want
+			}
 		}
 		out = append(out, simian.ProbeSpec{
 			Name: g.probeName,
-			Type: simian.ProbeTypeK8s,
+			Type: typ,
 			Mode: simian.ProbeModeSettle,
 			Spec: spec,
 		})

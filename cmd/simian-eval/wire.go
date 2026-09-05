@@ -85,6 +85,7 @@ func buildPlane(cfg *rest.Config, o *options, auditor simian.Auditor, logger *sl
 	prober := probe.NewMux(map[string]probe.Prober{
 		simian.ProbeTypeK8s:  probe.NewK8sProber(dyn, restmapper.NewDeferredDiscoveryRESTMapper(cached)),
 		simian.ProbeTypeHTTP: probe.NewKubernetesHTTPProber(clientset),
+		simian.ProbeTypeLogs: probe.NewKubernetesLogsProber(clientset),
 	})
 	execOpts := []executor.Option{executor.WithProber(prober)}
 	if o.defaultProbes {

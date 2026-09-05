@@ -58,6 +58,22 @@ var failureFamilies = map[string][]string{
 	"job-failed":   {"BackoffLimitExceeded", "JobFailed"},
 	"no-endpoints": {"NoEndpoints", "SelectorMismatch", "NoMatchingPods", "EmptyEndpoints", "ServiceHasNoEndpoints"},
 
+	// The workload is fine and something it calls is not. Every token names
+	// that relationship, which is what makes the claim falsifiable: a subject
+	// saying "upstream timeout" about a crash-looping pod has got it wrong, and
+	// should be charged.
+	//
+	// "Timeout" and "DeadlineExceeded" are deliberately absent, and
+	// "ContextDeadlineExceeded" is deliberately present. The bare words are
+	// what a pod's own liveness probe failure says, what a slow image pull
+	// says, and what an API call from the subject's own tooling says; only the
+	// full spelling is a claim about a call this workload made.
+	"dependency": {
+		"UpstreamTimeout", "UpstreamUnavailable", "UpstreamError",
+		"DependencyFailure", "DependencyTimeout", "DependencyUnavailable",
+		"ConnectionRefused", "ContextDeadlineExceeded",
+	},
+
 	// "NotReady" is deliberately absent. Kubernetes writes Ready=False on
 	// pods, containers and nodes alike, so the bare token names a state and
 	// not a node. Both survivors name their own subject.

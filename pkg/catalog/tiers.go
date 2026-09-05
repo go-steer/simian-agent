@@ -82,6 +82,7 @@ var kubeStateNamespaceKinds = map[string]bool{
 	"JobFailure":         true,
 	"SelectorDrift":      true,
 	"UnboundClaim":       true,
+	"DependencyStall":    true,
 	// The control. It breaks nothing at all, which makes it the narrowest
 	// blast radius there is — but it is still listed rather than special-cased,
 	// because a kind absent from this table is TierExternal and would be

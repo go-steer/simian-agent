@@ -14,7 +14,7 @@ The first three perturb a *running dataplane* — traffic, processes, resources.
 | `chaos-mesh` | The full Chaos Mesh CRD catalog: PodChaos, StressChaos, IOChaos, TimeChaos, NetworkChaos, etc. | Default for everything. Whether NetworkChaos lands on GKE Dataplane V2 depends on the Cilium version — it does on current GKE, and its efficacy gate tells you either way. See [Known limitations]({{< relref "known-limitations.md" >}}). |
 | `network-policy` | Standard `networking.k8s.io/v1` NetworkPolicy partitions (deny ingress / egress / both). | Network partition chaos on any cluster where NetworkChaos isn't reliable. Partition only — no delay / loss / jitter. |
 | `envoy-fault` | HTTP-layer delay + abort via an injected Envoy sidecar. Two kinds: `EnvoyHttpDelay`, `EnvoyHttpAbort`. | HTTP/gRPC delay or error injection on DPv2. Requires the SUT to be deployed with `--no-envoy-faults=false` (off by default — see [Known limitations]({{< relref "known-limitations.md" >}}#envoy-injection-breaks-grpc-kubelet-probes)). |
-| `kube-state` | Declarative-state faults: synthesizes a bundle of objects that is born broken. Eight kinds: `ImageUnresolvable`, `ContainerExitLoop`, `MemoryLimitSqueeze`, `Unschedulable`, `JobFailure`, `SelectorDrift`, `UnboundClaim`, and `NoOp` (the control). | Wedged rollouts, bad image references, crash loops, OOM kills, unschedulable pods, failed batch jobs, endpointless Services and claims that never bind — states rather than events, and the ones an SRE agent triages most. Works on any cluster; needs no Chaos Mesh and no sidecar. |
+| `kube-state` | Declarative-state faults: synthesizes a bundle of objects that is born broken. Nine kinds: `ImageUnresolvable`, `ContainerExitLoop`, `MemoryLimitSqueeze`, `Unschedulable`, `JobFailure`, `SelectorDrift`, `UnboundClaim`, `DependencyStall`, and `NoOp` (the control). | Wedged rollouts, bad image references, crash loops, OOM kills, unschedulable pods, failed batch jobs, endpointless Services, claims that never bind and a workload whose only symptom is in its own log — states rather than events, and the ones an SRE agent triages most. Works on any cluster; needs no Chaos Mesh and no sidecar. |
 
 ## Directed-control patterns
 
@@ -64,6 +64,15 @@ simian chaos --engine kube-state \
 simian chaos --engine kube-state \
   --kind SelectorDrift --api-version apps/v1 \
   --namespace boutique-1 --duration 5m
+
+# kube-state: a workload that serves fine and cannot reach what it calls.
+# Nothing is wrong on any object — Deployment Available, pods Ready against a
+# real HTTP probe, Service endpointed. The only evidence is the log line, which
+# is what the `logs` probe gates on and what a subject has to have read.
+simian chaos --engine kube-state \
+  --kind DependencyStall --api-version apps/v1 \
+  --namespace boutique-1 --duration 5m \
+  --spec '{"message":"level=error msg=\"upstream request failed\" upstream=payments-api err=\"context deadline exceeded after 30s\""}'
 
 # kube-state: the control. Synthesizes a healthy workload, on purpose.
 simian chaos --engine kube-state \
