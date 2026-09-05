@@ -56,14 +56,15 @@ type options struct {
 	remediationPoll time.Duration
 	teardownTimeout time.Duration
 
-	eligibleNS     []string
-	chaosSA        string
-	chaosSANS      string
-	durationCap    time.Duration
-	defaultProbes  bool
-	reapInterval   time.Duration
-	keepArenas     bool
-	skipDurationOK bool
+	eligibleNS      []string
+	chaosSA         string
+	chaosSANS       string
+	durationCap     time.Duration
+	defaultProbes   bool
+	reapInterval    time.Duration
+	keepArenas      bool
+	terminatingWait time.Duration
+	skipDurationOK  bool
 
 	format      string
 	minEfficacy float64
@@ -81,6 +82,7 @@ func defaultOptions() *options {
 		chaosSANS:       "simian-system",
 		defaultProbes:   true,
 		reapInterval:    30 * time.Second,
+		terminatingWait: harness.DefaultTerminatingWait,
 		format:          "text",
 		minEfficacy:     eval.DefaultMinEfficacy,
 		score:           true,
@@ -113,6 +115,7 @@ func bindFlags(cmd *cobra.Command, o *options) {
 	f.DurationVar(&o.durationCap, "duration-ceiling", 0, "Override the executor's fault duration ceiling (default 15m)")
 	f.BoolVar(&o.defaultProbes, "default-efficacy-probes", o.defaultProbes, "Attach Simian's built-in efficacy probes to fault kinds that have one. Turning this off means a fault the cluster accepts but silently drops is scored as having landed.")
 	f.DurationVar(&o.reapInterval, "reap-interval", o.reapInterval, "Lease reaper sweep interval. The reaper is the backstop that takes chaos out of a cluster this process failed to clean up.")
+	f.DurationVar(&o.terminatingWait, "terminating-wait", o.terminatingWait, "How long to wait for a namespace left over from an earlier run to finish deleting before giving up on it. Namespace deletion is asynchronous, and running the same pack twice in a row would otherwise fail on the first run's teardown.")
 	f.BoolVar(&o.keepArenas, "keep-arenas", false, "Leave arena namespaces standing after the run, for poking at a scenario that went wrong. Faults are still cleared.")
 	f.BoolVar(&o.skipDurationOK, "allow-short-faults", false, "Permit faults whose duration is shorter than --subject-timeout. Off by default: a lease that expires mid-investigation is cleared by the reaper and looks exactly like the subject having remediated it.")
 
@@ -133,6 +136,11 @@ func (o *options) validate() error {
 		return fmt.Errorf("--cluster %q: want %s or %s", o.cluster, ClusterCurrent, ClusterKind)
 	case o.concurrency < 0:
 		return fmt.Errorf("--concurrency %d: must not be negative", o.concurrency)
+	case o.terminatingWait <= 0:
+		// Not silently defaulted: a zero here would read as "do not wait",
+		// and the field it feeds treats zero as "wait the default", so the
+		// invocation would do the opposite of what it says.
+		return fmt.Errorf("--terminating-wait %s: must be positive; pass something short to effectively not wait", o.terminatingWait)
 	}
 	return nil
 }

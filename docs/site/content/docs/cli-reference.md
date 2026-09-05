@@ -160,6 +160,7 @@ The scorecard printed at the end comes from reading those two files back, so
 | `--subject-dir`, `--subject-env` | — | Working directory and extra `KEY=VALUE` environment for an `exec:` subject. |
 | `--remediation-poll` | 5s | How often to ask whether the fault is gone while the subject works, for time-to-remediate. `0` disables the watch. |
 | `--eligible-namespace` | (annotation) | Fence the run to a fixed namespace list instead of reading `simian.chaos/eligible`. Reach for this when the cluster has other tenants. |
+| `--terminating-wait` | 2m | How long to wait for a namespace left over from an earlier run to finish deleting. Namespace deletion is asynchronous, so without this, running the same pack twice in a row fails on the first run's teardown. Expiry is an `InjectError`, not a hang — a namespace held by a finalizer is not coming back. |
 | `--keep-arenas` | false | Leave arena namespaces standing afterwards, for poking at a scenario that went wrong. Faults are still cleared. |
 | `--allow-short-faults` | false | Permit faults shorter than `--subject-timeout`. Off by default: the lease expires mid-investigation, the reaper clears it, and that disappearance is recorded as the subject having remediated it. |
 | `--score` | true | Off writes the artifacts and stops. |

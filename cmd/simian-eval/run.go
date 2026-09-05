@@ -111,15 +111,9 @@ func runEval(ctx context.Context, o *options, out, progress io.Writer) error {
 	go p.reaper.Run(reaperCtx)
 
 	runner := &harness.Runner{
-		Pack:    pack,
-		Subject: subj,
-		Arena: &harness.KubeArena{
-			Manager:     p.arenas,
-			K8s:         p.k8s,
-			Logger:      logger,
-			Annotations: arenaAnnotations(runID),
-			KeepArenas:  o.keepArenas,
-		},
+		Pack:            pack,
+		Subject:         subj,
+		Arena:           newArena(o, p, runID, logger),
 		Injector:        p.executor,
 		Auditor:         auditor,
 		Only:            o.only,
@@ -219,6 +213,21 @@ func scoreArtifacts(o *options, pack scenario.Pack, auditPath, runPath string, o
 			summary.EfficacyRate, o.minEfficacy, summary.InjectFailures, summary.Scenarios)
 	}
 	return nil
+}
+
+// newArena builds the arena the run provisions its namespaces through. A
+// function rather than a literal inline in run() so a test can read back what
+// the flags bound to without standing up a cluster.
+func newArena(o *options, p *plane, runID string, logger *slog.Logger) *harness.KubeArena {
+	return &harness.KubeArena{
+		Manager:     p.arenas,
+		K8s:         p.k8s,
+		Logger:      logger,
+		Annotations: arenaAnnotations(runID),
+
+		KeepArenas:      o.keepArenas,
+		TerminatingWait: o.terminatingWait,
+	}
 }
 
 // newRunID is a sortable, filesystem-safe, human-readable stamp. It names the
