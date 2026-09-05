@@ -442,6 +442,43 @@ no subject execution. `simian-eval` orchestrates and calls the same
 `kube-agent-demo-e2e`, where the clusters are long-lived and nobody is going
 to run a kind harness.
 
+```
+simian evaluate --pack packs/parity --audit run.log --report agent.json
+```
+
+**Two artifacts, split along the line of who observed what.** The audit log is
+Simian's record of breaking things: which faults applied, whether their
+efficacy gates passed, and when. None of it can be taken from the subject —
+the whole point of the gate is that the harness does not take the subject's
+word for the cluster's state. The report is the subject's side: what it found,
+when the report came back, and on a write-enabled run, when the fault was
+observed gone. They join on the `ScenarioID` that `pkg/audit` stamps onto every
+event, which is the reason the reconstruction is possible at all.
+
+**Absence of evidence is not manifestation.** A scenario counts as manifested
+only when *every* one of its faults has a passing efficacy record and no
+failing one. An applied fault with no efficacy record at all is not a fault
+that landed — it is a fault nobody checked, and every score built on it would
+be a confident number about a cluster whose state is unknown. Those scenarios
+render as `NOT SCORED — <why>` rather than as a row of zeros, and are excluded
+from every mean. The strictness extends to partial cascades: half an incident
+is not the incident the expectations describe, so grading against it would
+score the subject on ground truth that was never true.
+
+A healthy control leaves exactly the same trace as a scenario nobody injected,
+and only the pack can tell them apart — which is why the join takes the pack.
+A control that reached the subject at all has done its job, and its measures
+must be scored: measuring invention is the only reason controls are in the
+pack.
+
+**The harness reports before the subject does.** The scorecard puts the
+efficacy rate above any measure, and below `--min-efficacy` (0.8 by default)
+it prints the numbers, says they are *unmeasured rather than poor*, and exits
+non-zero. Reported first and refused second, because the rows that failed to
+inject are the ones that explain the refusal. A rig with a known-flaky gate can
+lower the bar, but has to say so on the command line rather than getting the
+numbers by default.
+
 ### 6.7 End-to-end with k8s-lookout — the rig's own control
 
 k8s-lookout should be **subject number one**, before any agent. Not as a
@@ -667,7 +704,7 @@ within a group is independent of its siblings.
 | #63 | `cmd/simian-eval` + `exec:` adapter + cluster lifecycle | M | #53, #62 |
 | #64 | **Lookout subject + the scored e2e in CI** — §6.7 | M | #61, #63 |
 | #65 | `core-sre-agent` subject; reproduce its existing baseline through this rig | M | #64 |
-| #66 | `simian evaluate` offline scorer over audit + report artifacts | S | #62 |
+| #66 ✅ | `simian evaluate`: audit + report artifacts joined on `ScenarioID`, `NOT SCORED` rows, `--min-efficacy` refusal | S | #62 |
 | **Phase 5 — the product** |
 | #67 | Dataplane pack (5 scenarios), starting with the `stress-real` / `latency-not-saturation` matched pair | L | #55, #61 |
 | #68 | Graph query tools on `CompletionRequest.Tools`; make the loop tool-using | L | — |
