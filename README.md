@@ -139,6 +139,41 @@ simian evaluate --pack packs/parity --audit run.log --report agent.json
 - **Pure** — no cluster, no clock, no network. The same artifacts produce the same scorecard on any machine, hours later.
 - **A vacuous pass is refused.** A scenario whose fault has no *passing* efficacy record prints as `NOT SCORED — <why>` rather than as a miss: the cluster was never broken, so a zero would mean "nothing to find" while reading as "the agent missed it". Below `--min-efficacy` (default `0.8`) the scorecard prints and the command then exits non-zero, because those numbers measure the harness and not the subject.
 
+### Running a whole pack against a subject — `simian-eval`
+
+`simian evaluate` scores artifacts that already exist. `simian-eval` is the
+second binary that produces them: it drives a scenario pack against a subject
+end to end. It is deliberately separate from `simian` — cluster provisioning,
+subject processes and scoring have no business linking into the operator
+binary that runs in-cluster with chaos RBAC.
+
+```bash
+simian-eval --pack packs/parity --subject exec:./bin/lookout --out runs/
+simian-eval --pack packs/parity --subject noop: --concurrency 4       # the zero-score floor
+```
+
+Per scenario: provision an arena namespace, inject the faults **through the
+normal executor path** — same validation, same safety stages, same leases, same
+efficacy gates as a live run — hand the subject the prompt, collect its report,
+then clear the chaos and put the namespace back.
+
+- **Two files land in `--out`**, and they are the same two `simian evaluate`
+  reads: `audit.log` is Simian's side, `run.json` is the subject's. The
+  scorecard printed at the end comes from reading them back, so the run
+  reproduces offline, exactly, with or without the cluster.
+- **A harness failure is not a subject miss.** If an arena won't come up or an
+  efficacy gate doesn't pass, the scenario records an `InjectError` and is
+  `NOT SCORED`. A subject that crashes or times out, by contrast, scores a hard
+  zero — a subject must not improve its mean by failing.
+- **It destroys only what it created.** Namespaces the run creates are
+  annotated with `simian.chaos/eval-run=<run id>` and torn down at the end,
+  including on Ctrl-C. A namespace that already existed is annotated and left
+  standing.
+- **`--cluster kind`** stands up a throwaway cluster for the run and deletes it
+  afterwards; the default `current` uses your kubeconfig and leaves it alone.
+
+Full flag table in the [CLI reference](https://go-steer.github.io/simian-agent/docs/cli-reference/).
+
 ## Quick start
 
 ```bash
@@ -188,7 +223,8 @@ For more granular control, `simian arena create/destroy/describe` and
 ## Project layout
 
 ```
-cmd/simian/        single binary, cobra subcommands (serve, chaos, arena, sut, plan, evaluate)
+cmd/simian/        operator binary, cobra subcommands (serve, chaos, arena, sut, plan, evaluate)
+cmd/simian-eval/   evaluation harness binary — runs a pack against a subject and scores it
 pkg/simian/        core types and interfaces (FaultManifest, AttackPlan, ChaosDriver, LLMProvider, …)
 pkg/arena/         arena CRUD (Manager) + annotation-driven eligibility checker (M2 Part A)
 pkg/sut/           SUT lifecycle (Manager: apply manifests, wait for Ready, capture Baseline) (M2 Part B)
@@ -207,6 +243,9 @@ pkg/mcp/           MCP server with directed-mode + autonomous-mode tools
 pkg/lease/         in-memory ActiveFault registry + duration-based reaper (Reaper.OnExpire feeds M3 history)
 pkg/audit/         structured event logger
 pkg/catalog/       blast-radius tier classification (static map + per-spec re-classification)
+pkg/eval/          offline scoring — scenario packs, measures, scorecard (no cluster, no clock)
+pkg/harness/       the runner behind simian-eval: arena lifecycle, injection, artifacts
+  subject/         subject adapters (exec:, noop:)
 internal/testutil/ fake driver + fake auditor for tests
 deploy/
   manifests/       raw YAML for kubectl apply

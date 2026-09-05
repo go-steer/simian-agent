@@ -55,6 +55,15 @@ const (
 	EventPageFailed     = "page.failed"
 	EventAgentResponse  = "agent.response_received"
 
+	// M5 eval-harness events. eval.scenario_started is what makes the offline
+	// join total: a scenario whose arena never came up emits no fault event at
+	// all, and without a line naming it the audit log would simply have no
+	// record of a scenario the harness definitely attempted. Scoring reads that
+	// as a harness failure and skips the scenario, which is the honest answer;
+	// having no line at all reads as a corrupt pair of artifacts.
+	EventEvalScenarioStarted   = "eval.scenario_started"
+	EventEvalScenarioCompleted = "eval.scenario_completed"
+
 	// M3 autonomous-mode cycle events.
 	EventCycleStarted     = "cycle.started"
 	EventCycleSkipped     = "cycle.skipped"

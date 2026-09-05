@@ -5,7 +5,7 @@ weight: 80
 description: "Every flag on every simian subcommand."
 ---
 
-`simian` is a single binary with cobra subcommands. This page is generated from `simian <cmd> --help` output.
+`simian` is a single binary with cobra subcommands. This page is generated from `simian <cmd> --help` output. There is a second binary, `simian-eval`, covered at the end: it drives a scenario pack against a subject and is deliberately not part of the operator binary.
 
 To get the most up-to-date reference for any single command, run it with `--help`:
 
@@ -127,3 +127,45 @@ simian sut destroy --namespace boutique-1 --with-arena   # both layers
 ```
 
 `destroy --with-arena` refuses if simian-managed faults are still leased; pass `--force` to override (after clearing them with `simian chaos --clear`).
+
+## `simian-eval` — running a pack against a subject
+
+A second binary. Cluster lifecycle, subject processes and scoring have no
+business linking into the operator binary that runs in-cluster with chaos RBAC.
+
+```bash
+simian-eval --pack packs/parity --subject exec:./bin/lookout --out runs/
+simian-eval --pack packs/parity,packs/lookout --subject exec:./bin/agent --concurrency 4
+simian-eval --pack packs/parity --subject noop: --cluster kind --out runs/floor
+simian-eval --pack packs/parity --subject exec:./bin/agent --only parity-0003
+```
+
+Per scenario: provision an arena namespace, inject the faults **through the
+normal executor path** — same validation, same safety stages, same leases, same
+efficacy gates — hand the subject the prompt, collect its report, then clear the
+chaos and put the namespace back. Two files land in `--out`: `audit.log` is
+Simian's side, `run.json` is the subject's, and they join on the scenario ID.
+The scorecard printed at the end comes from reading those two files back, so
+`simian evaluate` reproduces it exactly, with or without the cluster.
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--pack` | (required) | Pack directory. Repeatable or comma-separated; several packs run as one suite. Two packs sharing a scenario ID is a load error, not a merge. |
+| `--subject` | (required) | `exec:<command line>`, or `noop:` for the zero-score floor. |
+| `--only` | (all) | Scenario IDs to run. An ID that is not in the pack is an error, not an empty run. |
+| `--out` | `runs/<timestamp>` | Where `audit.log` and `run.json` go. |
+| `--cluster` | `current` | `current` uses the kubeconfig's cluster and leaves it standing; `kind` provisions a throwaway cluster for the run and deletes it afterwards, including on Ctrl-C. |
+| `--concurrency` | 1 | Ceiling, not a target: scenarios sharing a namespace are serialised regardless, and a control takes the cluster to itself. |
+| `--subject-timeout` | 10m | How long one investigation may take before the subject is killed and scored as a failure. |
+| `--subject-dir`, `--subject-env` | — | Working directory and extra `KEY=VALUE` environment for an `exec:` subject. |
+| `--remediation-poll` | 5s | How often to ask whether the fault is gone while the subject works, for time-to-remediate. `0` disables the watch. |
+| `--eligible-namespace` | (annotation) | Fence the run to a fixed namespace list instead of reading `simian.chaos/eligible`. Reach for this when the cluster has other tenants. |
+| `--keep-arenas` | false | Leave arena namespaces standing afterwards, for poking at a scenario that went wrong. Faults are still cleared. |
+| `--allow-short-faults` | false | Permit faults shorter than `--subject-timeout`. Off by default: the lease expires mid-investigation, the reaper clears it, and that disappearance is recorded as the subject having remediated it. |
+| `--score` | true | Off writes the artifacts and stops. |
+| `--format`, `--min-efficacy` | `text`, `0.8` | As `simian evaluate`. |
+
+Namespaces the run creates are annotated with `simian.chaos/eval-run=<run id>`
+and destroyed at the end. A namespace that already existed is annotated and
+**left standing** — a rig that deletes namespaces it merely found is one bad
+scenario file away from deleting something that mattered.
