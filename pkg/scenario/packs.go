@@ -50,10 +50,19 @@ const (
 	// watcher rather than a triager, so the scenarios lean on faults that are
 	// invisible at pod altitude.
 	PackLookout = "lookout"
+
+	// PackDataplane is the pack whose faults are invisible to the API server.
+	// Every other pack's scenarios can be solved by reading object status well
+	// enough; these can only be solved by measuring traffic, which is a
+	// different capability and worth its own number.
+	//
+	// It is also the only pack that needs a Substrate: a fault cannot slow
+	// down a caller that does not exist, so the scenarios stand one up.
+	PackDataplane = "dataplane"
 )
 
 // BuiltinPacks lists every pack embedded in the binary, in a stable order.
-var BuiltinPacks = []string{PackParity, PackLookout}
+var BuiltinPacks = []string{PackParity, PackLookout, PackDataplane}
 
 // Builtin returns an embedded pack by name.
 //

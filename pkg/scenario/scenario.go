@@ -239,6 +239,12 @@ const (
 	// SourcePackLookout is the hand-written pack aimed at the observer.
 	SourcePackLookout Source = "pack:lookout"
 
+	// SourcePackDataplane is the hand-written pack whose faults leave no field
+	// on any Kubernetes object. Scores from it are not comparable with the
+	// other two, and deliberately so: every scenario in it can be failed by a
+	// subject that reads object status perfectly.
+	SourcePackDataplane Source = "pack:dataplane"
+
 	// SourceGeneratedTopology is synthesized from a discovered cluster
 	// topology rather than written down.
 	SourceGeneratedTopology Source = "generated:topology"
@@ -247,7 +253,7 @@ const (
 // Valid reports whether s is a source this package understands.
 func (s Source) Valid() bool {
 	switch s {
-	case SourcePackParity, SourcePackLookout, SourceGeneratedTopology:
+	case SourcePackParity, SourcePackLookout, SourcePackDataplane, SourceGeneratedTopology:
 		return true
 	}
 	return false

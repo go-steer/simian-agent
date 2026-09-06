@@ -19,10 +19,13 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-steer/simian-agent/pkg/catalog"
 	"github.com/go-steer/simian-agent/pkg/simian"
+	"github.com/go-steer/simian-agent/pkg/sut"
+	"github.com/go-steer/simian-agent/pkg/sut/edgeupstream"
 )
 
 // The packs are validated on load, so this is the test that the shipped packs
@@ -191,8 +194,9 @@ func TestScenarioIDsAreUniqueAcrossPacks(t *testing.T) {
 // the wrong yardstick.
 func TestEveryScenarioDeclaresItsOwnPacksSource(t *testing.T) {
 	want := map[string]Source{
-		PackParity:  SourcePackParity,
-		PackLookout: SourcePackLookout,
+		PackParity:    SourcePackParity,
+		PackLookout:   SourcePackLookout,
+		PackDataplane: SourcePackDataplane,
 	}
 	for _, name := range BuiltinPacks {
 		for _, s := range MustBuiltin(name).Scenarios {
@@ -240,12 +244,21 @@ func TestEveryScenarioTargetsExactlyOneNamespace(t *testing.T) {
 	}
 }
 
-// Every shipped fault is namespace-tier and gets a default efficacy gate.
+// Every shipped fault is namespace-tier and carries a Settle gate.
 //
 // Validate already refuses an ungated fault, so the gate half is belt and
 // braces. The tier half is not: a node-tier fault in a shipped pack would break
 // workloads nobody consented to break, on a cluster somebody ran `simian score`
 // against expecting a namespace to be the blast radius.
+//
+// The gate may be the default one or written into the manifest. It used to have
+// to be the default one, which was true for as long as every pack was
+// kube-state: a synthesized fault kind has one way of proving itself and the
+// catalog knows it. A dataplane fault does not. StressChaos has no default gate
+// at all — there is no field on any object that says a cgroup is full — and a
+// NetworkChaos whose gate is written out on purpose suppresses the default by
+// reusing its probe names. What the shipped packs owe is a gate, not a
+// particular provenance for one.
 func TestEveryShippedFaultIsNamespaceTierAndGated(t *testing.T) {
 	for _, name := range BuiltinPacks {
 		for _, s := range MustBuiltin(name).Scenarios {
@@ -254,8 +267,8 @@ func TestEveryShippedFaultIsNamespaceTierAndGated(t *testing.T) {
 					t.Errorf("pack %q scenario %q fault %d: tier = %q, want %q",
 						name, s.ID, i, f.BlastRadiusTier, simian.TierNamespace)
 				}
-				if len(catalog.DefaultProbes(f)) == 0 {
-					t.Errorf("pack %q scenario %q fault %d (%s): no default efficacy gate",
+				if !hasMode(gateFor(f), simian.ProbeModeSettle) {
+					t.Errorf("pack %q scenario %q fault %d (%s): no Settle gate, default or declared",
 						name, s.ID, i, f.ResourceKind)
 				}
 			}
@@ -263,13 +276,67 @@ func TestEveryShippedFaultIsNamespaceTierAndGated(t *testing.T) {
 	}
 }
 
-// Every expected finding must name an object the scenario actually creates.
+// A fault aimed at a substrate must prove the substrate was healthy first.
 //
-// The engine appends a UID-derived suffix to the workload name, and
+// A kube-state fault brings its own subject matter, so there is no "before" to
+// measure: the workload did not exist a moment ago and the Settle gate is the
+// whole proof. A dataplane fault is aimed at something that was already there,
+// and "the callee is slow" is not evidence of anything without "the callee was
+// fast". Without the SOT half a substrate that came up degraded would satisfy
+// the Settle gate on its own and the subject would be graded on a fault that
+// contributed nothing.
+//
+// The control is exempt by the same rule, and it is not a special case: its
+// NoOp injects nothing, so it has no before and after to separate.
+func TestEveryFaultAimedAtASubstrateProvesItWasHealthyFirst(t *testing.T) {
+	for _, name := range BuiltinPacks {
+		for _, s := range MustBuiltin(name).Scenarios {
+			if s.Substrate == "" {
+				continue
+			}
+			for i, f := range s.Faults {
+				if f.Engine == simian.EngineKubeState {
+					continue
+				}
+				if !hasMode(gateFor(f), simian.ProbeModeSOT) {
+					t.Errorf("pack %q scenario %q fault %d (%s): aimed at substrate %q with no SOT probe; its Settle gate proves nothing",
+						name, s.ID, i, f.ResourceKind, s.Substrate)
+				}
+			}
+		}
+	}
+}
+
+// gateFor is every probe a fault actually runs: the ones written into the
+// manifest, plus whatever the catalog attaches that the manifest did not
+// already declare by name.
+func gateFor(f simian.FaultManifest) []simian.ProbeSpec {
+	return append(append([]simian.ProbeSpec{}, f.Probes...), catalog.DefaultProbes(f)...)
+}
+
+func hasMode(probes []simian.ProbeSpec, mode string) bool {
+	for _, p := range probes {
+		if p.Mode == mode {
+			return true
+		}
+	}
+	return false
+}
+
+// Every expected finding must name an object the scenario actually puts in the
+// namespace.
+//
+// The engine appends a UID-derived suffix to a synthesized workload's name, and
 // MatchesName is a prefix match, so an expectation's Name has to be the
 // *requested* name — spelled the way spec.name spells it. A typo produces an
 // expectation nothing can ever satisfy, which scores every subject zero on that
 // scenario and looks exactly like a subject that missed the fault.
+//
+// A scenario with a Substrate has a second source of objects, and the same
+// hazard: an expectation naming a tier the substrate does not have is
+// unsatisfiable in exactly the same silent way. The names come from the SUT
+// itself rather than a list here, so a substrate that renames a tier breaks
+// this test instead of every score.
 func TestEveryExpectationNamesAnObjectTheScenarioCreates(t *testing.T) {
 	for _, name := range BuiltinPacks {
 		for _, s := range MustBuiltin(name).Scenarios {
@@ -279,9 +346,12 @@ func TestEveryExpectationNamesAnObjectTheScenarioCreates(t *testing.T) {
 					created[n] = true
 				}
 			}
+			for _, w := range substrateWorkloads(t, s.Substrate) {
+				created[w] = true
+			}
 			for _, e := range s.Expect {
 				if !created[e.Name] {
-					t.Errorf("pack %q scenario %q: expects %s/%s, but the faults create %v",
+					t.Errorf("pack %q scenario %q: expects %s/%s, but the scenario creates %v",
 						name, s.ID, e.Kind, e.Name, keysOf(created))
 				}
 			}
@@ -289,21 +359,73 @@ func TestEveryExpectationNamesAnObjectTheScenarioCreates(t *testing.T) {
 	}
 }
 
-// Every fault names its workload explicitly rather than taking the per-kind
-// default. The default is a fine thing for an ad-hoc `simian chaos` call and a
-// bad thing here: an expectation is matched by name, so a kind whose default
-// name changed would silently stop matching and every subject would score zero.
+// registerSubstrates is once because MustRegister panics on a duplicate, which
+// is the right behaviour for a binary and the wrong one for a test binary that
+// may reach it from more than one test.
+var registerSubstrates = sync.OnceFunc(edgeupstream.Register)
+
+func substrateWorkloads(t *testing.T, name string) []string {
+	t.Helper()
+	if name == "" {
+		return nil
+	}
+	registerSubstrates()
+	spec, ok := sut.Default.Get(name)
+	if !ok {
+		t.Fatalf("substrate %q is named by a shipped scenario but is not registered", name)
+	}
+	var out []string
+	for _, w := range spec.ExpectedWorkloads() {
+		out = append(out, w.Name)
+	}
+	return out
+}
+
+// Every fault names the workload it is aimed at explicitly rather than taking
+// the per-kind default. The default is a fine thing for an ad-hoc `simian
+// chaos` call and a bad thing here: an expectation is matched by name, so a
+// kind whose default name changed would silently stop matching and every
+// subject would score zero.
+//
+// Where the name lives depends on what the fault does. A kube-state fault
+// creates its workload and names it in spec.name; a chaos-mesh fault is aimed
+// at one that already exists and names it in the selector. Both are a name, and
+// a fault with neither is aimed at whatever happens to be in the namespace.
 func TestEveryShippedFaultNamesItsWorkload(t *testing.T) {
 	for _, name := range BuiltinPacks {
 		for _, s := range MustBuiltin(name).Scenarios {
 			for i, f := range s.Faults {
-				if n, ok := f.Spec["name"].(string); !ok || strings.TrimSpace(n) == "" {
-					t.Errorf("pack %q scenario %q fault %d (%s): spec.name is not set",
+				if strings.TrimSpace(targetWorkloadOf(f)) == "" {
+					t.Errorf("pack %q scenario %q fault %d (%s): names no workload, in spec.name or in a selector",
 						name, s.ID, i, f.ResourceKind)
 				}
 			}
 		}
 	}
+}
+
+// targetWorkloadOf returns the workload a fault names, from wherever its engine
+// keeps it.
+func targetWorkloadOf(f simian.FaultManifest) string {
+	if n, ok := f.Spec["name"].(string); ok {
+		return n
+	}
+	sel, _ := f.Spec["selector"].(map[string]any)
+	labels, _ := sel["labelSelectors"].(map[string]any)
+	if n, ok := labels["app"].(string); ok {
+		return n
+	}
+	// The fault declares no selector of its own, so it is aimed at whatever its
+	// target says. That is still a name, as long as there is one.
+	for _, t := range f.Targets {
+		if t.Name != "" {
+			return t.Name
+		}
+		if n, ok := t.Labels["app"]; ok {
+			return n
+		}
+	}
+	return ""
 }
 
 func namespacesOf(s Scenario) []string {

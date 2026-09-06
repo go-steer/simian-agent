@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -69,7 +70,10 @@ Examples:
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.packRef, "pack", "", "built-in pack name (parity, lookout) or a directory of scenario files, holding the ground truth (required)")
+	// The built-in names are spliced in rather than spelled out, so a new pack
+	// cannot ship with help text that does not mention it.
+	cmd.Flags().StringVar(&opts.packRef, "pack", "", "built-in pack name ("+
+		strings.Join(scenario.BuiltinPacks, ", ")+") or a directory of scenario files, holding the ground truth (required)")
 	cmd.Flags().StringVar(&opts.auditPath, "audit", "", "JSON audit log from the run, or - for stdin (required)")
 	cmd.Flags().StringVar(&opts.reportPath, "report", "", "subject report artifact (required)")
 	cmd.Flags().StringVar(&opts.format, "format", opts.format, "text|json")

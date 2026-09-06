@@ -141,6 +141,50 @@ var failureFamilies = map[string][]string{
 		"CertificateExpired", "CertificateExpiring", "CertExpired",
 		"CertExpiring", "ExpiredCertificate", "TLSCertificateExpiry",
 	},
+
+	// The path between two workloads is slow or lossy, and the workloads
+	// themselves are fine. Kubernetes writes none of these either — a netem
+	// delay leaves no field on any object — so like cert-expiry the family
+	// exists to make the subject's own vocabulary gradeable.
+	//
+	// Every token names the *network* as the thing that is wrong, which is the
+	// whole reason the family is worth having. It is one half of a pair with
+	// cpu-saturation, and the pair is only a measurement if a token can belong
+	// to exactly one of them: "the callee is slow because the path to it is
+	// slow" and "the callee is slow because it is out of CPU" produce the same
+	// symptom and take opposite remediations.
+	//
+	// "Latency", "HighLatency", "Slow" and "SlowResponse" are deliberately
+	// absent, and this is the exclusion the family turns on. A workload can be
+	// slow because of the network, because of CPU, because of a lock, or
+	// because of a garbage collector; the bare words name the measurement and
+	// not its cause, so a subject that writes one has said something true about
+	// both scenarios and made a claim about neither. Crediting them would
+	// collapse the pair. See genericReasons, which holds them so that nobody
+	// can quietly move them in here.
+	"network-degradation": {
+		"NetworkLatency", "NetworkDelay", "NetworkDegradation",
+		"PacketDelay", "PacketLoss", "NetworkCongestion",
+	},
+
+	// The workload is out of CPU: it is up, it is serving, and it cannot serve
+	// any faster because its cgroup has no quota left.
+	//
+	// The other half of the pair described above. Every token names CPU as the
+	// constraint, which is what a subject has to have measured rather than
+	// inferred from slowness — the whole point of the matched pair is that the
+	// symptom does not distinguish them and the utilisation does.
+	//
+	// "ResourceExhaustion" and "Saturation" are absent for the usual reason:
+	// a workload can exhaust memory, file descriptors, connections or disk,
+	// and the bare words name none of them. "InsufficientCPU" is absent too,
+	// and belongs to resource-pressure: the scheduler writes it about a pod it
+	// could not place, which is a claim about a node with no room rather than
+	// about a running container with no quota.
+	"cpu-saturation": {
+		"CPUSaturation", "CPUThrottling", "CPUThrottled", "CPUExhaustion",
+		"CPUStarvation", "CPUPressure", "HighCPU", "CPULimitExceeded",
+	},
 }
 
 // genericReasons name *that* something failed without naming *how*.
@@ -162,6 +206,13 @@ var failureFamilies = map[string][]string{
 // alike, so they say scheduling failed and not why. A subject that reports a
 // pod blocked behind a PVC using the literal token the cluster itself wrote
 // must not be charged with inventing a resource shortage.
+//
+// The latency words are here for the same reason and are load-bearing for the
+// dataplane pack. "The callee is slow" is true in both halves of its matched
+// pair and is a claim about neither cause, so it must be creditable as an
+// observation and not chargeable as an invention. Listing them explicitly is
+// what stops someone adding "HighLatency" to network-degradation later and
+// silently turning a symptom into a diagnosis.
 var genericReasons = map[string]bool{
 	"pending":          true,
 	"failed":           true,
@@ -169,6 +220,10 @@ var genericReasons = map[string]bool{
 	"unhealthy":        true,
 	"failedscheduling": true,
 	"unschedulable":    true,
+	"latency":          true,
+	"highlatency":      true,
+	"slow":             true,
+	"slowresponse":     true,
 }
 
 // normReason folds a reason the way scenario.ExpectedFinding.MatchesReason
