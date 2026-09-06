@@ -106,6 +106,41 @@ var faultKindReports = map[string]kindVocabulary{
 			"ConnectionRefused", "ContextDeadlineExceeded",
 		},
 	},
+	kubestate.KindPDBGridlock: {
+		families: []string{"disruption-budget"},
+		// Like SelectorDrift, no pod-level token: every pod is Running and
+		// Ready and the Deployment is Available. Unlike SelectorDrift, there is
+		// no object in a failed state at all — the budget is doing exactly what
+		// it says. A report has to name the budget as the obstruction, which is
+		// what every token here does.
+		reasons: []string{
+			"PDBGridlock", "PDBBlocked", "DisruptionsNotAllowed",
+			"DisruptionBudgetBlocked", "DrainBlocked",
+		},
+	},
+	kubestate.KindRolloutStuck: {
+		families: []string{"rollout", "crash-loop"},
+		// Two families, and both are correct readings. The surge pod really is
+		// in CrashLoopBackOff, so a subject that reports one has not invented
+		// anything — but a subject that reports *only* that has found the
+		// symptom and missed that a deploy never landed.
+		reasons: []string{
+			"ProgressDeadlineExceeded", "RolloutStuck", "FailedRollout",
+			"CrashLoopBackOff", "Error", "Failed",
+		},
+	},
+	kubestate.KindCertExpiry: {
+		families: []string{"cert-expiry"},
+		// Nothing the control plane wrote, for the same reason as
+		// DependencyStall: it wrote nothing. Kubernetes has no opinion about
+		// the contents of a Secret, so every token here is one the subject can
+		// only produce by having decoded the certificate and looked at the
+		// date.
+		reasons: []string{
+			"CertificateExpired", "CertificateExpiring", "CertExpired",
+			"ExpiredCertificate", "TLSCertificateExpiry",
+		},
+	},
 	// The control, and the only entry that is empty on purpose. There is
 	// nothing wrong in the namespace, so there is no token a correct report
 	// contains — a report about NoOp is the empty one, which is what
@@ -204,7 +239,8 @@ func TestFamilyOfMatchesTheExactToken(t *testing.T) {
 		{"ImagePullError", "image-pull", "a full member"},
 		{"Error", "", "generic; must not annex ImagePullError"},
 		{"PodsNotReady", "", "not a member, and NotReady must not annex it"},
-		{"ProgressDeadlineExceeded", "", "a stalled rollout is not a failed Job"},
+		{"ProgressDeadlineExceeded", "rollout", "a stalled rollout is not a failed Job"},
+		{"DeadlineExceeded", "", "generic; must not annex ProgressDeadlineExceeded"},
 
 		{"Unschedulable", "", "the scheduler writes it for four unrelated causes"},
 		{"FailedScheduling", "", "says scheduling failed, not why"},

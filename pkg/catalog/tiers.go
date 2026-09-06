@@ -83,6 +83,26 @@ var kubeStateNamespaceKinds = map[string]bool{
 	"SelectorDrift":      true,
 	"UnboundClaim":       true,
 	"DependencyStall":    true,
+	"RolloutStuck":       true,
+	"CertExpiry":         true,
+
+	// Namespace tier with an asterisk, and the asterisk is worth stating.
+	//
+	// The objects are namespaced and the pods they protect are the fault's own,
+	// so nothing outside the arena is touched — which is what this tier means
+	// here. But a PodDisruptionBudget with no headroom is *designed* to be felt
+	// at node level: it is what makes a drain of whichever node happens to host
+	// the arena pod hang, and what makes a cluster autoscaler refuse to remove
+	// that node. That is the fault, not a side effect of it.
+	//
+	// Left at namespace rather than escalated to node because the effect is
+	// bounded by the fault's own lease — Clear and the reaper both delete the
+	// PDB — and because escalating it would put a namespace-local object behind
+	// the same gate as cordoning someone's node. An operator running this
+	// against a cluster mid-upgrade should know what it does, which is what the
+	// spec template and the docs say.
+	"PDBGridlock": true,
+
 	// The control. It breaks nothing at all, which makes it the narrowest
 	// blast radius there is — but it is still listed rather than special-cased,
 	// because a kind absent from this table is TierExternal and would be

@@ -43,6 +43,10 @@ const (
 	ProbeClaimPending    = "simian-claim-pending"
 	ProbeEndpointsReady  = "simian-endpoints-ready"
 	ProbeDependencyStall = "simian-dependency-stalled"
+	ProbePDBGridlocked   = "simian-pdb-gridlocked"
+	ProbeRolloutStuck    = "simian-rollout-stuck"
+	ProbeRolloutServing  = "simian-rollout-serving"
+	ProbeCertPresent     = "simian-cert-present"
 )
 
 // Envoy runtime keys, mirrored from pkg/sut/envoy's bootstrap. Duplicated
@@ -120,6 +124,18 @@ var gates = map[gateKey]gate{
 	},
 	{simian.EngineKubeState, KubeStateDependencyStall}: {
 		describe: "the synthesized workload's pods must be Ready and its Service endpoints ready, and its log must carry the upstream-failure line — healthy everywhere but in what the application says",
+		build:    kubeStateProbes,
+	},
+	{simian.EngineKubeState, KubeStatePDBGridlock}: {
+		describe: "the synthesized workload's pods must be Ready and its PodDisruptionBudget must report disruptionsAllowed of exactly 0",
+		build:    kubeStateProbes,
+	},
+	{simian.EngineKubeState, KubeStateRolloutStuck}: {
+		describe: "the synthesized Deployment must report Progressing reason ProgressDeadlineExceeded while still reporting every replica of the previous revision available",
+		build:    kubeStateProbes,
+	},
+	{simian.EngineKubeState, KubeStateCertExpiry}: {
+		describe: "the synthesized workload's pods must be Ready — which is only possible once the TLS Secret mounted — and the Secret must hold a PEM certificate",
 		build:    kubeStateProbes,
 	},
 	{simian.EngineKubeState, KubeStateNoOp}: {
@@ -470,6 +486,112 @@ var kubeStateGates = map[string][]kubeStateGate{
 			// Short. The workload writes its first line as soon as httpd is up,
 			// and the two gates before this one have already waited for that.
 			timeout: "60s",
+		},
+	},
+	KubeStatePDBGridlock: {
+		{
+			// The pods first, and for this kind that is not just preamble:
+			// disruptionsAllowed is computed from how many of the covered pods
+			// are healthy, so a budget over pods that never started reports 0
+			// too. Proving the pods are Ready is what makes the 0 below mean
+			// "there is no headroom" rather than "there is nothing here".
+			probeName: ProbeWorkloadReady,
+			jsonPath:  podReadyJSONPath,
+			expect:    "True",
+			timeout:   "120s",
+		},
+		{
+			probeName: ProbePDBGridlocked,
+			resource:  "poddisruptionbudgets",
+			// The filter does the comparison, and the render is the name. The
+			// obvious spelling — render disruptionsAllowed and expect "0" — is
+			// a substring match against a decimal number, so it would pass just
+			// as happily against 10 or 20. Here the name only appears at all
+			// when the value is exactly zero.
+			//
+			// The comparison works because the dynamic client decodes JSON
+			// numbers to int64; the same filter against a float64 would fail
+			// with "incompatible types for comparison" and reject a fault that
+			// landed.
+			jsonPath: "{.items[?(@.status.disruptionsAllowed==0)].metadata.name}",
+			expectFrom: func(m simian.FaultManifest) string {
+				return KubeStateWorkloadName(m.ResourceKind, stringField(m.Spec, "name"), m.UID)
+			},
+			// The disruption controller has to observe the pods before it writes
+			// the status at all, and until it does the field is absent rather
+			// than zero.
+			timeout: "90s",
+		},
+	},
+	KubeStateRolloutStuck: {
+		{
+			// Stuck first, serving second, and the order is a choice rather than
+			// a constraint: neither of these is an absence gate, so either could
+			// run first. This one is the fault. If the rollout never wedged there
+			// is nothing to prove about what users saw, and failing on the
+			// stronger assertion first makes the failure report say the useful
+			// thing.
+			probeName: ProbeRolloutStuck,
+			resource:  "deployments",
+			jsonPath:  `{.items[*].status.conditions[?(@.type=="Progressing")].reason}`,
+			expect:    "ProgressDeadlineExceeded",
+			// The deployment controller does not write this reason until the
+			// progress deadline has actually elapsed, which is the kind's own
+			// spec.progress_deadline_seconds — 60 by default, up to 600. Long
+			// enough for the default with room to spare, and a manifest that
+			// raises the deadline past this is choosing a gate that will time
+			// out, which the spec template says.
+			timeout: "240s",
+		},
+		{
+			probeName: ProbeRolloutServing,
+			resource:  "deployments",
+			// The other half of the diagnosis, and the half that makes this kind
+			// hard: nothing is down. The previous revision is still serving every
+			// replica it was, so no availability signal fires and the only
+			// evidence is the rollout itself.
+			jsonPath: "{.items[*].status.availableReplicas}",
+			expectFrom: func(m simian.FaultManifest) string {
+				n, ok := intField(m.Spec, "replicas")
+				if !ok {
+					n = KubeStateDefaultReplicas(m.ResourceKind)
+				}
+				return strconv.Itoa(n)
+			},
+			// Short: by the time the deadline above has expired the old replicas
+			// have been available for minutes. This is a read, not a wait.
+			timeout: "60s",
+		},
+	},
+	KubeStateCertExpiry: {
+		{
+			// Ready pods are load-bearing evidence here, not a warm-up. The
+			// Deployment mounts the Secret, so the kubelet will not start a
+			// container until the Secret exists and its keys are present: a
+			// Ready pod proves the certificate landed and is mountable, which no
+			// read of the Secret alone would.
+			probeName: ProbeWorkloadReady,
+			jsonPath:  podReadyJSONPath,
+			expect:    "True",
+			timeout:   "120s",
+		},
+		{
+			probeName: ProbeCertPresent,
+			resource:  "secrets",
+			// The dot in the key is escaped so jsonpath reads `tls.crt` as one
+			// field name rather than two.
+			jsonPath: `{.items[*].data.tls\.crt}`,
+			// Secret data comes back base64, so the assertion is on the base64
+			// rendering of a PEM header — the certificate is well-formed enough
+			// to begin like one.
+			//
+			// This is the honest limit of the gate, and it is worth stating: no
+			// probe type in Simian can parse a certificate, so nothing here
+			// proves the *expiry*. The arithmetic is proved by a driver unit test
+			// that parses the DER it generated. What the live gate proves is that
+			// a certificate reached the cluster and a pod mounted it.
+			expect:  KubeStateCertPEMPrefix,
+			timeout: "30s",
 		},
 	},
 	KubeStateNoOp: {{

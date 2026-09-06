@@ -18,10 +18,12 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -48,6 +50,9 @@ const (
 	KindSelectorDrift      = "SelectorDrift"
 	KindUnboundClaim       = "UnboundClaim"
 	KindDependencyStall    = "DependencyStall"
+	KindPDBGridlock        = "PDBGridlock"
+	KindRolloutStuck       = "RolloutStuck"
+	KindCertExpiry         = "CertExpiry"
 	KindNoOp               = "NoOp"
 )
 
@@ -158,6 +163,65 @@ const (
 	// Under /tmp so the container needs no writable image layer and no volume.
 	stallServeRoot = "/tmp/www"
 
+	// defaultBrokenRolloutImage is what RolloutStuck rolls *to*. A different
+	// tag of the same base, because a bad deploy in the field is almost always
+	// a new tag of something that was working, and because the image reference
+	// changing is what makes the wedged revision legible in `kubectl rollout
+	// history` rather than a mystery diff.
+	//
+	// The image is real and pullable. If it somehow is not, the rollout stalls
+	// on ImagePullBackOff instead of CrashLoopBackOff and the gate still passes
+	// — the kind is about the rollout, not about how the new pod fails.
+	defaultBrokenRolloutImage = "busybox:1.37"
+
+	// defaultRolloutMessage reads like a deploy that shipped a config the new
+	// binary could not load, which is the most common way a rollout wedges
+	// while the old revision keeps serving.
+	defaultRolloutMessage = "fatal: config: unknown key \"featureFlags.checkoutV2\""
+
+	// defaultProgressDeadline is how long the Deployment controller waits
+	// before declaring the rollout failed.
+	//
+	// Kubernetes defaults this to 600s. That is right for production and wrong
+	// here: it is ten minutes of the fault's own lease spent waiting for a
+	// condition the fault has already caused, and the efficacy gate would time
+	// out long before. Sixty seconds is long enough that a slow image pull does
+	// not trip it and short enough to fit inside a scenario.
+	defaultProgressDeadline = 60
+
+	// progressDeadlineBounds keep the deadline inside the gate's patience. The
+	// floor is above the time a pull-and-crash cycle takes, so a healthy
+	// rollout is not declared failed for being slow.
+	minProgressDeadline = 30
+	maxProgressDeadline = 600
+
+	// defaultMinReadySeconds is how long a pod has to stay Ready before the
+	// Deployment counts it as available. See rolloutStuckBundle for why the
+	// field is set at all; ten seconds is comfortably longer than the time a
+	// container takes to exit and comfortably shorter than minProgressDeadline,
+	// which the healthy revision has to clear twice over.
+	defaultMinReadySeconds = 10
+
+	// rolloutSettleTimeout is how long the finisher waits for the first
+	// revision to be fully available before wedging the second.
+	//
+	// The wait is not optional. Patching a Deployment whose first revision has
+	// not finished rolling out produces one revision that never completed
+	// rather than a good revision blocked behind a bad one, and the gate's
+	// second assertion — every replica of the previous revision still available
+	// — would be false against a fault that "landed".
+	rolloutSettleTimeout = 120 * time.Second
+	rolloutPollInterval  = 2 * time.Second
+
+	// defaultCommonName is the subject and DNS SAN of a CertExpiry
+	// certificate. An internal-sounding name, because a certificate that
+	// expired on an internal service is the version of this fault that actually
+	// pages someone.
+	defaultCommonName = "api.internal"
+
+	certVolumeName = "tls"
+	certMountPath  = "/etc/tls"
+
 	// maxReplicas caps how many broken pods one fault may create.
 	//
 	// A declarative-state fault is about the state, not the volume: one
@@ -181,6 +245,15 @@ type synthesis struct {
 	namespace string
 	replicas  int32
 	spec      map[string]any
+
+	// now is the driver's clock, threaded through so a kind that bakes a
+	// timestamp into what it creates — CertExpiry, whose whole subject is a
+	// notAfter — can be tested against a frozen one.
+	now time.Time
+
+	// settle bounds how long a finisher waits for the cluster before giving
+	// up. Builders ignore it; see finisher.
+	settle time.Duration
 }
 
 // builder turns a validated synthesis into the objects to create.
@@ -207,6 +280,9 @@ var builders = map[string]builder{
 	KindSelectorDrift:      selectorDriftBundle,
 	KindUnboundClaim:       unboundClaimBundle,
 	KindDependencyStall:    dependencyStallBundle,
+	KindPDBGridlock:        pdbGridlockBundle,
+	KindRolloutStuck:       rolloutStuckBundle,
+	KindCertExpiry:         certExpiryBundle,
 }
 
 // deploymentOf adapts a pod-spec builder to the bundle interface.
@@ -667,6 +743,264 @@ func dependencyStallBundle(s synthesis) ([]runtime.Object, error) {
 	}
 	return []runtime.Object{newDeployment(s, pod), svc}, nil
 }
+
+// pdbGridlockBundle: a healthy workload, and a PodDisruptionBudget over it
+// with no headroom. Produces a namespace where every pod is Ready and no pod
+// may be evicted.
+//
+// Nothing is failing, which is the point. The fault is invisible until someone
+// tries to move a pod — a node drain that hangs forever, a cluster autoscaler
+// that cannot remove an underused node, a rolling node upgrade that stops on
+// the first node and stays there. Diagnosing it means reading a budget nobody
+// looks at until it bites, and the operator who wrote it usually meant to
+// protect availability rather than to freeze the cluster.
+func pdbGridlockBundle(s synthesis) ([]runtime.Object, error) {
+	pod, err := healthyPod(s.spec)
+	if err != nil {
+		return nil, err
+	}
+	// Defaults to the replica count, which is the smallest value that leaves
+	// no headroom: with minAvailable == replicas the budget permits a
+	// disruption only if a pod is already down, and nothing is.
+	minAvail, err := optInt(s.spec, "min_available", int(s.replicas))
+	if err != nil {
+		return nil, err
+	}
+	if minAvail < 1 {
+		return nil, fmt.Errorf(
+			"spec.min_available must be at least 1, got %d: a budget of 0 permits every eviction, and the fault would apply cleanly and block nothing", minAvail)
+	}
+	if minAvail < int(s.replicas) {
+		return nil, fmt.Errorf(
+			"spec.min_available (%d) must be at least spec.replicas (%d): with headroom the budget allows %d disruption(s), the pods can be evicted, and the fault would apply cleanly and block nothing",
+			minAvail, s.replicas, int(s.replicas)-minAvail)
+	}
+	// A budget above the replica count is legal and useful — it is how a
+	// gridlock survives someone scaling the workload up — but it is a pod count,
+	// and there is no reading of "protect four billion pods" that is not a typo.
+	// The ceiling is maxReplicas for the same reason that caps replicas.
+	if minAvail > maxReplicas {
+		return nil, fmt.Errorf("spec.min_available must be at most %d, got %d", maxReplicas, minAvail)
+	}
+
+	pdb := &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      s.name,
+			Namespace: s.namespace,
+			Labels:    map[string]string{"app": s.name},
+		},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			// MinAvailable rather than MaxUnavailable, because that is how this
+			// gets written in the field: someone protecting a service says how
+			// much of it must survive, and on a small Deployment that number is
+			// the whole thing.
+			MinAvailable: ptr(intstr.FromInt32(int32(minAvail))),
+			// Selects only the fault's own pods. A budget over a broader
+			// selector would block eviction of workloads Simian did not create,
+			// which is outside the blast radius this kind is classified at.
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": s.name}},
+		},
+	}
+
+	// The workload first. A budget created over pods that do not exist yet
+	// reports disruptionsAllowed 0 for the vacuous reason — there is nothing to
+	// disrupt — and the ordering keeps the window where that is the reading as
+	// short as the API server can make it.
+	return []runtime.Object{newDeployment(s, pod), pdb}, nil
+}
+
+// rolloutStuckBundle: a Deployment that is serving its previous revision and
+// cannot finish rolling out its next one.
+//
+// Only the healthy revision is created here. The wedge is applied afterwards by
+// the finisher, because a stuck rollout is a relationship between two revisions
+// and one Create cannot produce it — see wedgeRollout.
+//
+// maxUnavailable 0 is what makes the fault what it is: the controller will not
+// take an old pod down until a new one is ready, and no new one ever will be,
+// so the old revision serves every request for as long as the fault lasts.
+// Nothing pages. The Deployment is Available, the Service has endpoints, error
+// rates are flat, and the only thing wrong is that a deploy from an hour ago
+// never landed and everyone believes it did.
+func rolloutStuckBundle(s synthesis) ([]runtime.Object, error) {
+	pod, err := healthyPod(s.spec)
+	if err != nil {
+		return nil, err
+	}
+	deadline, err := optInt(s.spec, "progress_deadline_seconds", defaultProgressDeadline)
+	if err != nil {
+		return nil, err
+	}
+	if deadline < minProgressDeadline || deadline > maxProgressDeadline {
+		return nil, fmt.Errorf("spec.progress_deadline_seconds must be between %d and %d, got %d",
+			minProgressDeadline, maxProgressDeadline, deadline)
+	}
+	// Validated here rather than in the finisher so a bad spec is refused
+	// before anything is created, like every other kind's.
+	if _, err := brokenRolloutContainer(s.spec); err != nil {
+		return nil, err
+	}
+
+	dep := newDeployment(s, pod)
+	dep.Spec.ProgressDeadlineSeconds = ptr(int32(deadline))
+	// The backstop under the broken revision's readiness probe, and the reason
+	// this kind does not take the arena down.
+	//
+	// A pod with no readiness probe is Ready the moment its container is
+	// running, and a container that exits after 200ms is running for 200ms. On
+	// the first GKE run that was enough: the kubelet reported both broken pods
+	// Ready, the Deployment controller counted the new ReplicaSet available,
+	// wrote Progressing=True/NewReplicaSetAvailable, scaled the old revision to
+	// zero — and never revisited that verdict once the pods began to crash. A
+	// completed rollout does not un-complete, so the result was a total outage
+	// that the gate could not see.
+	//
+	// brokenRolloutContainer's probe is what stops that happening now.
+	// minReadySeconds says the same thing one level up, in a field the kubelet
+	// cannot get wrong: a revision counts as available only if it stays Ready
+	// this long, so one that dies on startup never counts at all — whatever
+	// image or probe a spec puts in front of it.
+	dep.Spec.MinReadySeconds = defaultMinReadySeconds
+	dep.Spec.Strategy = appsv1.DeploymentStrategy{
+		Type: appsv1.RollingUpdateDeploymentStrategyType,
+		RollingUpdate: &appsv1.RollingUpdateDeployment{
+			// Zero unavailable, one surge: the new revision gets exactly one pod
+			// to fail in and the old revision is never reduced. Any other pair
+			// would take capacity away as the rollout stalled, and the fault
+			// would announce itself as an availability drop — which is the
+			// diagnosis every other kind in this engine already poses.
+			MaxUnavailable: ptr(intstr.FromInt32(0)),
+			MaxSurge:       ptr(intstr.FromInt32(1)),
+		},
+	}
+	return []runtime.Object{dep}, nil
+}
+
+// brokenRolloutContainer is the container the finisher patches in: a different
+// image tag running a command that exits non-zero.
+//
+// Both halves matter. The tag change is what makes this a new revision an
+// operator can name; the failing command is what stops it ever becoming ready.
+// A tag change alone against an image that runs fine would roll out
+// successfully, and the fault would apply cleanly and do nothing.
+func brokenRolloutContainer(spec map[string]any) (corev1.Container, error) {
+	msg := optString(spec, "message", defaultRolloutMessage)
+	if strings.ContainsAny(msg, "\n\r") {
+		return corev1.Container{}, fmt.Errorf("spec.message must be a single line")
+	}
+	return corev1.Container{
+		Name:  containerName,
+		Image: optString(spec, "broken_image", defaultBrokenRolloutImage),
+		// Same environment-variable indirection as every other kind that writes
+		// caller-supplied text: interpolating it into the shell string is how a
+		// scenario pack that wants a specific log line becomes a command
+		// injection.
+		Env: []corev1.EnvVar{{Name: exitMessageEnv, Value: msg}},
+		Command: []string{"/bin/sh", "-c",
+			fmt.Sprintf("echo \"$%s\" >&2; exit 1", exitMessageEnv)},
+		// A readiness probe that cannot pass, on a container that is dead most
+		// of the time anyway. It is here because of what the crash loop does to
+		// the *Deployment*, not to the pod.
+		//
+		// Without a probe, a pod is Ready the moment its container is running —
+		// which a crash-looping container is, briefly, on every restart. The
+		// Deployment controller reads each of those flickers as progress and
+		// restarts the progress-deadline clock, so ProgressDeadlineExceeded
+		// appeared 159s into the first GKE run instead of 60s, and then flipped
+		// back to ReplicaSetUpdated on the next restart. A fault that is only
+		// intermittently true is worse than one that does not land: the gate
+		// catches it and the subject, triaging a minute later, does not.
+		//
+		// With the probe the new revision is never Ready, so nothing after the
+		// initial scale-up counts as progress, the deadline fires once, and the
+		// condition stays put for the life of the lease.
+		ReadinessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				Exec: &corev1.ExecAction{Command: []string{"/bin/false"}},
+			},
+			PeriodSeconds:    5,
+			FailureThreshold: 1,
+		},
+	}, nil
+}
+
+// certExpiryBundle: a TLS Secret whose certificate is about to expire (or
+// already has), and a workload that mounts it.
+//
+// The workload is not decoration. A Secret alone would be a fault nothing
+// consumes — deletable, ignorable, and impossible to gate honestly, since a
+// Secret that never mounted anywhere looks exactly like one that did. Mounting
+// it means the kubelet refuses to start the container until the Secret exists
+// with the keys the volume expects, so a Ready pod is proof the certificate
+// reached the cluster in a usable shape.
+//
+// Nothing verifies the certificate, and nothing here pretends to. TLS expiry is
+// a fault of *time*, not of state: the object is well-formed, the pods are
+// healthy, and the failure is scheduled rather than occurring. What a subject
+// has to do is read notAfter and compare it to the clock, which is exactly the
+// step that gets skipped.
+func certExpiryBundle(s synthesis) ([]runtime.Object, error) {
+	pod, err := healthyPod(s.spec)
+	if err != nil {
+		return nil, err
+	}
+	hours, err := optInt(s.spec, "expires_in_hours", catalog.KubeStateDefaultCertHours)
+	if err != nil {
+		return nil, err
+	}
+	if hours < catalog.KubeStateMinCertHours || hours > catalog.KubeStateMaxCertHours {
+		return nil, fmt.Errorf("spec.expires_in_hours must be between %d and %d, got %d",
+			catalog.KubeStateMinCertHours, catalog.KubeStateMaxCertHours, hours)
+	}
+	cn := optString(s.spec, "common_name", defaultCommonName)
+	if errs := validation.IsDNS1123Subdomain(cn); len(errs) > 0 {
+		// It goes in a DNS SAN as well as the subject, and a SAN that is not a
+		// hostname makes a certificate no TLS stack will accept for a reason
+		// that has nothing to do with expiry.
+		return nil, fmt.Errorf("spec.common_name %q is not a valid DNS name: %s", cn, strings.Join(errs, "; "))
+	}
+
+	crt, err := newExpiringCert(cn, time.Duration(hours)*time.Hour, s.now)
+	if err != nil {
+		return nil, fmt.Errorf("synthesize certificate: %w", err)
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      s.name,
+			Namespace: s.namespace,
+			Labels:    map[string]string{"app": s.name},
+		},
+		// The real TLS type, not Opaque. It is what makes the two keys mean
+		// what they are called, what a cert-manager or an Ingress would look
+		// for, and what makes `kubectl get secret` show this as a certificate
+		// rather than as two opaque blobs.
+		Type: corev1.SecretTypeTLS,
+		Data: map[string][]byte{
+			corev1.TLSCertKey:       crt.certPEM,
+			corev1.TLSPrivateKeyKey: crt.keyPEM,
+		},
+	}
+
+	pod.Volumes = []corev1.Volume{{
+		Name:         certVolumeName,
+		VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: s.name}},
+	}}
+	pod.Containers[0].VolumeMounts = []corev1.VolumeMount{{
+		Name:      certVolumeName,
+		MountPath: certMountPath,
+		ReadOnly:  true,
+	}}
+
+	// The Secret first, for the same reason UnboundClaim creates its claim
+	// first: a pod referencing a Secret that does not exist yet reports
+	// FailedMount, which is a different diagnosis than the one this kind poses
+	// and would leave the workload-ready gate waiting on a retry.
+	return []runtime.Object{secret, newDeployment(s, pod)}, nil
+}
+
+// ptr returns a pointer to v, for the API types that take one.
+func ptr[T any](v T) *T { return &v }
 
 // newDeployment wraps a pod spec in the Deployment that carries it.
 //

@@ -14,7 +14,10 @@
 
 package catalog
 
-import "strings"
+import (
+	"encoding/base64"
+	"strings"
+)
 
 // Fault kinds synthesized by the kube-state engine.
 //
@@ -31,6 +34,9 @@ const (
 	KubeStateSelectorDrift      = "SelectorDrift"
 	KubeStateUnboundClaim       = "UnboundClaim"
 	KubeStateDependencyStall    = "DependencyStall"
+	KubeStatePDBGridlock        = "PDBGridlock"
+	KubeStateRolloutStuck       = "RolloutStuck"
+	KubeStateCertExpiry         = "CertExpiry"
 	KubeStateNoOp               = "NoOp"
 )
 
@@ -45,6 +51,9 @@ var kubeStateDefaultNames = map[string]string{
 	KubeStateSelectorDrift:      "storefront",
 	KubeStateUnboundClaim:       "media-store",
 	KubeStateDependencyStall:    "checkout-api",
+	KubeStatePDBGridlock:        "ledger-api",
+	KubeStateRolloutStuck:       "web-frontend",
+	KubeStateCertExpiry:         "edge-gateway",
 	KubeStateNoOp:               "inventory-api",
 }
 
@@ -76,6 +85,60 @@ func KubeStateStallMessage(requested string) string {
 	}
 	return KubeStateDefaultStallMessage
 }
+
+// kubeStateDefaultReplicas overrides the engine-wide default of one for the
+// kinds whose fault needs more than one pod to be what it is.
+var kubeStateDefaultReplicas = map[string]int{
+	// A stalled rollout is about the *old* revision continuing to serve while
+	// the new one cannot start, and one surviving pod makes a thin case for
+	// "users saw nothing". Two is the smallest count that reads like a real
+	// service and matches the shape the lookout fixture this kind is
+	// transcribed from produces: new_ready=0/1, old_ready=2/2.
+	KubeStateRolloutStuck: 2,
+}
+
+// KubeStateDefaultReplicas is how many replicas a kind synthesizes when the
+// manifest does not choose.
+//
+// Here rather than in the driver for the same reason the workload name is: the
+// RolloutStuck gate asserts that every replica of the previous revision is
+// still available, and it has to know how many that is before Apply has created
+// any of them.
+func KubeStateDefaultReplicas(kind string) int {
+	if n, ok := kubeStateDefaultReplicas[kind]; ok {
+		return n
+	}
+	return 1
+}
+
+// KubeStateCertPEMPrefix is the base64 rendering of the opening bytes of a PEM
+// certificate block, which is what a CertExpiry gate matches against the
+// Secret's own `data["tls.crt"]`.
+//
+// Computed rather than written out, because a hand-transcribed base64 literal
+// that is one character wrong produces a gate that never passes against a fault
+// that landed perfectly, and nothing about the literal would look wrong. Exactly
+// 24 bytes, so the encoding is a whole number of base64 groups and the result is
+// a genuine prefix of any longer certificate rather than a string that only
+// matches when the padding happens to line up.
+var KubeStateCertPEMPrefix = base64.StdEncoding.EncodeToString([]byte("-----BEGIN CERTIFICATE--"))
+
+// KubeStateDefaultCertHours is how long a CertExpiry certificate is valid for
+// when the manifest does not say. Two days: inside every conventional warning
+// threshold, and still a leading indicator rather than an outage — nothing is
+// failing yet, which is the whole character of this fault.
+const KubeStateDefaultCertHours = 48
+
+// KubeStateCertHoursBounds are the limits on spec.expires_in_hours.
+//
+// Negative is allowed and useful: a certificate that expired a week ago is a
+// different diagnosis from one that expires on Thursday, and both are real. The
+// upper bound is a year, past which the certificate is not expiring in any sense
+// a report could be graded on.
+const (
+	KubeStateMinCertHours = -168
+	KubeStateMaxCertHours = 8760
+)
 
 // KubeStateWorkloadName derives the name of the workload a kube-state fault
 // will synthesize, as a pure function of the kind, the manifest's requested

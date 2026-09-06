@@ -43,7 +43,7 @@ events, and none of them can be produced by delaying a packet.
 `kube-state` produces the other half. In `synthesize` mode it applies a bundle
 of objects into the arena that is born broken — nothing already running is
 touched, so a baseline captured before the fault is still comparable afterwards.
-Nine kinds, each with its own default efficacy gate:
+Twelve kinds, each with its own default efficacy gate:
 
 | Kind | Produces | Gated on |
 |---|---|---|
@@ -55,13 +55,17 @@ Nine kinds, each with its own default efficacy gate:
 | `SelectorDrift` | Service whose selector misses its own healthy pods | pods Ready **and** no endpoint addresses |
 | `UnboundClaim` | claim on a StorageClass the cluster does not have | claim `Pending` and the pod mounting it `Unschedulable` |
 | `DependencyStall` | workload that serves fine and logs a failing call to something it needs | pods Ready **and** endpoints Ready **and** the line in the log |
+| `PDBGridlock` | PodDisruptionBudget with no headroom, so no pod may be evicted | pods Ready **and** the budget reporting exactly `0` disruptions allowed |
+| `RolloutStuck` | second revision that can never become ready, in front of one that works | `ProgressDeadlineExceeded` **and** every replica of the old revision still available |
+| `CertExpiry` | mounted TLS Secret whose certificate expires in 48 hours | pods Ready **and** the certificate present in the Secret |
 | `NoOp` | a workload with nothing wrong with it — the control | pods Ready |
 
-The last four are why a fault is a *bundle* rather than one Deployment. A
-Service in front of nothing and a claim that never binds are relationships
-between objects, and the fault is the relationship: `SelectorDrift` in
-particular is the shape that catches an agent grading `kubectl get pods`, since
-every pod is Running and Ready and the traffic is going nowhere.
+The bundle kinds are why a fault is a *bundle* rather than one Deployment. A
+Service in front of nothing, a claim that never binds and a budget that forbids
+every eviction are relationships between objects, and the fault is the
+relationship: `SelectorDrift` in particular is the shape that catches an agent
+grading `kubectl get pods`, since every pod is Running and Ready and the traffic
+is going nowhere.
 
 `DependencyStall` goes one further, and is the only kind where *no object is
 wrong at all*. The Deployment is Available, the pods are Ready against a real
@@ -70,6 +74,25 @@ exists only in what the workload says about itself, so the only subject that
 finds it is one that read the log — which is what the `logs` probe type exists
 to gate, and the discrimination this kind was added to make.
 
+`PDBGridlock`, `RolloutStuck` and `CertExpiry` are the three where the cluster is
+serving traffic correctly and something else is broken. A gridlocked budget is
+invisible until someone drains a node; a wedged rollout is invisible until
+someone asks which revision is live; an expiring certificate is invisible until
+it expires. Each is gated on pods Ready *first*, so a gate that could pass
+against a namespace where nothing came up is refused.
+
+`RolloutStuck` is the only kind that is not born broken — a stuck rollout is a
+relationship between a revision that works and one that does not, which no
+single manifest expresses. Apply creates the healthy revision, waits for it to be
+fully available, and only then patches in a revision that cannot start. If the
+healthy revision never comes up, Apply rolls the bundle back and reports it
+rather than wedging a rollout that had nothing to wedge.
+
+`CertExpiry`'s gate is deliberately weaker than the fault. No probe type can
+decode a certificate, so the gate proves the Secret landed and the pod mounted
+it; that the certificate expires when the spec says is proved in the driver's
+own tests against the generated DER, not in the cluster.
+
 `NoOp` is the control, and it synthesizes a healthy workload rather than
 applying nothing. An empty namespace is trivially distinguishable from a broken
 one, so a control that applied nothing could be scored correctly by counting
@@ -77,8 +100,9 @@ objects instead of by diagnosing anything.
 
 Every field of every spec is optional — `{}` produces the failure state. Needs
 no Chaos Mesh and no sidecar; it does need `create` on `apps/deployments`,
-`batch/jobs`, `services` and `persistentvolumeclaims` in the arena Role, which
-`simian arena create` and the Helm chart both grant.
+`batch/jobs`, `services`, `persistentvolumeclaims`, `secrets` and
+`policy/poddisruptionbudgets` in the arena Role, which `simian arena create` and
+the Helm chart both grant.
 
 ```bash
 simian chaos --engine kube-state --kind ImageUnresolvable --api-version apps/v1 \

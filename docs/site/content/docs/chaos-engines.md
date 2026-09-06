@@ -14,7 +14,7 @@ The first three perturb a *running dataplane* — traffic, processes, resources.
 | `chaos-mesh` | The full Chaos Mesh CRD catalog: PodChaos, StressChaos, IOChaos, TimeChaos, NetworkChaos, etc. | Default for everything. Whether NetworkChaos lands on GKE Dataplane V2 depends on the Cilium version — it does on current GKE, and its efficacy gate tells you either way. See [Known limitations]({{< relref "known-limitations.md" >}}). |
 | `network-policy` | Standard `networking.k8s.io/v1` NetworkPolicy partitions (deny ingress / egress / both). | Network partition chaos on any cluster where NetworkChaos isn't reliable. Partition only — no delay / loss / jitter. |
 | `envoy-fault` | HTTP-layer delay + abort via an injected Envoy sidecar. Two kinds: `EnvoyHttpDelay`, `EnvoyHttpAbort`. | HTTP/gRPC delay or error injection on DPv2. Requires the SUT to be deployed with `--no-envoy-faults=false` (off by default — see [Known limitations]({{< relref "known-limitations.md" >}}#envoy-injection-breaks-grpc-kubelet-probes)). |
-| `kube-state` | Declarative-state faults: synthesizes a bundle of objects that is born broken. Nine kinds: `ImageUnresolvable`, `ContainerExitLoop`, `MemoryLimitSqueeze`, `Unschedulable`, `JobFailure`, `SelectorDrift`, `UnboundClaim`, `DependencyStall`, and `NoOp` (the control). | Wedged rollouts, bad image references, crash loops, OOM kills, unschedulable pods, failed batch jobs, endpointless Services, claims that never bind and a workload whose only symptom is in its own log — states rather than events, and the ones an SRE agent triages most. Works on any cluster; needs no Chaos Mesh and no sidecar. |
+| `kube-state` | Declarative-state faults: synthesizes a bundle of objects that is born broken. Twelve kinds: `ImageUnresolvable`, `ContainerExitLoop`, `MemoryLimitSqueeze`, `Unschedulable`, `JobFailure`, `SelectorDrift`, `UnboundClaim`, `DependencyStall`, `PDBGridlock`, `RolloutStuck`, `CertExpiry`, and `NoOp` (the control). | Bad image references, crash loops, OOM kills, unschedulable pods, failed batch jobs, endpointless Services, claims that never bind, wedged rollouts, undrainable nodes, expiring certificates and a workload whose only symptom is in its own log — states rather than events, and the ones an SRE agent triages most. Works on any cluster; needs no Chaos Mesh and no sidecar. |
 
 ## Directed-control patterns
 
@@ -74,6 +74,26 @@ simian chaos --engine kube-state \
   --namespace boutique-1 --duration 5m \
   --spec '{"message":"level=error msg=\"upstream request failed\" upstream=payments-api err=\"context deadline exceeded after 30s\""}'
 
+# kube-state: a PodDisruptionBudget with no headroom. Every pod Ready, and the
+# next node drain blocks forever. min_available defaults to the replica count.
+simian chaos --engine kube-state \
+  --kind PDBGridlock --api-version apps/v1 \
+  --namespace boutique-1 --duration 5m
+
+# kube-state: a deploy that broke while the old pods kept serving. Apply waits
+# for the healthy revision to be available before wedging the next one, so give
+# this kind the longest lease of the twelve.
+simian chaos --engine kube-state \
+  --kind RolloutStuck --api-version apps/v1 \
+  --namespace boutique-1 --duration 10m
+
+# kube-state: a mounted TLS Secret that expires in six hours. Negative hours
+# means it already expired, which is a different diagnosis and a valid one.
+simian chaos --engine kube-state \
+  --kind CertExpiry --api-version apps/v1 \
+  --namespace boutique-1 --duration 5m \
+  --spec '{"expires_in_hours":6,"common_name":"api.boutique.internal"}'
+
 # kube-state: the control. Synthesizes a healthy workload, on purpose.
 simian chaos --engine kube-state \
   --kind NoOp --api-version apps/v1 \
@@ -87,6 +107,12 @@ a baseline captured before the fault still comparable afterwards.
 Give these faults **at least 3m**. Apply does not return until the efficacy probe
 has seen the failure state, that wait comes out of the fault's own lease, and a
 backoff state can take 30s or more to appear.
+
+`RolloutStuck` wants **at least 10m**. It is the one kind that is not born
+broken: Apply brings up a working revision, waits for it to be fully available,
+and only then rolls out one that cannot start — and the gate then waits out the
+Deployment's own progress deadline before `ProgressDeadlineExceeded` appears.
+Both waits come out of the lease.
 
 For the LLM-translated path:
 

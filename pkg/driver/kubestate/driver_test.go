@@ -52,9 +52,57 @@ func manifest(kind string, spec map[string]any) simian.FaultManifest {
 }
 
 func newTestDriver(objs ...runtime.Object) *Driver {
-	d := New(fake.NewSimpleClientset(objs...))
+	cs := fake.NewSimpleClientset(objs...)
+	standInDeploymentController(cs)
+	d := New(cs)
 	d.Now = func() time.Time { return time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC) }
+	// Short, because the stand-in below reports availability on the first poll.
+	// A test that wants the timeout path raises the bar instead — see
+	// TestRolloutStuckRefusesToWedgeARevisionThatNeverCameUp.
+	d.RolloutSettle = time.Second
 	return d
+}
+
+// standInDeploymentController makes a fake clientset report a Deployment as
+// fully rolled out.
+//
+// The fake runs no controllers, so status stays at the zero value forever and
+// RolloutStuck's finisher — which waits for the first revision to be available
+// before wedging the second — would time out against every test in this file.
+// Stubbing the wait out instead would leave the one step this kind cannot be
+// built without unexercised, so the wait runs for real and this supplies the
+// only thing it reads.
+//
+// Deliberately unconditional: it says the Deployment is available, not that it
+// stays available after the wedge. Nothing here simulates a rollout failing,
+// because nothing here should — that the wedged revision never becomes ready is
+// a fact about Kubernetes, and it is verified against a live cluster rather
+// than asserted against a fake.
+func standInDeploymentController(cs *fake.Clientset) {
+	cs.PrependReactor("get", "deployments", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		get := action.(k8stesting.GetAction)
+		obj, err := cs.Tracker().Get(
+			schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"},
+			get.GetNamespace(), get.GetName())
+		if err != nil {
+			return true, nil, err
+		}
+		dep, ok := obj.(*appsv1.Deployment)
+		if !ok {
+			return false, nil, nil
+		}
+		dep = dep.DeepCopy()
+		want := int32(1)
+		if dep.Spec.Replicas != nil {
+			want = *dep.Spec.Replicas
+		}
+		dep.Status.ObservedGeneration = dep.Generation
+		dep.Status.Replicas = want
+		dep.Status.ReadyReplicas = want
+		dep.Status.UpdatedReplicas = want
+		dep.Status.AvailableReplicas = want
+		return true, dep, nil
+	})
 }
 
 func getDeployment(t *testing.T, d *Driver, engineUIDStr string) *appsv1.Deployment {
@@ -505,12 +553,15 @@ func TestCatalog(t *testing.T) {
 // in sync is this test.
 func TestKindsMatchCatalogConstants(t *testing.T) {
 	inCatalog := []string{
+		catalog.KubeStateCertExpiry,
 		catalog.KubeStateContainerExitLoop,
 		catalog.KubeStateDependencyStall,
 		catalog.KubeStateImageUnresolvable,
 		catalog.KubeStateJobFailure,
 		catalog.KubeStateMemoryLimitSqueeze,
 		catalog.KubeStateNoOp,
+		catalog.KubeStatePDBGridlock,
+		catalog.KubeStateRolloutStuck,
 		catalog.KubeStateSelectorDrift,
 		catalog.KubeStateUnboundClaim,
 		catalog.KubeStateUnschedulable,
@@ -672,5 +723,86 @@ func TestReapExpiredNamesTheBundleAndNotTheObject(t *testing.T) {
 	want := []string{engineUID("arena-1", "catalog-sync-old"), engineUID("arena-1", "storefront-abc")}
 	if !slices.Equal(cleared, want) {
 		t.Errorf("cleared = %v, want %v", cleared, want)
+	}
+}
+
+// --- the finisher ---
+
+// RolloutStuck is the only kind whose failure state Apply cannot create in one
+// call, so it is the only one where Apply is not finished when the objects
+// exist. What the finisher does — wait for the healthy revision, then wedge it
+// — is the fault.
+func TestApplyWedgesTheRolloutAfterTheHealthyRevisionIsUp(t *testing.T) {
+	d := newTestDriver()
+	uid, err := d.Apply(context.Background(), manifest(KindRolloutStuck, nil))
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	c := getDeployment(t, d, uid).Spec.Template.Spec.Containers[0]
+	if c.Image != defaultBrokenRolloutImage {
+		t.Errorf("image = %q, want the wedged revision %q: Apply returned before the rollout was broken", c.Image, defaultBrokenRolloutImage)
+	}
+	if cmd := strings.Join(c.Command, " "); !strings.Contains(cmd, "exit 1") {
+		t.Errorf("command = %q, want the failing one", cmd)
+	}
+	// The patch must merge on the container name rather than replacing the
+	// array, or it would silently drop anything the healthy pod spec set.
+	if c.Name != containerName {
+		t.Errorf("container name = %q, want %q", c.Name, containerName)
+	}
+}
+
+// A healthy revision that never comes up is a broken arena, not a landed
+// fault. Wedging it anyway would produce a Deployment that never had a working
+// revision — the gate's "previous revision still available" half would be
+// false, and the fault would be a lie about what it was doing.
+func TestRolloutStuckRefusesToWedgeARevisionThatNeverCameUp(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	// No stand-in controller: status stays at the zero value, which is what a
+	// Deployment whose pods cannot start looks like.
+	d := New(cs)
+	d.Now = func() time.Time { return time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC) }
+	d.RolloutSettle = 50 * time.Millisecond
+
+	_, err := d.Apply(context.Background(), manifest(KindRolloutStuck, nil))
+	if err == nil {
+		t.Fatal("Apply succeeded against a Deployment that never became available")
+	}
+	if !strings.Contains(err.Error(), "did not become fully available") {
+		t.Errorf("error = %v, want it to name the wait that failed", err)
+	}
+	// And the bundle is gone. A failed Apply is never leased, so nothing will
+	// ever call Clear for it; a half-applied fault left in the arena is one
+	// nobody is tracking and nobody will take out.
+	deps, err := cs.AppsV1().Deployments(testNS).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("list deployments: %v", err)
+	}
+	if len(deps.Items) != 0 {
+		t.Errorf("Apply failed but left %d deployment(s) behind", len(deps.Items))
+	}
+}
+
+// The RolloutStuck gate asserts that every replica of the previous revision is
+// still available, and it computes that number from the manifest before Apply
+// runs. If the driver's default and the catalog's ever diverge, the gate would
+// look for a count the Deployment was never created with.
+func TestApplyReplicaDefaultAgreesWithTheGate(t *testing.T) {
+	for _, kind := range Kinds() {
+		t.Run(kind, func(t *testing.T) {
+			d := newTestDriver()
+			uid, err := d.Apply(context.Background(), manifest(kind, nil))
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if kind == KindJobFailure {
+				// A Job has no replicas.
+				return
+			}
+			dep := getDeployment(t, d, uid)
+			if got, want := int(*dep.Spec.Replicas), catalog.KubeStateDefaultReplicas(kind); got != want {
+				t.Errorf("created with %d replicas, the catalog tells the gate %d", got, want)
+			}
+		})
 	}
 }
