@@ -27,7 +27,7 @@ VERSION        ?= dev
 IMAGE          := $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(VERSION)
 
 .PHONY: all build test vet tidy clean run-serve fmt ci image image-push \
-        cluster cluster-down e2e eval-lookout
+        cluster cluster-down e2e eval-lookout eval-sre-agent
 
 all: vet test build
 
@@ -86,6 +86,18 @@ e2e:
 #   make eval-lookout ARGS="--only lookout-image-pull"
 eval-lookout:
 	dev/tools/eval-lookout $(ARGS)
+
+# Score the same pack against core-sre-agent, on a cluster that is already up.
+# The row to read next to eval-lookout's: the detector's score moves only for
+# the fault, so it is the only thing that says whether a change in the agent's
+# score was the agent.
+#
+# This one spends real model tokens — nine scenarios is nine agent sessions —
+# and needs Vertex credentials in the environment. Start with --only:
+#
+#   make eval-sre-agent ARGS="--only lookout-crash-loop"
+eval-sre-agent:
+	dev/tools/eval-sre-agent $(ARGS)
 
 run-serve: build
 	$(BIN) serve

@@ -251,7 +251,7 @@ func TestFaultsShorterThanTheSubjectTimeoutAreRefused(t *testing.T) {
 		Faults: []simian.FaultManifest{{Duration: 2 * time.Minute}},
 	}}}
 
-	err := checkFaultDurations(pack, 10*time.Minute)
+	err := checkFaultDurations(pack.Scenarios, 10*time.Minute)
 	if err == nil {
 		t.Fatal("a 2m fault was accepted against a 10m subject timeout")
 	}
@@ -261,10 +261,10 @@ func TestFaultsShorterThanTheSubjectTimeoutAreRefused(t *testing.T) {
 		}
 	}
 
-	if err := checkFaultDurations(pack, time.Minute); err != nil {
+	if err := checkFaultDurations(pack.Scenarios, time.Minute); err != nil {
 		t.Errorf("a 2m fault was refused against a 1m subject timeout: %v", err)
 	}
-	if err := checkFaultDurations(pack, 0); err != nil {
+	if err := checkFaultDurations(pack.Scenarios, 0); err != nil {
 		t.Errorf("an unbounded subject timeout has nothing to compare against: %v", err)
 	}
 }
@@ -276,7 +276,7 @@ func TestAnUnsetFaultDurationIsNotShort(t *testing.T) {
 		ID:     "s-1",
 		Faults: []simian.FaultManifest{{}},
 	}}}
-	if err := checkFaultDurations(pack, time.Hour); err != nil {
+	if err := checkFaultDurations(pack.Scenarios, time.Hour); err != nil {
 		t.Errorf("checkFaultDurations refused a fault with no duration set: %v", err)
 	}
 }
@@ -568,5 +568,34 @@ func TestTheRunIDTiesAnAbandonedArenaBackToItsRun(t *testing.T) {
 	}
 	if got := arenaAnnotations(id)[EvalRunAnnotation]; got != id {
 		t.Errorf("arena annotations = %v, want the run ID under %s", arenaAnnotations(id), EvalRunAnnotation)
+	}
+}
+
+// TestOnlyNarrowsTheDurationCheck is the flag interaction that made an agent
+// subject unrunnable: --subject-timeout has to be long for an LLM, most of the
+// pack's leases are short, and the check read the whole pack. So --only, which
+// is exactly what an operator reaches for with a slow and expensive subject,
+// was refused over scenarios nobody had asked to run.
+func TestOnlyNarrowsTheDurationCheck(t *testing.T) {
+	long := scenario.Scenario{
+		ID: "long", Name: "long", Source: scenario.SourcePackLookout,
+		Faults: []simian.FaultManifest{{Duration: 12 * time.Minute}},
+	}
+	short := scenario.Scenario{
+		ID: "short", Name: "short", Source: scenario.SourcePackLookout,
+		Faults: []simian.FaultManifest{{Duration: 6 * time.Minute}},
+	}
+	pack := scenario.Pack{Name: "p", Scenarios: []scenario.Scenario{long, short}}
+
+	sel, err := harness.Select(pack, []string{"long"})
+	if err != nil {
+		t.Fatalf("Select() = %v", err)
+	}
+	if err := checkFaultDurations(sel, 10*time.Minute); err != nil {
+		t.Errorf("selecting only the long scenario: %v, want nil", err)
+	}
+
+	if err := checkFaultDurations(pack.Scenarios, 10*time.Minute); err == nil {
+		t.Error("the whole pack: nil, want the short scenario refused")
 	}
 }

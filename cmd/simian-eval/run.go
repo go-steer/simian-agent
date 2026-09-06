@@ -44,25 +44,42 @@ func runEval(ctx context.Context, o *options, out, progress io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if !o.skipDurationOK {
-		if err := checkFaultDurations(pack, o.subjectTimeout); err != nil {
-			return err
-		}
-	}
-
-	subj, err := subject.Parse(o.subject, subject.Options{
-		Timeout: o.subjectTimeout,
-		Dir:     o.subjectDir,
-		Env:     o.subjectEnv,
-	})
+	// Resolved here rather than from the Runner below, so an --only typo and a
+	// subject timeout that cannot fit are both refused before anything
+	// connects to a cluster, let alone writes to one.
+	selected, err := harness.Select(pack, o.only)
 	if err != nil {
 		return err
+	}
+	if !o.skipDurationOK {
+		if err := checkFaultDurations(selected, o.subjectTimeout); err != nil {
+			return err
+		}
 	}
 
 	runID := newRunID()
 	outDir := o.out
 	if outDir == "" {
 		outDir = filepath.Join("runs", runID)
+	}
+
+	// The output directory's *name* is resolved before the subject is parsed,
+	// so the subject can be told where to leave its own evidence. A scorecard
+	// says what a subject answered and never why, which is enough for a
+	// detector and not enough for an agent: the interesting question about a
+	// 0.00 is which tools it called.
+	//
+	// The directory itself is created after, because an unusable spec should
+	// leave nothing behind — a runs/ full of empty directories from typos is
+	// how a reader loses track of which runs happened.
+	subj, err := subject.Parse(o.subject, subject.Options{
+		Timeout:     o.subjectTimeout,
+		Dir:         o.subjectDir,
+		Env:         o.subjectEnv,
+		ArtifactDir: outDir,
+	})
+	if err != nil {
+		return err
 	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return fmt.Errorf("output directory: %w", err)
@@ -123,10 +140,6 @@ func runEval(ctx context.Context, o *options, out, progress io.Writer) error {
 		Logger:          logger,
 	}
 
-	selected, err := runner.Selection()
-	if err != nil {
-		return err
-	}
 	logger.Info("simian-eval: starting",
 		slog.String("run", runID),
 		slog.String("subject", subj.Name()),

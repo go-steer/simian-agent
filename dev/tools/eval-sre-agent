@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Score a pack against core-sre-agent on a cluster that is already up.
+#
+# The counterpart to eval-lookout, and the reason that one exists first. This
+# subject is an LLM agent: its score moves for the fault, for the agent, and
+# for sampling noise, and only the deterministic detector's row can tell those
+# apart. Read the two rows together or neither means much.
+#
+#   dev/tools/eval-sre-agent --only lookout-crash-loop
+#   dev/tools/eval-sre-agent --pack parity
+#
+# Extra arguments are passed through to simian-eval, and a repeated flag takes
+# its last value, so every default below can be overridden.
+#
+# # This one costs money
+#
+# Unlike every other tool in here, a run spends real model tokens. Nine
+# scenarios is nine independent agent sessions, each of which delegates across
+# a specialist roster. Start with --only.
+set -euo pipefail
+. "$(dirname "$0")/common.sh"
+cd "$(repo_root)"
+
+# The agent is built from a checkout rather than the module proxy, because it
+# is the thing under test here and the interesting version is usually the one
+# on somebody's disk. Point SIMIAN_SRE_AGENT_BIN at a build to skip this.
+agent_src="${SIMIAN_SRE_AGENT_SRC:-$HOME/projects/core-sre-agent}"
+agent="${SIMIAN_SRE_AGENT_BIN:-}"
+if [[ -z "$agent" ]]; then
+  if [[ ! -d "$agent_src" ]]; then
+    echo "ERROR: no core-sre-agent checkout at $agent_src" >&2
+    echo "       set SIMIAN_SRE_AGENT_SRC, or SIMIAN_SRE_AGENT_BIN to a build" >&2
+    exit 1
+  fi
+  agent="$PWD/bin/sre-agent"
+  echo "▸ building sre-agent from $agent_src" >&2
+  mkdir -p "$(dirname "$agent")"
+  (cd "$agent_src" && go build -o "$agent" ./cmd/sre-agent)
+fi
+
+# The agent's own lookout, which is *not* the one eval-lookout grades.
+#
+# It reaches lookout over MCP as a tool, and core-sre-agent pins a much later
+# release than Simian's baseline row does. Both pins are deliberate and they
+# are answering different questions: Simian's is "what does the detector score",
+# and must not float; the agent's is "what tools does the agent have", and is
+# the agent repo's call. Do not unify them — an agent graded against a detector
+# it does not use would be a comparison of two different things.
+lookout_version="${SIMIAN_SRE_AGENT_LOOKOUT_VERSION:-v0.20.0}"
+lookout="${SRE_LOOKOUT_BIN:-$PWD/bin/lookout-$lookout_version}"
+if [[ ! -x "$lookout" ]]; then
+  echo "▸ building k8s-lookout $lookout_version (the agent's tool)" >&2
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+  GOBIN="$tmp" go install "github.com/go-steer/k8s-lookout/cmd/lookout@$lookout_version"
+  mkdir -p "$(dirname "$lookout")"
+  mv "$tmp/lookout" "$lookout"
+fi
+
+kubeconfig="${SIMIAN_E2E_KUBECONFIG:-$PWD/.kube/e2e.yaml}"
+if [[ ! -f "$kubeconfig" ]]; then
+  echo "ERROR: no e2e kubeconfig at $kubeconfig" >&2
+  echo "       run 'make cluster' first, or set SIMIAN_E2E_KUBECONFIG" >&2
+  exit 1
+fi
+
+# The agent refuses to guess at a context and refuses a kubeconfig describing
+# more than one, so the pin is read from the file rather than passed in. A
+# kubeconfig describing one cluster cannot reach a second one, which is the
+# property that makes an unattended run on a shared cluster tolerable.
+kubecontext="$(kubectl --kubeconfig "$kubeconfig" config current-context)"
+
+# Provider credentials. The agent needs a Vertex project and location; nothing
+# in this repo knows what they are, and a run that discovers that eight minutes
+# in has already spent a scenario's lease.
+: "${GOOGLE_CLOUD_PROJECT:?set GOOGLE_CLOUD_PROJECT (e.g. . ~/scripts/gemini.sh)}"
+: "${GOOGLE_CLOUD_LOCATION:?set GOOGLE_CLOUD_LOCATION (e.g. . ~/scripts/gemini.sh)}"
+
+out="${SIMIAN_EVAL_OUT:-runs/sre-agent-$(date -u +%Y%m%d-%H%M%S)}"
+
+echo "▸ core-sre-agent → $out (agent: $agent, its lookout: $lookout)" >&2
+
+# --subject-timeout 12m: the agent's own default is 8 minutes per namespace and
+#   the adapter takes a margin off whatever it is given, so this leaves the
+#   agent its full default with room to write a transcript. It is longer than
+#   several leases in the lookout pack, which the harness refuses outright
+#   rather than let a lease expire mid-investigation and record it as the agent
+#   having remediated the fault. Raise the pack's durations, not this.
+#
+# --concurrency 1: the default fans out, and nine agent sessions against one
+#   Vertex project is how a run discovers a quota it did not know it had.
+#
+# --min-efficacy 1: same assertion as eval-lookout. Every fault must land. The
+#   agent's own numbers are measurements and are never gated — a score that
+#   moved is the whole output.
+exec go run ./cmd/simian-eval \
+  --pack lookout \
+  --subject "sre-agent:$agent -kubeconfig $kubeconfig -context $kubecontext" \
+  --kubeconfig "$kubeconfig" \
+  --subject-env "KUBECONFIG=$kubeconfig" \
+  --subject-env "SRE_LOOKOUT_BIN=$lookout" \
+  --subject-env "GOOGLE_CLOUD_PROJECT=$GOOGLE_CLOUD_PROJECT" \
+  --subject-env "GOOGLE_CLOUD_LOCATION=$GOOGLE_CLOUD_LOCATION" \
+  --subject-env "GOOGLE_GENAI_USE_VERTEXAI=${GOOGLE_GENAI_USE_VERTEXAI:-true}" \
+  --subject-timeout 12m \
+  --concurrency 1 \
+  --min-efficacy 1 \
+  --out "$out" \
+  "$@"
