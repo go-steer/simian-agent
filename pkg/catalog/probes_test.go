@@ -620,8 +620,11 @@ func TestAGateWhoseEvidenceIsAnAbsenceIsNeverFirst(t *testing.T) {
 			if g.expect != "" && g.expectFrom != nil {
 				t.Errorf("%s: %q sets both expect and expectFrom", kind, g.probeName)
 			}
-			if g.timeout == "" {
+			if g.timeout == "" && g.timeoutFrom == nil {
 				t.Errorf("%s: %q has no timeout", kind, g.probeName)
+			}
+			if g.timeout != "" && g.timeoutFrom != nil {
+				t.Errorf("%s: %q sets both timeout and timeoutFrom", kind, g.probeName)
 			}
 		}
 	}
@@ -1159,5 +1162,103 @@ func TestTheBackendCrashLoopGateReadsUnreadyEndpointsNotMissingOnes(t *testing.T
 func TestBackendCrashLoopSynthesizesMoreThanOneBackend(t *testing.T) {
 	if got := KubeStateDefaultReplicas(KubeStateBackendCrashLoop); got < 2 {
 		t.Errorf("default replicas = %d, want at least 2", got)
+	}
+}
+
+// Unschedulable is the one kind whose fault is a duration rather than a state.
+// "Nothing can place this pod" is true two seconds after Apply, and two seconds
+// of Pending is also what a busy scheduler looks like — so the gate holds the
+// condition before it hands the scenario over.
+func TestThePendingGateHoldsBeforeItLetsGo(t *testing.T) {
+	p := DefaultProbes(kubeStateManifest(KubeStateUnschedulable, nil))[0]
+	if got, want := p.Spec["dwell"], KubeStateDefaultPendingDwell.String(); got != want {
+		t.Errorf("dwell = %v, want the default %s", got, want)
+	}
+	// The prober rejects a dwell that fills its whole timeout — the hold only
+	// starts once the condition holds — so the two have to move together.
+	timeout, err := time.ParseDuration(p.Spec["timeout"].(string))
+	if err != nil {
+		t.Fatalf("timeout %v: %v", p.Spec["timeout"], err)
+	}
+	if timeout <= KubeStateDefaultPendingDwell {
+		t.Errorf("timeout %s does not clear the %s dwell", timeout, KubeStateDefaultPendingDwell)
+	}
+}
+
+// A scenario written to be seen by an observer with a longer grace period says
+// so, and the budget follows the dwell up. This is the mechanism the lookout
+// parity pack's `pending` scenario uses: k8s-lookout will not call a Pending pod
+// a fault until it is five minutes old.
+func TestAManifestCanLengthenThePendingDwellAndTheBudgetFollows(t *testing.T) {
+	p := DefaultProbes(kubeStateManifest(KubeStateUnschedulable, map[string]any{
+		"pending_dwell": "5m30s",
+	}))[0]
+	if got := p.Spec["dwell"]; got != "5m30s" {
+		t.Errorf("dwell = %v, want the 5m30s the manifest asked for", got)
+	}
+	timeout, err := time.ParseDuration(p.Spec["timeout"].(string))
+	if err != nil {
+		t.Fatalf("timeout %v: %v", p.Spec["timeout"], err)
+	}
+	if timeout <= 5*time.Minute+30*time.Second {
+		t.Errorf("timeout %s does not clear the dwell the manifest asked for", timeout)
+	}
+	// And the whole gate still has to fit inside a lease the executor will
+	// grant, or the scenario cannot be run at all. The ceiling is spelled out
+	// rather than imported: pkg/executor imports this package.
+	const durationCeiling = 15 * time.Minute
+	if timeout >= durationCeiling {
+		t.Errorf("timeout %s does not fit under the %s duration ceiling", timeout, durationCeiling)
+	}
+}
+
+func TestThePendingDwellIsBoundedAndSurvivesNonsense(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		spec map[string]any
+		want time.Duration
+	}{
+		{"absent", nil, KubeStateDefaultPendingDwell},
+		{"unparseable", map[string]any{"pending_dwell": "soon"}, KubeStateDefaultPendingDwell},
+		{"wrong type", map[string]any{"pending_dwell": 330}, KubeStateDefaultPendingDwell},
+		// Zero is a real choice: it asks for the old behaviour, where the first
+		// true reading is enough.
+		{"zero", map[string]any{"pending_dwell": "0s"}, 0},
+		{"negative", map[string]any{"pending_dwell": "-1m"}, 0},
+		// Clamped, not rejected. The gate is Simian's own knob, and refusing to
+		// inject over it would trade a short hold for no experiment at all.
+		{"over the ceiling", map[string]any{"pending_dwell": "1h"}, KubeStatePendingDwellCeiling},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := kubeStateManifest(KubeStateUnschedulable, tc.spec)
+			if got := KubeStatePendingDwell(m); got != tc.want {
+				t.Errorf("dwell = %s, want %s", got, tc.want)
+			}
+			// A zero dwell is absence, not "dwell: 0s": the prober would have
+			// nothing to do with it, and an explicit zero in the spec reads
+			// like a setting somebody chose to be meaningful.
+			p := DefaultProbes(m)[0]
+			if tc.want == 0 {
+				if _, ok := p.Spec["dwell"]; ok {
+					t.Errorf("dwell = %v, want the key absent", p.Spec["dwell"])
+				}
+				return
+			}
+			if got := p.Spec["dwell"]; got != tc.want.String() {
+				t.Errorf("probe dwell = %v, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// The other kind that reads Unschedulable does not hold, and the difference is
+// the point. UnboundClaim's fault is the claim being Pending, which its own
+// first gate proves outright; the pod's Unschedulable is a consequence, and a
+// consequence does not need to age to be real.
+func TestTheClaimGateDoesNotInheritThePendingDwell(t *testing.T) {
+	for _, p := range DefaultProbes(kubeStateManifest(KubeStateUnboundClaim, nil)) {
+		if _, ok := p.Spec["dwell"]; ok {
+			t.Errorf("%s holds for %v; only the aging fault should", p.Name, p.Spec["dwell"])
+		}
 	}
 }

@@ -17,6 +17,9 @@ package catalog
 import (
 	"encoding/base64"
 	"strings"
+	"time"
+
+	"github.com/go-steer/simian-agent/pkg/simian"
 )
 
 // Fault kinds synthesized by the kube-state engine.
@@ -122,6 +125,47 @@ var kubeStateDefaultReplicas = map[string]int{
 // convenience, not the reason: a gate tuned to one subject's thresholds would
 // score that subject on Simian's timing rather than on its judgement.
 const KubeStateCrashLoopRestarts = 5
+
+// KubeStateDefaultPendingDwell is how long an Unschedulable pod has to stay
+// Pending before the gate will hand the scenario to a subject.
+//
+// Ninety seconds, and this repo picked the number before it had a reason to
+// defend it — the pending scenario's own comment says "a pod Pending for two
+// seconds is a slow scheduler and a pod Pending for ninety is a fault". That is
+// the distinction the dwell exists to make. Below it the state is
+// indistinguishable from a scheduler working through a queue, or from an
+// autoscaler that is about to add a node and heal the fault; above it, nothing
+// automatic is coming.
+//
+// It is not chosen to clear any particular observer's grace period, and it does
+// not clear every one of them: k8s-lookout's `--pending-age` defaults to five
+// minutes, so a scenario written to be *seen* by that detector has to say so
+// itself. That is what spec.pending_dwell is for, and why the default is
+// Simian's own line rather than the longest threshold in the field — a gate
+// tuned to one subject's dwell would score that subject on Simian's clock.
+const KubeStateDefaultPendingDwell = 90 * time.Second
+
+// KubeStatePendingDwellCeiling bounds spec.pending_dwell. The gate's budget is
+// the dwell plus headroom and the whole thing comes out of the fault's own
+// lease, which cannot exceed the executor's duration ceiling.
+const KubeStatePendingDwellCeiling = 10 * time.Minute
+
+// KubeStatePendingDwell is how long this manifest's Unschedulable gate holds.
+//
+// Over the ceiling is clamped rather than rejected, because the alternative is
+// a scenario that fails to apply at read time for a field that is advisory: the
+// gate is Simian's own, not the operator's, and refusing to inject a fault over
+// a probe's timing knob would trade a slightly-short hold for no experiment.
+func KubeStatePendingDwell(m simian.FaultManifest) time.Duration {
+	d, ok := durationField(m.Spec, "pending_dwell")
+	if !ok {
+		return KubeStateDefaultPendingDwell
+	}
+	if d < 0 {
+		return 0
+	}
+	return min(d, KubeStatePendingDwellCeiling)
+}
 
 // KubeStateDefaultReplicas is how many replicas a kind synthesizes when the
 // manifest does not choose.

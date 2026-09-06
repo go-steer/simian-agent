@@ -93,6 +93,7 @@ port over without translation.
 | `expect_contains` | one of | Substring that must appear in the output |
 | `expect_empty` | one of | Require *blank* output instead |
 | `expect_at_least` | one of | Read the output as counters; every one must be at least this |
+| `dwell` | optional | The condition must keep holding this long before the probe passes; must be shorter than `timeout` |
 | `namespace` | no | Defaults to the fault's own target namespace |
 | `name` | no | Read one named object instead of listing |
 | `label_selector` | no | Narrow the list; mutually exclusive with `name` |
@@ -488,6 +489,37 @@ a gate as much as a fault does: without one it would "inject" successfully
 against a cluster too broken to run anything, and the subject's correct report
 of nothing wrong would be scored as a correct answer rather than as the vacuous
 pass it is.
+
+### When the fault is an age, the gate has to hold
+
+`Unschedulable` is the one kind in this table whose fault is a *duration* rather
+than a state. Every other kind has a moment where the thing became true — the
+image failed to pull, the container was OOM-killed. "No node can place this pod"
+is true two seconds after Apply, and two seconds of Pending is also exactly what
+a scheduler working through a queue looks like, or an autoscaler about to add a
+node and heal the fault mid-experiment.
+
+So this gate takes a `dwell`: the condition has to keep holding, poll after
+poll, before the probe agrees. The clock starts when the condition first holds
+and **restarts** if it stops — a flicker is not a hold, and a read that failed is
+not evidence the state was still there. The prober rejects a dwell that fills its
+whole timeout, since the hold cannot start before the condition does.
+
+The default is 90 seconds, which is this repo's own line: a pod Pending for two
+seconds is a slow scheduler and a pod Pending for ninety is a fault. It is
+deliberately *not* chosen to clear any particular observer's grace period, and
+it does not clear every one of them — k8s-lookout's `--pending-age` defaults to
+five minutes. A gate tuned to one subject's threshold would score that subject
+on Simian's clock rather than on its judgement, which is the same argument that
+sets the crash-loop restart count.
+
+A scenario that needs to outlast a longer grace says so itself, with
+`spec.pending_dwell`, and the gate's budget follows it up. The lookout parity
+pack's `pending` scenario is the one place that is the right call: a pack whose
+purpose is to reproduce another project's own examples has to be visible to that
+project's detector, or it measures the grace period instead of the diagnosis.
+The whole hold comes out of the fault's lease, so raising it means raising the
+duration too.
 
 ### Healthy is two clocks, and the second one trails
 

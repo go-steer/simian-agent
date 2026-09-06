@@ -453,6 +453,7 @@ Spec (every field optional):
 Spec (every field optional):
   {"request_cpu": "1000"}
   {"node_selector": {"failure-domain.example.com/zone": "nowhere"}}
+  {"pending_dwell": "5m30s"}
 
   - request_cpu:   CPU request no node can satisfy. The default is far beyond
                    any real machine shape on purpose: a merely large request is
@@ -461,6 +462,13 @@ Spec (every field optional):
   - node_selector: alternative mechanism; use when the scenario is about
                    placement rather than capacity. Mutually exclusive with
                    request_cpu — if set, request_cpu is ignored.
+  - pending_dwell: how long the pod must stay Pending before the efficacy gate
+                   hands the scenario over, default 90s, capped at 10m. This
+                   one is a gate knob rather than a workload knob — the driver
+                   does not read it — and it is here because it is the only
+                   kind whose fault is an age: two seconds of Pending is a busy
+                   scheduler. Raise it for a subject with a longer grace period
+                   than Simian's; the whole hold comes out of the fault's lease.
 ` + commonSpecNotes,
 
 	KindJobFailure: `Creates a Job whose pods exit non-zero until it gives up.

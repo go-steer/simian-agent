@@ -692,3 +692,152 @@ func TestListMetadataIsReachableFromAJsonpath(t *testing.T) {
 		t.Fatalf("items[*] did not resolve: %+v", res)
 	}
 }
+
+// --- dwell ---
+
+// A fault can be technically true long before it is diagnosable, and a gate
+// that lets go at the first true reading hands the subject a transient. dwell
+// is the general form of the fix: the condition has to keep saying the same
+// thing for a while before the probe agrees.
+func TestK8sProbeHoldsTheConditionForTheDwellBeforePassing(t *testing.T) {
+	dyn := newFakeDyn(pod("boutique", "payments-1", "CrashLoopBackOff"))
+	p := NewK8sProber(dyn, testMapper())
+
+	spec := crashLoopSpec()
+	spec["dwell"] = "150ms"
+	spec["timeout"] = "5s"
+
+	start := time.Now()
+	res := p.Run(context.Background(), k8sProbe(spec), Target{Namespace: "boutique"})
+	elapsed := time.Since(start)
+	if res.Err != nil {
+		t.Fatalf("Err: %v", res.Err)
+	}
+	if !res.Passed {
+		t.Fatalf("probe did not pass; observed %q", res.Observed)
+	}
+	// True on the very first read, and it still waited.
+	if elapsed < 150*time.Millisecond {
+		t.Errorf("passed after %s, want at least the 150ms dwell", elapsed)
+	}
+	if res.Attempts < 2 {
+		t.Errorf("Attempts=%d, want more than one — a dwell that passes on the first poll is not a dwell", res.Attempts)
+	}
+	if !strings.Contains(res.Expected, "held for") {
+		t.Errorf("Expected=%q, want the dwell named in it", res.Expected)
+	}
+}
+
+// The clock restarts rather than accumulating. "Steady" is the claim, and a
+// state that came back is not one that stayed — which is exactly the crash-loop
+// shape this repo has been bitten by: CrashLoopBackOff is visible on roughly
+// one poll in six early on, so a dwell that summed those polls would call a
+// flicker steady.
+func TestADwellRestartsWhenTheConditionFlickers(t *testing.T) {
+	dyn := newFakeDyn()
+	var mu sync.Mutex
+	reads := 0
+	dyn.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		mu.Lock()
+		reads++
+		n := reads
+		mu.Unlock()
+		// True, true, false, then true forever. Only the last run can satisfy
+		// a dwell longer than two intervals.
+		reason := "CrashLoopBackOff"
+		if n == 3 {
+			reason = ""
+		}
+		list := &unstructured.UnstructuredList{Object: map[string]any{
+			"apiVersion": "v1", "kind": "PodList",
+		}}
+		list.Items = []unstructured.Unstructured{*pod("boutique", "payments-1", reason)}
+		return true, list, nil
+	})
+	p := NewK8sProber(dyn, testMapper())
+
+	spec := crashLoopSpec()
+	spec["dwell"] = "100ms"
+	spec["interval"] = "20ms"
+	spec["timeout"] = "5s"
+
+	res := p.Run(context.Background(), k8sProbe(spec), Target{Namespace: "boutique"})
+	if !res.Passed {
+		t.Fatalf("probe never passed; observed %q, attempts %d", res.Observed, res.Attempts)
+	}
+	// Without the restart the first two trues plus the run after the flicker
+	// would have added up to the dwell several polls earlier.
+	if res.Attempts < 8 {
+		t.Errorf("Attempts=%d, want the dwell to have started over after the flicker", res.Attempts)
+	}
+}
+
+// A read that failed is not evidence the condition still holds. The transient
+// is tolerated — the probe keeps going — but it does not count towards a claim
+// that the state was continuously observable.
+func TestADwellRestartsWhenAReadFails(t *testing.T) {
+	dyn := newFakeDyn()
+	var mu sync.Mutex
+	reads := 0
+	dyn.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		mu.Lock()
+		reads++
+		n := reads
+		mu.Unlock()
+		if n == 3 {
+			return true, nil, errors.New("etcdserver: request timed out")
+		}
+		list := &unstructured.UnstructuredList{Object: map[string]any{
+			"apiVersion": "v1", "kind": "PodList",
+		}}
+		list.Items = []unstructured.Unstructured{*pod("boutique", "payments-1", "CrashLoopBackOff")}
+		return true, list, nil
+	})
+	p := NewK8sProber(dyn, testMapper())
+
+	spec := crashLoopSpec()
+	spec["dwell"] = "100ms"
+	spec["interval"] = "20ms"
+	spec["timeout"] = "5s"
+
+	res := p.Run(context.Background(), k8sProbe(spec), Target{Namespace: "boutique"})
+	if !res.Passed {
+		t.Fatalf("probe never passed; observed %q, attempts %d", res.Observed, res.Attempts)
+	}
+	if res.Err != nil {
+		t.Fatalf("Err: %v — a transient read failure is not a probe failure", res.Err)
+	}
+	if res.Attempts < 8 {
+		t.Errorf("Attempts=%d, want the dwell to have started over after the failed read", res.Attempts)
+	}
+}
+
+// A dwell the probe has no room to serve reads like a strict gate and behaves
+// like a race: it can only pass when the condition was already true on the
+// first poll.
+func TestADwellThatFillsTheWholeTimeoutIsRejected(t *testing.T) {
+	dyn := newFakeDyn(pod("boutique", "payments-1", "CrashLoopBackOff"))
+	p := NewK8sProber(dyn, testMapper())
+	for _, dwell := range []string{"1s", "2s"} {
+		spec := crashLoopSpec()
+		spec["dwell"] = dwell
+		spec["timeout"] = "1s"
+		res := p.Run(context.Background(), k8sProbe(spec), Target{Namespace: "boutique"})
+		if res.Err == nil {
+			t.Errorf("dwell %s against a 1s timeout was accepted", dwell)
+		}
+	}
+}
+
+// And a probe that declares no dwell behaves exactly as it did before.
+func TestNoDwellPassesOnTheFirstSatisfiedPoll(t *testing.T) {
+	dyn := newFakeDyn(pod("boutique", "payments-1", "CrashLoopBackOff"))
+	p := NewK8sProber(dyn, testMapper())
+	res := p.Run(context.Background(), k8sProbe(crashLoopSpec()), Target{Namespace: "boutique"})
+	if !res.Passed || res.Attempts != 1 {
+		t.Errorf("Passed=%v Attempts=%d, want a pass on the first poll", res.Passed, res.Attempts)
+	}
+	if strings.Contains(res.Expected, "held for") {
+		t.Errorf("Expected=%q mentions a dwell it does not have", res.Expected)
+	}
+}

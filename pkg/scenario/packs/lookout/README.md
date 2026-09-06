@@ -21,7 +21,7 @@ As with the parity pack, there is no Go dependency in either direction.
 | `image-pull`      | `image-pull`       | `ImageUnresolvable`  | — |
 | `oom`             | `oom`              | `MemoryLimitSqueeze` | fixed allocation rather than a ramp |
 | `pdb-gridlock`    | `pdb-gridlock`     | `PDBGridlock`        | budget written with no headroom rather than scaled into gridlock |
-| `pending`         | `pending`          | `Unschedulable`      | engine-default CPU request rather than 64 cores |
+| `pending`         | `pending`          | `Unschedulable`      | engine-default CPU request rather than 64 cores; gate holds 5m30s |
 | `failed-mount`    | — | — | **no kind** |
 | `node-failure`    | — | — | **no kind** |
 | —                 | `healthy`          | `NoOp`               | added: the set has no control |
@@ -100,13 +100,32 @@ landed — `efficacy rate 1.00`:
 | `pdb-gridlock` | **0.00** | 0.33 |
 | `pending` | **0.00** | 1.00 |
 
-The three zeroes are Simian's, not the detector's, and are tracked as #110. The
-diagnosed one is `pending`: the observer's pod-level check has a five-minute
-dwell before it will call a Pending pod a fault, and Simian's efficacy gate
-passes about two seconds after apply — the pod really is Pending and really is
-`Unschedulable`, which is true and is not the same as steady. So the subject is
-asked while it is still, by its own definition, looking at a slow scheduler.
+The three zeroes were all filed as Simian's under #110. One of them was.
+
+**`pending` was ours.** The observer's pod-level check has a five-minute dwell
+before it will call a Pending pod a fault, and Simian's efficacy gate passed
+about two seconds after apply — the pod really was Pending and really was
+`Unschedulable`, which is true and is not the same as steady. So the subject was
+asked while it was still, by its own definition, looking at a slow scheduler.
 Same shape as the crash-loop bug this pack already caught, in a different kind.
+The gate now holds: `Unschedulable` takes a `dwell`, defaulting to 90 seconds,
+and this scenario raises it to `5m30s` with a matching `duration: 12m`. That
+number is calibrated to the detector, which an *engine default* must never be —
+but a pack whose whole purpose is to reproduce another project's examples has to
+be visible to that project's detector, or it measures the grace period instead
+of the diagnosis. The scenario says so in its own comments.
+
+**`pdb-gridlock` and `endpoints-empty` were not.** Both were re-tested by hand on
+GKE against a namespace built to order — a two-replica Deployment under a
+`minAvailable: 2` budget sitting at `disruptionsAllowed: 0`, and a Service whose
+selector matched nothing. Both faults were unambiguously present, and the verb
+the subject adapter invokes reported neither. `lookout health` excludes the
+`pdb` class by design — gridlock is disruption *readiness*, not one of the health
+categories it scans — while `lookout triage delta` names it instantly. And no
+one-shot verb reports an empty-endpoints Service at all;
+`objectstate.endpoints_empty` exists only in the watch source. Those are upstream
+coverage gaps in the verb, not fault-timing bugs here, and are filed as such with
+the scenarios attached.
 
 The control has its own version of it, and it took a slow machine to see. On a
 two-core GitHub runner `healthy` scored severity **0.33**, against 1.00 twice on
