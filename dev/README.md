@@ -38,6 +38,7 @@ dev/
 │   ├── cluster-up         # kind + Calico + Chaos Mesh   (`make cluster`)
 │   ├── cluster-down       # tear it down                 (`make cluster-down`)
 │   ├── test-e2e           # go test -tags e2e ./test/... (`make e2e`)
+│   ├── eval-lookout       # score the lookout pack       (`make eval-lookout`)
 │   ├── common.sh          # shared bash helpers (ensure_tool, run_step)
 │   └── .golangci.yml      # linter config
 ├── kind/
@@ -120,10 +121,40 @@ that, and `dev/kind/cluster.yaml` for why the default CNI is not used.
 was killed before teardown, clear the leftover with
 `go run ./internal/kindcluster/kindctl reap`.
 
-CI runs this as the `e2e-kind` workflow on push to `main`, not on PRs — it
-pulls Calico and the Chaos Mesh chart from the network, and a required check
+## Scoring the rig against a real detector
+
+`make e2e` asserts the substrate works. The next tier asserts the whole
+pipeline does — inject, gate on efficacy, ask a subject, score:
+
+```bash
+make cluster
+make eval-lookout                                    # the whole pack, ~6 min
+make eval-lookout ARGS="--only lookout-image-pull"   # one scenario
+```
+
+The subject is [k8s-lookout](https://github.com/go-steer/k8s-lookout), pinned
+to a released version in `dev/tools/eval-lookout` and built from the module
+proxy — the two repos share no Go dependency in either direction, and argv and
+text are the whole contract between them.
+
+That it is a *detector* rather than an agent is the point. An agent's score
+moves for three reasons: the fault, the agent, and sampling noise. A detector
+returns the same findings for the same namespace, so there is no third term,
+and two runs of one scenario that disagree are a bug in Simian — a fault that
+landed late, an efficacy gate that passed early, an arena that leaked into the
+next scenario. That is a test no agent subject can produce.
+
+What the run fails on is the **efficacy rate**, not the score. Every fault in
+the pack must become observable before its probes give up. Recall is printed
+and not gated: it is a measurement of the detector, and a detector that got
+worse at diagnosing a namespace is k8s-lookout's bug to fix.
+
+CI runs both tiers as the `e2e-kind` workflow on push to `main`, not on PRs —
+it pulls Calico and the Chaos Mesh chart from the network, and a required check
 that can fail on someone else's CDN taxes every PR. It is not one of the four
-gating checks.
+gating checks. Push gets a three-scenario eval smoke; a weekly cron and manual
+dispatch get the whole pack, with `run.json` kept as an artifact so the
+detector baseline can be compared across weeks.
 
 ## License headers
 

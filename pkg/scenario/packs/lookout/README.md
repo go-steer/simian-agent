@@ -78,3 +78,40 @@ cares to look, so which spelling a subject reaches for is its own judgement
 rather than an accident of when the scan landed. Getting that wrong cost a run:
 before the gates were fixed, three identical runs scored severity 0.67, 1.00,
 1.00.
+
+## What the pack scores today
+
+The reference measurement, and the reason it is worth writing down: the subject
+is a detector, so these numbers are a property of the pack rather than of a
+model's mood. Two consecutive runs that disagree are a bug in Simian.
+
+k8s-lookout v0.9.0, kind (3 nodes, Kubernetes v1.36.1), whole pack, every fault
+landed — `efficacy rate 1.00`:
+
+| Scenario | recall | severity |
+| --- | --- | --- |
+| `bad-rollout` | 1.00 | 1.00 |
+| `cert-expiry` | 1.00 | 1.00 |
+| `crash-loop` | 1.00 | 1.00 |
+| `endpoints-empty` | **0.00** | 0.33 |
+| `healthy` (control) | — | 1.00 |
+| `image-pull` | 1.00 | 1.00 |
+| `oom` | 1.00 | 0.67 |
+| `pdb-gridlock` | **0.00** | 0.33 |
+| `pending` | **0.00** | 1.00 |
+
+The three zeroes are Simian's, not the detector's, and are tracked as #110. The
+diagnosed one is `pending`: the observer's pod-level check has a five-minute
+dwell before it will call a Pending pod a fault, and Simian's efficacy gate
+passes about two seconds after apply — the pod really is Pending and really is
+`Unschedulable`, which is true and is not the same as steady. So the subject is
+asked while it is still, by its own definition, looking at a slow scheduler.
+Same shape as the crash-loop bug this pack already caught, in a different kind.
+
+`crash-loop`, `image-pull` and `healthy` are the three the `e2e-kind` workflow
+runs on every push to `main` — a fault that lands in seconds, one that takes
+four minutes to become steady, and the case where reporting nothing is the
+right answer. The whole pack runs weekly. Keep the list in
+`.github/workflows/e2e-kind.yml` in step with the IDs here; a stale one fails
+the run rather than silently testing less, because `--only` refuses an ID the
+pack does not contain.

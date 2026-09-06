@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Score the lookout pack against a cluster that is already up (`make cluster`).
+#
+# This is the rig grading itself. k8s-lookout is a deterministic detector, not
+# an agent: given the same namespace it returns the same findings, so two runs
+# of one scenario that disagree are a bug in Simian — a fault that landed late,
+# an efficacy gate that passed early, an arena that leaked into the next
+# scenario. That is a regression test no agent subject can produce, because
+# with an agent a moved score has three possible causes and only one of them is
+# ours.
+#
+#   dev/tools/eval-lookout
+#   dev/tools/eval-lookout --only lookout-image-pull,lookout-healthy
+#
+# Extra arguments are passed through to simian-eval, and a repeated flag takes
+# its last value, so every default below can be overridden on the command line.
+#
+# Kept out of dev/tools/ci, like test-e2e: the unit suite must stay runnable
+# with no cluster, no Docker and no network.
+set -euo pipefail
+. "$(dirname "$0")/common.sh"
+cd "$(repo_root)"
+
+# Pinned, and bumping it is a deliberate act.
+#
+# The detector is the baseline row of every scorecard — the number an agent
+# subject is compared against. If it floats with whatever k8s-lookout released
+# this morning, a score that moved between two Simian commits cannot be
+# attributed to either of them, which is the one thing this run exists to do.
+# Point SIMIAN_LOOKOUT_BIN at a local build to grade an unreleased detector.
+LOOKOUT_VERSION="${SIMIAN_LOOKOUT_VERSION:-v0.9.0}"
+
+kubeconfig="${SIMIAN_E2E_KUBECONFIG:-$PWD/.kube/e2e.yaml}"
+if [[ ! -f "$kubeconfig" ]]; then
+  echo "ERROR: no e2e kubeconfig at $kubeconfig" >&2
+  echo "       run 'make cluster' first" >&2
+  exit 1
+fi
+
+# The version is in the filename so a bump rebuilds instead of silently reusing
+# the binary the last pin produced — and because the subject adapter names the
+# subject after its binary, which puts the detector's version at the top of the
+# scorecard and into run.json.
+lookout="${SIMIAN_LOOKOUT_BIN:-$PWD/bin/lookout-$LOOKOUT_VERSION}"
+if [[ ! -x "$lookout" ]]; then
+  echo "▸ building k8s-lookout $LOOKOUT_VERSION" >&2
+  # From the module proxy, never from go.mod. The two repos share no Go
+  # dependency in either direction: a subject that linked against Simian's
+  # Kubernetes client could fail in a way correlated with the injector and
+  # produce an eval that passes for the wrong reason. Argv and text are the
+  # whole contract — see pkg/harness/subject's package comment.
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+  GOBIN="$tmp" go install "github.com/go-steer/k8s-lookout/cmd/lookout@$LOOKOUT_VERSION"
+  mkdir -p "$(dirname "$lookout")"
+  mv "$tmp/lookout" "$lookout"
+fi
+
+out="${SIMIAN_EVAL_OUT:-runs/lookout-kind-$(date -u +%Y%m%d-%H%M%S)}"
+
+echo "▸ lookout pack → $out (detector: $lookout)" >&2
+
+# Three defaults worth explaining:
+#
+# --subject-env KUBECONFIG: the subject is a child process, and a child that
+#   falls back to ~/.kube/config scans a different cluster than the one the
+#   harness just injected into. That failure is silent and it is the worst one
+#   this rig has — every scenario scores 0.00 recall next to a 1.00 efficacy
+#   rate, which reads exactly like a detector that missed everything.
+#
+# --subject-timeout: the detector answers in about a tenth of a second. The
+#   10m default is longer than most leases in this pack, and the harness
+#   refuses that outright rather than let a lease expire mid-investigation and
+#   be recorded as the subject having remediated the fault.
+#
+# --min-efficacy 1: every fault in this pack has landed on every kind run so
+#   far, so anything less is a regression in Simian, which is the whole
+#   assertion. Recall is deliberately not gated: that number is a measurement
+#   of the detector, and a detector that gets worse is k8s-lookout's bug to
+#   fix, not a reason to fail Simian's build.
+exec go run ./cmd/simian-eval \
+  --pack lookout \
+  --subject "lookout:$lookout" \
+  --kubeconfig "$kubeconfig" \
+  --subject-env "KUBECONFIG=$kubeconfig" \
+  --subject-timeout 2m \
+  --min-efficacy 1 \
+  --out "$out" \
+  "$@"

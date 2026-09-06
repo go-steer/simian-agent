@@ -235,6 +235,13 @@ then clear the chaos and put the namespace back.
 
 Full flag table in the [CLI reference](https://go-steer.github.io/simian-agent/docs/cli-reference/).
 
+`make cluster && make eval-lookout` runs all of that against a local kind
+cluster with [k8s-lookout](https://github.com/go-steer/k8s-lookout) as the
+subject, which is also what CI does on every push to `main`. A detector, not an
+agent, and that is the point: it returns the same findings for the same
+namespace, so two runs of one scenario that disagree are a bug in Simian rather
+than a subject having a bad day.
+
 ## Quick start
 
 ```bash
