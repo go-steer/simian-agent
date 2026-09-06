@@ -67,6 +67,14 @@ func section(t *testing.T, from, to string) string {
 	return rest[:end]
 }
 
+// The two halves of the edge that these tests read. Both Services and both
+// Deployments carry the same metadata block, so the Deployment is anchored on
+// the kind above it rather than on its name.
+const (
+	edgeDeployment = "kind: Deployment\nmetadata:\n  name: edge\n"
+	edgeTemplate   = "  default.conf.tmpl: |"
+)
+
 func stripComments(s string) string {
 	var kept []string
 	for _, line := range strings.Split(s, "\n") {
@@ -132,14 +140,43 @@ func TestTheWorkloadNamesAreTheOnesScenariosUse(t *testing.T) {
 // different diagnosis — one the fixture did not inject and the subject would
 // be right to report.
 func TestTheEdgeIsNotRestartedByASlowUpstream(t *testing.T) {
-	edge := section(t, "name: edge-config", "")
-	if !strings.Contains(edge, `path: /healthz`) {
+	if d := section(t, edgeDeployment, ""); !strings.Contains(d, `path: /healthz`) {
 		t.Fatal("the edge's liveness probe does not use the local /healthz path")
 	}
 	// The proxied path is the readiness one. Belt and braces: if these ever
 	// converge, the pair of scenarios stops measuring what it claims to.
-	if strings.Count(edge, "proxy_pass") != 1 {
-		t.Errorf("the edge proxies on %d locations; exactly one — the readiness path — should", strings.Count(edge, "proxy_pass"))
+	//
+	// Scoped to the config and not to the rest of the file, so that a comment
+	// mentioning the directive does not read as a second location block.
+	conf := section(t, edgeTemplate, "kind: Service")
+	if n := strings.Count(conf, "proxy_pass"); n != 1 {
+		t.Errorf("the edge proxies on %d locations; exactly one — the readiness path — should", n)
+	}
+}
+
+// The caller has to resolve the callee's name per request, or dns-blackhole
+// cannot be staged against it: Chaos Mesh injects DNS chaos by rewriting a
+// running pod's resolv.conf, and nginx reads that file once, at start.
+//
+// Three things have to hold together for that, and any one of them alone
+// looks like a stylistic choice someone could tidy away. Verified on GKE: with
+// the literal upstream host the CR reports AllInjected, nslookup inside the
+// pod fails, and nginx serves 200 throughout.
+func TestTheCallerResolvesTheCalleePerRequest(t *testing.T) {
+	conf := section(t, edgeTemplate, "kind: Service")
+	if !strings.Contains(conf, "resolver __RESOLVER__") {
+		t.Error("the edge config has no resolver directive; a variable upstream will not load")
+	}
+	if !strings.Contains(conf, "proxy_pass http://$callee") {
+		t.Error("the edge proxies to a literal host; nginx will resolve it once and hold the address for the life of the process")
+	}
+
+	// And the rendering, without which the two placeholders are just text.
+	d := section(t, edgeDeployment, "")
+	for _, want := range []string{"s/__RESOLVER__/$NS/", "s/__CALLEE__/upstream.$SD/", "nginx -s reload"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("the edge container command no longer contains %q", want)
+		}
 	}
 }
 

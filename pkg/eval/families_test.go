@@ -208,6 +208,18 @@ var faultKindReports = map[string]kindVocabulary{
 			"HTTP503", "ServiceUnavailable", "Error5xx", "ServerError",
 		},
 	},
+	// Deliberately not sharing a family with NetworkChaos. A blackholed name
+	// and a severed path are the pack's closest pair of causes — same symptom,
+	// same status class at the caller, one measurement apart — so the two kinds
+	// have to charge each other or neither is being tested.
+	"DNSChaos": {
+		families: []string{"dns-failure", "dependency"},
+		reasons: []string{
+			"DNSFailure", "DNSResolutionFailure", "NameResolutionFailure",
+			"NXDOMAIN", "ServFail", "NoSuchHost", "HostNotFound",
+			"UpstreamError", "UpstreamUnavailable",
+		},
+	},
 }
 
 // TestEveryFaultKindNamesItsOwnFamily is the guard familyOf's doc comment

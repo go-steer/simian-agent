@@ -424,7 +424,7 @@ than the fault:
 | `dataplane-healthy` | `NoOp`, over a healthy substrate | The pack's precision floor: the namespace where "it is slow" is wrong | shipped |
 | `abort-503-not-a-bug` | HTTPChaos synthetic 503 | Looks like an application bug in the wrong service | shipped |
 | `partition-one-way` | NetworkChaos partition, `direction: to` | Both ends look healthy in isolation | shipped |
-| `dns-blackhole-partial` | DNSChaos on one name | Intermittent, and the failing pod is not the misconfigured one | |
+| `dns-blackhole-partial` | DNSChaos on one name | The lookup fails and the address is reachable; nothing is dropping packets | shipped |
 
 `stress-real` and `latency-not-saturation` as a matched pair is the point: an
 agent that says "it's slow, scale it up" scores well on one and badly on the
@@ -448,17 +448,27 @@ HTTPChaos response replacement leaves the callee's own health probes returning
 200 on a different path, which is what makes the 5xx scenario's misattribution
 trap work.
 
-All four critical scenarios ended up producing the same object status — caller
+All five critical scenarios ended up producing the same object status — caller
 0/2 Ready, callee 2/2 — which was not planned and is the pack's best property.
-They are four causes behind one symptom, and the API server distinguishes none
+They are five causes behind one symptom, and the API server distinguishes none
 of them.
 
-`dns-blackhole-partial` is the one still outstanding, and it needs a substrate
-change rather than just a scenario file: nginx resolves a literal `proxy_pass`
-hostname once at startup, so DNSChaos against the caller is measurably applied
-and changes nothing at all. Verified on GKE — `nslookup` from inside the caller
-fails while the caller goes on serving 200. Making it re-resolve is a small
-edit and belongs with that scenario rather than ahead of it.
+`dns-blackhole-partial` was the one that needed a substrate change rather than
+just a scenario file, and the reason is worth recording because it is a claim
+about live clusters and not only about this fixture. Chaos Mesh injects DNS
+chaos by rewriting a running pod's `/etc/resolv.conf`; nginx reads that file
+once, at config load. So the first attempt applied cleanly, reported
+`AllInjected=true`, made `nslookup` fail inside the caller — and the caller went
+on serving 200 throughout. The substrate now proxies through a variable and
+reloads on a resolv.conf change, which is what a real nginx deployment does for
+the same reason. Any DNS finding an agent reports about a long-lived process is
+worth less than it looks for exactly this reason.
+
+With it, the three network-shaped scenarios form a second matched set alongside
+the pair: a slow link, a severed link and an unresolvable name are one symptom
+and three families, and each of the three charges the other two's diagnosis.
+The measurement that separates the last two is the cheapest in the pack —
+resolve the name, then dial the address.
 
 ### 6.3 `cmd/simian-eval`
 

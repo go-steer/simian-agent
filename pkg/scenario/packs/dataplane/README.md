@@ -60,13 +60,13 @@ files, so a subject that reads object status and stops scores identically in
 each — otherwise part of the difference between the two scores would be a
 difference in difficulty rather than in cause.
 
-## The other two
+## The other three
 
-`abort-503-not-a-bug` and `partition-one-way` produce the same object status as
-the pair — caller 0/2 Ready, callee 2/2 — from two more causes, so all four
-critical scenarios in this pack are indistinguishable to a subject that reads
-the API server and stops. What separates them is graded differently in each,
-which is deliberate:
+`abort-503-not-a-bug`, `partition-one-way` and `dns-blackhole-partial` produce
+the same object status as the pair — caller 0/2 Ready, callee 2/2 — from three
+more causes, so all five critical scenarios in this pack are indistinguishable
+to a subject that reads the API server and stops. What separates them is graded
+differently in each, which is deliberate:
 
 | | the fault | what the grade turns on |
 | --- | --- | --- |
@@ -74,6 +74,7 @@ which is deliberate:
 | `stress-real` | CPU stressors in the callee's cgroup | naming CPU rather than the network |
 | `abort-503-not-a-bug` | synthesized 503 on the callee's work path | naming the **callee** as the root |
 | `partition-one-way` | the caller's egress to the callee dropped | naming the link as severed rather than slow |
+| `dns-blackhole-partial` | one name SERVFAILs for the caller | naming the lookup rather than the link |
 
 `abort-503-not-a-bug` is the one graded on an object rather than on a word. A
 status code is an observation — a 503 is what a synthesized abort, a shed load
@@ -101,6 +102,21 @@ than by token, so listing it would license "the link is congested" as well, and
 keeping severed distinguishable from slow is worth more than crediting one
 hedge.
 
+`dns-blackhole-partial` is the one told apart by the cheapest measurement in
+the pack: resolve the name, then dial the address. The lookup fails and the
+dial succeeds, which is true in no other scenario here. It is scored against
+`partition-one-way` in both directions — `dns-failure` and `network-partition`
+are separate families — because "the caller cannot get to the callee" is a true
+sentence about both and a diagnosis of neither. The near miss is "cluster DNS is
+broken": the fault is scoped to a single name, the caller resolves everything
+else, and a subject that generalises from one failing lookup never took the
+second one.
+
+Its `also_true` is the same three tokens as the 5xx scenario's, and that is a
+real constraint rather than copying. All three network-shaped scenarios share
+the observation "the caller's dependency is unavailable to it" and are separated
+only by what they say caused it.
+
 ## The control
 
 `dataplane-healthy` is the namespace where "the callee is slow" is wrong. Given
@@ -115,11 +131,18 @@ cluster and every honest report about it charged as a hallucination.
 
 ## The substrate
 
-All five scenarios name `substrate: edge-upstream` — a caller, a callee, and a
+All six scenarios name `substrate: edge-upstream` — a caller, a callee, and a
 Service between them. See `pkg/sut/edgeupstream/README.md`, particularly the
 part about why the callee runs a CGI work loop instead of returning a static
 200: with a trivial responder, CPU saturation produces no latency at all and
 the matched pair collapses into one scenario measured twice.
+
+The caller proxies through a variable and reloads when `/etc/resolv.conf`
+changes, which is what makes `dns-blackhole-partial` stageable: nginx resolves a
+literal upstream host once, at config load, and Chaos Mesh injects DNS chaos by
+rewriting resolv.conf on a pod that is already running. The first version of the
+substrate was completely immune — CR `AllInjected=true`, `nslookup` failing
+inside the pod, nginx serving 200 throughout.
 
 A scenario needs a substrate at all because the `kube-state` engine cannot
 supply one. It appends a suffix derived from the fault's UID to everything it
@@ -154,13 +177,20 @@ requests.
 which needs a container runtime chaos-daemon can join and a plaintext port to
 intercept; it does not apply to HTTPS. Verified landing on GKE with containerd.
 
-**Neither half of the pair is gated by a default probe,** and neither is
-HTTPChaos or a partition that names a `target`. StressChaos and HTTPChaos have none to
-have — there is no field on any object that says a cgroup is full or that a
-status code was synthesized — a NetworkChaos naming a `target` is refused one
-because the controller stands outside both labelled sets and would see nothing
-change, and the delay gate is written out on purpose and suppresses the default
-by reusing its probe names.
+**DNSChaos** needs the chaos-mesh DNS server component installed (`--set
+dnsServer.create=true`); without it the CR applies and nothing is touched. It
+works by rewriting the nameserver in the target pod's `/etc/resolv.conf`, so it
+does nothing at all to a process that read that file once at startup — which is
+a caveat about live clusters and not only about this fixture, since most
+long-lived clients resolve their dependencies exactly that way.
+
+**No fault in this pack is gated by a default probe.** StressChaos, HTTPChaos
+and DNSChaos have none to have — there is no field on any object that says a
+cgroup is full, that a status code was synthesized, or that a name stopped
+resolving — a NetworkChaos naming a `target` is refused one because the
+controller stands outside both labelled sets and would see nothing change, and
+the delay gate is written out on purpose and suppresses the default by reusing
+its probe names.
 
 So every gate in this pack is hand-written, and every one of them has an SOT
 half as well as a Settle half. The substrate existed before the fault, so "the

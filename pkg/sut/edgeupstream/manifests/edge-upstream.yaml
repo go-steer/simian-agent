@@ -82,17 +82,36 @@ data:
   # still listening, rather than the probe timing out on its own — the two
   # failures look identical in the Deployment status and are told apart only
   # by the edge's access log.
-  default.conf: |
+  #
+  # A template rather than a config, because of the two placeholders, and both
+  # are there so the caller resolves the callee's name per request instead of
+  # once at startup. See the container command below: it is the difference
+  # between a caller a DNS fault can reach and one it cannot.
+  #
+  #   __RESOLVER__  nginx will not read /etc/resolv.conf for a nameserver, so
+  #                 the address is substituted in. Without a `resolver`
+  #                 directive a variable upstream is a config error.
+  #   __CALLEE__    the fully qualified name. nginx's resolver does not apply
+  #                 resolv.conf's search list either, so a bare "upstream" is
+  #                 queried as an absolute name and NXDOMAINs.
+  default.conf.tmpl: |
     server {
         listen 80;
         access_log off;
+        resolver __RESOLVER__ valid=5s ipv6=off;
 
         location = /healthz {
             default_type text/plain;
             return 200 "edge ok\n";
         }
         location / {
-            proxy_pass http://upstream:80/cgi-bin/work;
+            # Through a variable on purpose. nginx resolves a literal
+            # upstream host once, when it loads the config, and holds the
+            # address for the life of the process — which makes it immune to
+            # a DNS fault, and makes "the name stopped resolving" a scenario
+            # that cannot be staged against it.
+            set $callee __CALLEE__;
+            proxy_pass http://$callee:80/cgi-bin/work;
             proxy_connect_timeout 1s;
             proxy_send_timeout 1s;
             proxy_read_timeout 1s;
@@ -254,11 +273,47 @@ spec:
       containers:
         - name: nginx
           image: nginx:1.27-alpine
+          # Render the template, start nginx, and then watch resolv.conf.
+          #
+          # The watch is what makes this caller reachable by a DNS fault.
+          # Chaos Mesh injects DNS chaos by rewriting the pod's resolv.conf to
+          # point at its own server; it does that to a pod that is already
+          # running, and nginx read the file once, at start. Verified on GKE:
+          # without the watch the CR reports AllInjected, nslookup inside the
+          # pod fails, and nginx serves 200 the whole time.
+          #
+          # It is also what a real nginx deployment does for the same reason,
+          # which is the test this had to pass before going in. A fixture
+          # detail that exists only to make a fault land is fixture-fitting;
+          # this one earns its place, and it costs the other scenarios
+          # nothing, because when resolv.conf does not change the loop is a
+          # checksum comparison every two seconds and nothing else.
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              render() {
+                NS=$(awk "/^nameserver/{print \$2; exit}" /etc/resolv.conf)
+                SD=$(awk "/^search/{print \$2; exit}" /etc/resolv.conf)
+                sed -e "s/__RESOLVER__/$NS/" -e "s/__CALLEE__/upstream.$SD/" \
+                  /etc/nginx/tmpl/default.conf.tmpl > /etc/nginx/conf.d/default.conf
+              }
+              render
+              nginx -g "daemon off;" &
+              seen=$(cat /etc/resolv.conf)
+              while sleep 2; do
+                now=$(cat /etc/resolv.conf)
+                if [ "$now" != "$seen" ]; then seen=$now; render; nginx -s reload; fi
+              done
           ports:
             - containerPort: 80
           volumeMounts:
+            # Not /etc/nginx/conf.d: nginx loads every .conf in that directory,
+            # and the rendered file has to be written somewhere a ConfigMap
+            # mount is not making read-only.
             - name: config
-              mountPath: /etc/nginx/conf.d
+              mountPath: /etc/nginx/tmpl
           resources:
             requests:
               cpu: 50m

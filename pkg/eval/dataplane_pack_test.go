@@ -24,6 +24,7 @@ import (
 const (
 	abort503  = "dataplane-abort-503-not-a-bug"
 	partition = "dataplane-partition-one-way"
+	dnsHole   = "dataplane-dns-blackhole-partial"
 )
 
 // oneFinding is a report that names a single object and a single reason. Most
@@ -134,25 +135,76 @@ func TestThePartitionSeparatesSeveredFromSlow(t *testing.T) {
 	}
 }
 
-// The pack ships two NetworkChaos scenarios, and they are only two scenarios
-// if a correct answer to one is a wrong answer to the other.
-//
-// A slow link and a severed one are the easiest pair in the pack to collapse
-// by accident, because every honest word about either of them starts with
-// "network". The guard is that neither file credits or exempts the other's
-// family — and since also_true works by family, one plausible-looking
-// exemption is all it would take.
-func TestTheTwoNetworkScenariosDoNotLicenseEachOthersDiagnosis(t *testing.T) {
+// dns-blackhole-partial is the closest scenario in the pack to the partition,
+// and the closest wrong answers to it are the ones that describe reaching the
+// callee rather than finding it.
+func TestTheDNSBlackholeSeparatesUnresolvedFromUnreachable(t *testing.T) {
+	s := dataplaneScenario(t, dnsHole)
+	ns := s.Namespaces()[0]
+
 	for _, tc := range []struct {
-		id, mustNotAccept string
-	}{
-		{pairNetwork, "network-partition"},
-		{partition, "network-degradation"},
-	} {
-		s := dataplaneScenario(t, tc.id)
-		for _, r := range append(append([]string{}, s.AlsoTrue...), reasonsOf(s)...) {
-			if familyOf(r) == tc.mustNotAccept {
-				t.Errorf("scenario %q accepts %q, which is family %q — the other network scenario's diagnosis", s.ID, r, tc.mustNotAccept)
+		reason               string
+		wantRoot, wantHonest float64
+		why                  string
+	}{{
+		reason: "DNSFailure", wantRoot: 1, wantHonest: 1,
+		why: "the answer",
+	}, {
+		reason: "NXDOMAIN", wantRoot: 1, wantHonest: 1,
+		why: "the answer, in the resolver's own vocabulary",
+	}, {
+		// The near miss. Nothing is dropping packets here; the caller never
+		// sends any, because it never learns where to send them. One lookup and
+		// one dial tell these apart, which is the measurement the scenario is
+		// scored on having taken.
+		reason: "NetworkPartition", wantRoot: 0, wantHonest: 0,
+		why: "the address is reachable and the callee is answering on it",
+	}, {
+		reason: "ConnectivityLoss", wantRoot: 0, wantHonest: 0,
+		why: "same family, same missing measurement",
+	}, {
+		// Generic here as everywhere: the caller's dependency really is
+		// unavailable to it, and saying so attributes nothing.
+		reason: "ServiceUnavailable", wantRoot: 0, wantHonest: 1,
+		why: "an observation the caller is entitled to make",
+	}, {
+		reason: "CPUSaturation", wantRoot: 0, wantHonest: 0,
+		why: "the pair's answer, and wrong here too",
+	}} {
+		t.Run(tc.reason, func(t *testing.T) {
+			run := oneFinding(ns, "Service", "upstream", tc.reason)
+			approx(t, scoreOf(t, s, run, MeasureRootCause), tc.wantRoot)
+			approx(t, scoreOf(t, s, run, MeasureHallucination), tc.wantHonest)
+		})
+	}
+}
+
+// The pack ships three scenarios whose honest description starts with "the
+// caller cannot get to the callee", and they are only three scenarios if a
+// correct answer to one is a wrong answer to the other two.
+//
+// These are the easiest set in the pack to collapse by accident, because every
+// true word about any of them is network-shaped. The guard is that no file
+// credits or exempts another's family — and since also_true works by family,
+// one plausible-looking exemption is all it would take.
+func TestTheNetworkShapedScenariosDoNotLicenseEachOther(t *testing.T) {
+	owns := []struct{ id, family string }{
+		{pairNetwork, "network-degradation"},
+		{partition, "network-partition"},
+		{dnsHole, "dns-failure"},
+	}
+	for _, mine := range owns {
+		s := dataplaneScenario(t, mine.id)
+		accepted := append(append([]string{}, s.AlsoTrue...), reasonsOf(s)...)
+		for _, theirs := range owns {
+			if theirs.family == mine.family {
+				continue
+			}
+			for _, r := range accepted {
+				if familyOf(r) == theirs.family {
+					t.Errorf("scenario %q accepts %q, which is family %q — scenario %q's diagnosis",
+						s.ID, r, theirs.family, theirs.id)
+				}
 			}
 		}
 	}
