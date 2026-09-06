@@ -534,6 +534,39 @@ be quiet. A subject that exits non-zero, prints nothing parseable, or runs past
 `--subject-timeout` is a `SubjectError` — scored as a hard zero, never skipped,
 because a subject must not be able to improve its mean by crashing.
 
+#### 6.4.1 The prompt is not the only channel
+
+`LintPrompt` keeps the diagnosis out of the question. The cluster is the other
+way it can get out, and that one has no linter.
+
+Every object a `kube-state` fault synthesizes is stamped by the driver so the
+reaper can find it if the process dies holding a lease. One of those stamps
+used to be `simian.chaos/kind`, whose value is the fault kind — a Deployment
+wearing `simian.chaos/kind=ContainerExitLoop` while a subject is asked what is
+wrong with it. It was there for an operator with `kubectl get deploy -L`, no
+code ever read it back, and the first LLM subject pointed at the rig read it
+and reported it as a finding. It is gone; the fault UID joins to the audit log
+instead.
+
+What remains — `simian.chaos/managed`, `simian.chaos/bundle`,
+`simian.chaos/fault-uid`, and the `simian.chaos/expires-at` annotation — says
+that Simian is here and never what it did. That much is irreducible. The reaper
+finds orphans by selecting on `managed=true`, and a mark a controller can
+select on is a mark a subject can read; the alternative is a rig that leaks
+faults into a cluster it cannot clean up, which is a worse trade than a subject
+knowing it is in an experiment. Two consequences worth stating plainly:
+
+* A subject **can** tell it is inside a chaos experiment, and an agent that
+  says so is not hallucinating — it is reporting a true property of the cluster
+  it was pointed at. Whether that biases its diagnosis toward the injected
+  fault is not something the current scorecard can measure.
+* The line the rig does hold is that no label, annotation or object name may
+  *name the fault*. `TestApplyNeverWritesTheDiagnosisOntoTheObjects` asserts it
+  for every kind, so the next convenience label cannot quietly cross it.
+
+Pod templates are cleaner still: none of these labels reach them, because pods
+are what a subject inspects first.
+
 ### 6.5 Scoring
 
 Deliberately the same four measures `core-sre-agent/evals` uses, so the

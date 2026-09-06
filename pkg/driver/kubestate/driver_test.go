@@ -179,8 +179,8 @@ func TestApplyEveryKindWithEmptySpec(t *testing.T) {
 				t.Fatalf("Apply(%s) created nothing", kind)
 			}
 			for _, obj := range objs {
-				if got := obj.Labels[KindLabel]; got != kind {
-					t.Errorf("%s: kind label = %q, want %q", obj.Name, got, kind)
+				if got := obj.Labels[ManagedLabel]; got != "true" {
+					t.Errorf("%s: managed label = %q, want true — the reaper finds orphans by it", obj.Name, got)
 				}
 			}
 			pod := podTemplateOf(t, d, uid)
@@ -227,6 +227,42 @@ func TestApplyHonorsRequestedNameAndStillSuffixes(t *testing.T) {
 	}
 }
 
+// Nothing Simian stamps on a fault's objects may name the fault.
+//
+// This is a regression test with a live subject behind it. The bundle used to
+// carry simian.chaos/kind, whose value is the fault kind, for the convenience
+// of an operator running `kubectl get deploy -L` in a wrecked arena. The first
+// LLM subject pointed at the rig read it and reported it as a finding — which
+// is not the subject misbehaving, it is the rig having written the answer on
+// the object and then asked for the answer.
+//
+// The remaining labels say Simian is here and stop there, and that much cannot
+// be helped: the reaper selects on ManagedLabel, and anything a controller can
+// select on is something a subject can read.
+func TestApplyNeverWritesTheDiagnosisOntoTheObjects(t *testing.T) {
+	for _, kind := range Kinds() {
+		t.Run(kind, func(t *testing.T) {
+			d := newTestDriver()
+			uid, err := d.Apply(context.Background(), manifest(kind, nil))
+			if err != nil {
+				t.Fatalf("Apply(%s): %v", kind, err)
+			}
+			for _, obj := range getBundle(t, d, uid) {
+				for k, v := range obj.Labels {
+					if strings.EqualFold(v, kind) {
+						t.Errorf("%s: label %s=%q names the fault kind; a subject reading it is being handed the answer", obj.Name, k, v)
+					}
+				}
+				for k, v := range obj.Annotations {
+					if strings.EqualFold(v, kind) {
+						t.Errorf("%s: annotation %s=%q names the fault kind", obj.Name, k, v)
+					}
+				}
+			}
+		})
+	}
+}
+
 // The identifying labels belong on the Deployment, where the reaper lists them,
 // and nowhere near the pods, which are what a subject under evaluation reads.
 func TestApplyKeepsSimianLabelsOffThePodTemplate(t *testing.T) {
@@ -236,7 +272,7 @@ func TestApplyKeepsSimianLabelsOffThePodTemplate(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	dep := getDeployment(t, d, uid)
-	for _, l := range []string{ManagedLabel, FaultUIDLabel, KindLabel} {
+	for _, l := range []string{ManagedLabel, BundleLabel, FaultUIDLabel} {
 		if _, ok := dep.Labels[l]; !ok {
 			t.Errorf("Deployment is missing label %q", l)
 		}
