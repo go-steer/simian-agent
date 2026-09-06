@@ -306,7 +306,7 @@ pkg/audit/         structured event logger
 pkg/catalog/       blast-radius tier classification (static map + per-spec re-classification)
 pkg/eval/          offline scoring — scenario packs, measures, scorecard (no cluster, no clock)
 pkg/harness/       the runner behind simian-eval: arena lifecycle, injection, artifacts
-  subject/         subject adapters (exec:, noop:)
+  subject/         subject adapters (exec:, lookout:, noop:)
 internal/testutil/ fake driver + fake auditor for tests
 deploy/
   manifests/       raw YAML for kubectl apply

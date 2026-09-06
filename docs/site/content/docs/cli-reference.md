@@ -154,7 +154,7 @@ The scorecard printed at the end comes from reading those two files back, so
 | Flag | Default | Notes |
 |---|---|---|
 | `--pack` | (required) | A built-in pack name — `parity` or `lookout`, both embedded in the binary — or a directory. Repeatable or comma-separated; several packs run as one suite. A bare built-in name always means the embedded pack, so spell a local directory of the same name `./parity`. Two packs sharing a scenario ID is a load error, not a merge. |
-| `--subject` | (required) | `exec:<command line>`, or `noop:` for the zero-score floor. |
+| `--subject` | (required) | `exec:<command line>`, `lookout:<path to the lookout binary>`, or `noop:` for the zero-score floor. The `lookout:` adapter runs a namespace-scoped `health` scan and translates the finding stream; the namespace comes from the prompt, as it does for an agent. |
 | `--only` | (all) | Scenario IDs to run. An ID that is not in the pack is an error, not an empty run. |
 | `--out` | `runs/<timestamp>` | Where `audit.log` and `run.json` go. |
 | `--cluster` | `current` | `current` uses the kubeconfig's cluster and leaves it standing; `kind` provisions a throwaway cluster for the run and deletes it afterwards, including on Ctrl-C. |

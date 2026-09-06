@@ -50,8 +50,9 @@ type Options struct {
 
 // Parse turns a --subject spec into a Subject.
 //
-//	exec:<command line>  run a binary and read a JSON report on its stdout
-//	noop:                report nothing at all
+//	exec:<command line>     run a binary and read a JSON report on its stdout
+//	lookout:<command line>  run k8s-lookout's health scan and translate it
+//	noop:                   report nothing at all
 //
 // The scheme is required rather than inferred. `http:` and `mcp:` subjects are
 // coming, and a bare path that silently means one of them today would mean
@@ -73,6 +74,19 @@ func Parse(spec string, opts Options) (eval.Subject, error) {
 		}
 		return &Exec{Argv: argv, Timeout: opts.Timeout, Dir: opts.Dir, Env: opts.Env}, nil
 
+	case "lookout":
+		argv, err := splitArgs(rest)
+		if err != nil {
+			return nil, fmt.Errorf("subject %q: %w", spec, err)
+		}
+		if len(argv) == 0 {
+			// No default binary on purpose: a scorecard attributed to
+			// whichever lookout happened to be on PATH is a number nobody
+			// can reproduce.
+			return nil, fmt.Errorf("subject %q names no command; want lookout:<path to the lookout binary>", spec)
+		}
+		return &Lookout{Argv: argv, Timeout: opts.Timeout, Dir: opts.Dir, Env: opts.Env}, nil
+
 	case "noop":
 		if rest != "" {
 			return nil, fmt.Errorf("subject %q: noop takes no argument", spec)
@@ -83,7 +97,7 @@ func Parse(spec string, opts Options) (eval.Subject, error) {
 		return nil, fmt.Errorf("subject %q: the %s adapter is not implemented yet; use an exec: subject", spec, scheme)
 
 	default:
-		return nil, fmt.Errorf("subject %q: unknown scheme %q; want an exec: or noop: subject", spec, scheme)
+		return nil, fmt.Errorf("subject %q: unknown scheme %q; want an exec:, lookout: or noop: subject", spec, scheme)
 	}
 }
 
