@@ -486,6 +486,14 @@ Adapters:
 * **`exec:`** ✅ — run a binary, read a JSON report on stdout. Covers
   `core-sre-agent`, `mast` workload bundles, `claude -p`, `gemini-cli`, and a
   shell script. Built first; it covers everything that matters.
+* **`lookout:`** ✅ — run k8s-lookout's `health` scan and translate its finding
+  stream into a report. Not an `exec:` subject, because the detector already
+  emits everything Simian grades and should not grow a Simian-shaped output
+  mode to say so; the shape translation lives on this side of the process
+  boundary. It reads the namespace out of the prompt, the same place an agent
+  reads it from — a side channel would give the deterministic subject something
+  no agent subject gets, and the comparison between those two rows is the point
+  of running it.
 * **`noop:`** ✅ — the null subject: reports nothing, ever. The zero-score floor
   a scorecard is read against, and the cheapest way to find out whether a pack
   actually manifests before an agent is pointed at it.

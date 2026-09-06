@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -104,12 +105,56 @@ func (e *Exec) Investigate(ctx context.Context, prompt string) (eval.Report, err
 
 	argv, inArgv := substitutePrompt(e.Argv, prompt)
 
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // running the operator's named subject is the whole job
-	cmd.WaitDelay = waitDelay
-	cmd.Dir = e.Dir
-	cmd.Env = append(append(os.Environ(), e.Env...), PromptEnv+"="+prompt)
+	c := child{
+		name:    e.Name(),
+		argv:    argv,
+		dir:     e.Dir,
+		env:     append(slices.Clone(e.Env), PromptEnv+"="+prompt),
+		timeout: e.Timeout,
+	}
 	if !inArgv {
-		cmd.Stdin = strings.NewReader(prompt)
+		c.stdin = prompt
+	}
+
+	stdout, err := c.run(ctx)
+	if err != nil {
+		return eval.Report{}, err
+	}
+
+	report, err := ParseReport(stdout)
+	if err != nil {
+		return eval.Report{}, fmt.Errorf("subject %s: %w", e.Name(), err)
+	}
+	return report, nil
+}
+
+// child is one subject invocation: a process, its input, and the bound on how
+// long it may take. Shared by every adapter that talks to a subject across a
+// process boundary, so that timeouts, output caps and the way a failure is
+// reported do not drift between them.
+type child struct {
+	name    string
+	argv    []string
+	dir     string
+	env     []string // appended to the parent environment
+	stdin   string   // empty closes stdin
+	timeout time.Duration
+}
+
+// run executes the child and returns its stdout.
+func (c child) run(ctx context.Context) ([]byte, error) {
+	if c.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.timeout)
+		defer cancel()
+	}
+
+	cmd := exec.CommandContext(ctx, c.argv[0], c.argv[1:]...) //nolint:gosec // running the operator's named subject is the whole job
+	cmd.WaitDelay = waitDelay
+	cmd.Dir = c.dir
+	cmd.Env = append(os.Environ(), c.env...)
+	if c.stdin != "" {
+		cmd.Stdin = strings.NewReader(c.stdin)
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -121,17 +166,12 @@ func (e *Exec) Investigate(ctx context.Context, prompt string) (eval.Report, err
 	// non-zero, and reporting "exited 1" for a subject that ran out of time
 	// sends whoever reads it looking for a bug in the subject.
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return eval.Report{}, fmt.Errorf("subject %s: %w after %s%s", e.Name(), ctxErr, e.Timeout, quoted(stderr.String()))
+		return nil, fmt.Errorf("subject %s: %w after %s%s", c.name, ctxErr, c.timeout, quoted(stderr.String()))
 	}
 	if err != nil {
-		return eval.Report{}, fmt.Errorf("subject %s: %w%s", e.Name(), err, quoted(stderr.String()))
+		return nil, fmt.Errorf("subject %s: %w%s", c.name, err, quoted(stderr.String()))
 	}
-
-	report, err := ParseReport(stdout.Bytes())
-	if err != nil {
-		return eval.Report{}, fmt.Errorf("subject %s: %w", e.Name(), err)
-	}
-	return report, nil
+	return stdout.Bytes(), nil
 }
 
 // substitutePrompt replaces the placeholder wherever it appears in argv, and
