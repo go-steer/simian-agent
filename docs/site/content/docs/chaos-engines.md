@@ -14,7 +14,7 @@ The first three perturb a *running dataplane* — traffic, processes, resources.
 | `chaos-mesh` | The full Chaos Mesh CRD catalog: PodChaos, StressChaos, IOChaos, TimeChaos, NetworkChaos, etc. | Default for everything. Whether NetworkChaos lands on GKE Dataplane V2 depends on the Cilium version — it does on current GKE, and its efficacy gate tells you either way. See [Known limitations]({{< relref "known-limitations.md" >}}). |
 | `network-policy` | Standard `networking.k8s.io/v1` NetworkPolicy partitions (deny ingress / egress / both). | Network partition chaos on any cluster where NetworkChaos isn't reliable. Partition only — no delay / loss / jitter. |
 | `envoy-fault` | HTTP-layer delay + abort via an injected Envoy sidecar. Two kinds: `EnvoyHttpDelay`, `EnvoyHttpAbort`. | HTTP/gRPC delay or error injection on DPv2. Requires the SUT to be deployed with `--no-envoy-faults=false` (off by default — see [Known limitations]({{< relref "known-limitations.md" >}}#envoy-injection-breaks-grpc-kubelet-probes)). |
-| `kube-state` | Declarative-state faults: synthesizes a bundle of objects that is born broken. Twelve kinds: `ImageUnresolvable`, `ContainerExitLoop`, `MemoryLimitSqueeze`, `Unschedulable`, `JobFailure`, `SelectorDrift`, `UnboundClaim`, `DependencyStall`, `PDBGridlock`, `RolloutStuck`, `CertExpiry`, and `NoOp` (the control). | Bad image references, crash loops, OOM kills, unschedulable pods, failed batch jobs, endpointless Services, claims that never bind, wedged rollouts, undrainable nodes, expiring certificates and a workload whose only symptom is in its own log — states rather than events, and the ones an SRE agent triages most. Works on any cluster; needs no Chaos Mesh and no sidecar. |
+| `kube-state` | Declarative-state faults: synthesizes a bundle of objects that is born broken. Thirteen kinds: `ImageUnresolvable`, `ContainerExitLoop`, `MemoryLimitSqueeze`, `Unschedulable`, `JobFailure`, `SelectorDrift`, `BackendCrashLoop`, `UnboundClaim`, `DependencyStall`, `PDBGridlock`, `RolloutStuck`, `CertExpiry`, and `NoOp` (the control). | Bad image references, crash loops, OOM kills, unschedulable pods, failed batch jobs, endpointless Services, Services whose backends are all crash-looping, claims that never bind, wedged rollouts, undrainable nodes, expiring certificates and a workload whose only symptom is in its own log — states rather than events, and the ones an SRE agent triages most. Works on any cluster; needs no Chaos Mesh and no sidecar. |
 
 ## Directed-control patterns
 
@@ -65,6 +65,14 @@ simian chaos --engine kube-state \
   --kind SelectorDrift --api-version apps/v1 \
   --namespace boutique-1 --duration 5m
 
+# kube-state: the same symptom with the blame moved. The Service selects its
+# pods correctly and every one of them is crash-looping, so the EndpointSlice
+# lists their addresses with ready=false where SelectorDrift's lists none at
+# all. Two replicas by default, so "no healthy backend" is about a set.
+simian chaos --engine kube-state \
+  --kind BackendCrashLoop --api-version apps/v1 \
+  --namespace boutique-1 --duration 5m
+
 # kube-state: a workload that serves fine and cannot reach what it calls.
 # Nothing is wrong on any object — Deployment Available, pods Ready against a
 # real HTTP probe, Service endpointed. The only evidence is the log line, which
@@ -82,7 +90,7 @@ simian chaos --engine kube-state \
 
 # kube-state: a deploy that broke while the old pods kept serving. Apply waits
 # for the healthy revision to be available before wedging the next one, so give
-# this kind the longest lease of the twelve.
+# this kind the longest lease of the thirteen.
 simian chaos --engine kube-state \
   --kind RolloutStuck --api-version apps/v1 \
   --namespace boutique-1 --duration 10m

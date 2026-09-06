@@ -253,6 +253,7 @@ a vote on.
 | `kube-state` | `Unschedulable` | A pod condition carries reason `Unschedulable` |
 | `kube-state` | `JobFailure` | The Job carries a condition of reason `BackoffLimitExceeded` |
 | `kube-state` | `SelectorDrift` | Pods are Ready **and** the Service's EndpointSlices carry no addresses |
+| `kube-state` | `BackendCrashLoop` | A container's `lastState.terminated.reason` is `Error` **and** the Service's EndpointSlices report every endpoint **not** ready |
 | `kube-state` | `UnboundClaim` | The claim is `Pending` **and** the pod mounting it reports `Unschedulable` |
 | `kube-state` | `DependencyStall` | Pods are Ready **and** the Service's EndpointSlices report ready endpoints **and** the workload's log carries the failing-call line |
 | `kube-state` | `PDBGridlock` | Pods are Ready **and** the PodDisruptionBudget reports exactly `0` disruptions allowed |
@@ -333,6 +334,36 @@ The window between the two is narrow enough to measure: on GKE 1.36 a Service
 whose selector *does* match has its addresses published by the time
 `kubectl wait --for=condition=Ready` returns, and the second probe polls ~100ms
 after the first passes.
+
+`BackendCrashLoop` is the same table read from the other end, and the pair is
+the reason both kinds exist. Its Service selects its pods correctly and its pods
+are crash-looping, so the EndpointSlice lists their addresses with
+`conditions.ready: false` — where `SelectorDrift`'s lists no addresses at all.
+Neither gate can pass against the other's fault: an emptiness assertion fails
+against a populated slice, and a read of `conditions.ready` renders nothing when
+there are no endpoints to have conditions. Measured side by side on GKE 1.36 in
+one namespace:
+
+```
+SLICE                       ADDRS                           READY
+orders-api-ymjvzs12-p5gxn   [10.13.128.55],[10.13.128.58]   false,false   # BackendCrashLoop
+storefront-sr92vf56-qtm4t   <none>                          <none>        # SelectorDrift
+```
+
+Its first probe is the crash loop rather than a readiness assertion, because
+here the pods being broken *is* the fault and not the thing that keeps the
+second probe honest. The order still matters, for a different reason: this is
+the kind a scoring run uses to ask whether a subject found the root cause or
+stopped at the symptom, so the gate proves them in that order too.
+
+One thing this kind needs that no gate could give it: the crash-looping
+container carries a readiness probe that can never succeed. Without it the
+kubelet calls the container Ready for as long as it is Running, which on a
+container that exits in 200ms is 200ms out of every restart — measured at 2
+ready reads in the first 45 polls on GKE. The gate would ride that out, since it
+polls until it sees what it wants. A subject triaging the namespace in those
+first ninety seconds would not, and a symptom that is intermittently absent is
+one a correct diagnosis can be graded wrong against.
 
 `UnboundClaim` is paired for a different reason. The pod it blocks reports
 `Unschedulable`, which the scheduler also writes for taints, node selectors and

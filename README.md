@@ -43,7 +43,7 @@ events, and none of them can be produced by delaying a packet.
 `kube-state` produces the other half. In `synthesize` mode it applies a bundle
 of objects into the arena that is born broken — nothing already running is
 touched, so a baseline captured before the fault is still comparable afterwards.
-Twelve kinds, each with its own default efficacy gate:
+Thirteen kinds, each with its own default efficacy gate:
 
 | Kind | Produces | Gated on |
 |---|---|---|
@@ -53,6 +53,7 @@ Twelve kinds, each with its own default efficacy gate:
 | `Unschedulable` | pod the scheduler cannot place | `Unschedulable` pod condition |
 | `JobFailure` | Job whose pods exhaust its backoff limit | `BackoffLimitExceeded` |
 | `SelectorDrift` | Service whose selector misses its own healthy pods | pods Ready **and** no endpoint addresses |
+| `BackendCrashLoop` | crash-looping pods behind a Service that selects them correctly | `lastState` reason `Error` **and** every endpoint not ready |
 | `UnboundClaim` | claim on a StorageClass the cluster does not have | claim `Pending` and the pod mounting it `Unschedulable` |
 | `DependencyStall` | workload that serves fine and logs a failing call to something it needs | pods Ready **and** endpoints Ready **and** the line in the log |
 | `PDBGridlock` | PodDisruptionBudget with no headroom, so no pod may be evicted | pods Ready **and** the budget reporting exactly `0` disruptions allowed |
@@ -66,6 +67,16 @@ every eviction are relationships between objects, and the fault is the
 relationship: `SelectorDrift` in particular is the shape that catches an agent
 grading `kubectl get pods`, since every pod is Running and Ready and the traffic
 is going nowhere.
+
+`BackendCrashLoop` is `SelectorDrift` with the blame moved. The Service is
+written correctly and its backends are crash-looping, so both kinds present as
+one symptom — this Service is not serving — and are two different fixes. It is
+also the only kind whose cause and consequence are separate objects in separate
+states, which is what makes it the one a scoring run can use to ask whether a
+report named the root or stopped at what a user would notice. Measured on GKE:
+its EndpointSlice lists both pod addresses with `ready: false`, where
+`SelectorDrift`'s lists no addresses at all, and a request to the ClusterIP is
+refused rather than black-holed.
 
 `DependencyStall` goes one further, and is the only kind where *no object is
 wrong at all*. The Deployment is Available, the pods are Ready against a real

@@ -465,6 +465,70 @@ func TestSelectorDriftRejects(t *testing.T) {
 	}
 }
 
+// TestBackendCrashLoopSelectsItsOwnPods is the assertion that separates this
+// kind from SelectorDrift. Both ship a Deployment and a Service, both present
+// as a Service that is not serving, and the only structural difference is
+// whether the selector matches. If it drifted here the fault would have two
+// causes and the root-vs-symptom question this kind exists to pose would have
+// no answer.
+func TestBackendCrashLoopSelectsItsOwnPods(t *testing.T) {
+	svc, dep := serviceOf(t, KindBackendCrashLoop, nil)
+	pods := dep.Spec.Template.Labels
+	if got, want := svc.Spec.Selector["app"], pods["app"]; got != want {
+		t.Fatalf("selector = %q, pods carry %q: the Service must match, or the fault is a selector bug and not a crash loop", got, want)
+	}
+	if svc.Name != dep.Name {
+		t.Errorf("service %q and deployment %q must share the bundle name", svc.Name, dep.Name)
+	}
+	// The pods have to actually be broken. A correctly-selecting Service in
+	// front of healthy pods is the control, not this.
+	c := dep.Spec.Template.Spec.Containers[0]
+	if !strings.Contains(strings.Join(c.Command, " "), "exit ") {
+		t.Errorf("container command %v does not exit; nothing would crash-loop", c.Command)
+	}
+	if got := svc.Spec.Ports[0].Port; got != defaultServicePort {
+		t.Errorf("service port = %d, want %d", got, defaultServicePort)
+	}
+	if len(c.Ports) == 0 || c.Ports[0].ContainerPort != defaultServicePort {
+		t.Errorf("container ports = %v, want the service's %d", c.Ports, defaultServicePort)
+	}
+}
+
+// TestBackendCrashLoopEndpointsCannotFlickerReady guards the property that
+// makes this fault legible: the Service has no healthy backend, continuously.
+//
+// A container with no readiness probe is Ready for as long as it is Running,
+// and a container that exits after 200ms is Running for 200ms on every restart;
+// the endpointslice controller copies that into conditions.ready. Measured on
+// GKE without the probe, the endpoints read ready on 2 of the first 45 polls.
+// The gate would ride that out, and a subject reading the namespace at the
+// wrong second would not.
+func TestBackendCrashLoopEndpointsCannotFlickerReady(t *testing.T) {
+	_, dep := serviceOf(t, KindBackendCrashLoop, nil)
+	rp := dep.Spec.Template.Spec.Containers[0].ReadinessProbe
+	if rp == nil {
+		t.Fatal("no readiness probe: the pod is Ready whenever the container is Running, so the endpoint condition flickers true on every restart")
+	}
+	if rp.Exec == nil || len(rp.Exec.Command) == 0 {
+		t.Fatalf("readiness probe = %+v, want an exec that cannot succeed", rp)
+	}
+	// A probe that could ever pass is a probe that reintroduces the flicker.
+	if rp.SuccessThreshold > 1 {
+		t.Errorf("successThreshold = %d: the probe must never succeed at all", rp.SuccessThreshold)
+	}
+}
+
+func TestBackendCrashLoopRejects(t *testing.T) {
+	// The pod half is containerExitLoopPod, so its validation has to still
+	// apply through the bundle rather than only through the standalone kind.
+	if err := buildErr(t, KindBackendCrashLoop, map[string]any{"exit_code": float64(0)}); !strings.Contains(err.Error(), "non-zero") {
+		t.Errorf("zero exit code: %v", err)
+	}
+	if err := buildErr(t, KindBackendCrashLoop, map[string]any{"port": float64(70000)}); !strings.Contains(err.Error(), "port") {
+		t.Errorf("out of range port: %v", err)
+	}
+}
+
 func TestUnboundClaimBlocksTheWorkloadBehindTheClaim(t *testing.T) {
 	objs := bundle(t, KindUnboundClaim, nil)
 	// The claim first. A Deployment whose pod references a claim that does not

@@ -85,12 +85,12 @@ bin/simian chaos --engine network-policy --kind NetworkPolicy \
   --spec '{"labelSelectors":{"app":"cartservice"},"directions":["ingress","egress"]}'
 
 # Declarative state, no dataplane at all: a workload synthesized broken.
-# Every field of the spec is optional; run each of the twelve kinds. NoOp is the
+# Every field of the spec is optional; run each of the thirteen kinds. NoOp is the
 # control — it synthesizes a *healthy* workload, and its gate passing is what
 # tells you a later empty finding means "nothing was wrong" and not "the probe
 # never worked here".
 for kind in ImageUnresolvable ContainerExitLoop MemoryLimitSqueeze Unschedulable \
-            JobFailure SelectorDrift UnboundClaim DependencyStall \
+            JobFailure SelectorDrift BackendCrashLoop UnboundClaim DependencyStall \
             PDBGridlock CertExpiry NoOp; do
   bin/simian chaos --engine kube-state --kind "$kind" --api-version apps/v1 \
     --namespace simian-gke-1 --duration 4m
@@ -119,6 +119,7 @@ What the run above produced:
 | `kube-state` `Unschedulable` | gate passed in 2.2s | `PodScheduled=False`, reason `Unschedulable`; node count unchanged, no `TriggeredScaleUp` |
 | `kube-state` `JobFailure` | gate passed in 37.0s over 18 polls | the Job's condition reached `BackoffLimitExceeded` after its retries ran out — the slowest gate in the set, because the backoff is the fault |
 | `kube-state` `SelectorDrift` | both gates passed, 2.2s then 0.1s | pods `Ready=True`, and *then* the Service's EndpointSlices carried no addresses |
+| `kube-state` `BackendCrashLoop` | both gates passed, 2.2s then 0.1s | `lastState.terminated.reason: Error` on both replicas, and *then* the Service's EndpointSlice listing both pod addresses with `ready: false`; a request to the ClusterIP came back `Connection refused` |
 | `kube-state` `UnboundClaim` | both gates passed, 0.1s then 0.1s | claim `Pending`, and the pod that mounts it `Unschedulable` |
 | `kube-state` `DependencyStall` | all three gates passed, 2.2s / 0.1s / 0.2s | pods `Ready=True`, EndpointSlice `conditions.ready` true, and then the log line found in `checkout-api-…-s7btf` |
 | `kube-state` `NoOp` | gate passed in 2.2s | pods `Ready=True` — the control, and it is supposed to pass |
@@ -160,6 +161,24 @@ then flipped back to `ReplicaSetUpdated`. The kind now ships with a readiness
 probe on the broken revision that cannot pass, and the condition lands at 61.8s
 and stays. None of this is visible against a fake clientset, where status is
 whatever the test writes.
+
+`BackendCrashLoop` and `SelectorDrift` are the pair worth running in the same
+namespace, because the only thing that separates them is the EndpointSlice:
+
+```
+SLICE                       ADDRS                           READY
+orders-api-ymjvzs12-p5gxn   [10.13.128.55],[10.13.128.58]   false,false   # BackendCrashLoop
+storefront-sr92vf56-qtm4t   <none>                          <none>        # SelectorDrift
+```
+
+Both Services answer nothing. One has no backends because its selector misses,
+the other because its backends are dead, and neither kind's gate can pass
+against the other's fault. `BackendCrashLoop` took the `RolloutStuck` lesson as
+a starting condition rather than learning it again: its container carries a
+readiness probe that cannot pass, so the endpoint condition is monotone. The
+counterfactual was measured rather than assumed — the same bundle without the
+probe read `ready: true` on 2 of the first 45 polls, both inside the first
+ninety seconds, which is exactly the window a subject would be triaging in.
 
 `NetworkChaos` landing on Dataplane V2 contradicts what this project documented for the last year. It is a real measurement, not a correction of a mistake: the bypass was verified at the time on an older Cilium. Treat it as version-dependent and re-check per cluster — see [known limitations]({{< relref "known-limitations.md" >}}#chaos-meshs-networkchaos-may-or-may-not-work-on-gke-dataplane-v2--measure-it). Reading the audit record is the check:
 

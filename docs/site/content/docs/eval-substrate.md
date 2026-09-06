@@ -112,15 +112,12 @@ adversary must not share code with the subject's repo.
 ## 3. What Simian can reproduce today: none of it
 
 {{% pageinfo %}}
-**Updated 2026-09-05.** The analysis below is the state before the `kube-state`
+**Updated 2026-09-06.** The analysis below is the state before the `kube-state`
 engine existed, and the "zero of eleven" number is what motivated building it.
-Nine of the eleven are now reproducible and verified against a live GKE
-cluster, and the table's last column is marked accordingly: the four #56 kinds,
-plus `failedJob`, `serviceSelectorMismatch`, `healthy` and `unboundVolume` from
-#57, plus `multipleFaults`, which is a composition of three kinds that now all
-exist. The two still open are `cascade`, which needs a broken workload behind
-its own Service, and `silentFailure`, whose signal is log-only and needs a
-`logs` probe type before it can be gated.
+**All eleven** are now reproducible and verified against a live GKE cluster.
+The last of them was `cascade`, which needed a crash-looping workload behind
+its own correctly-selecting Service — a shape no kind produced, and now
+`BackendCrashLoop` (#61) does.
 {{% /pageinfo %}}
 
 Simian's four engines (`chaos-mesh`, `network-policy`, `envoy-fault`, and the
@@ -138,7 +135,7 @@ born wrong, in the API server.
 | 6 | `serviceSelectorMismatch` | `fault-badselector` | Service / `frontend` / `NoEndpoints` | Warning | **Yes** — `kube-state` `SelectorDrift` |
 | 7 | `healthy` | `fault-none` | *(none — control)* | OK | **Yes** — `kube-state` `NoOp`, which synthesizes a *healthy* workload rather than applying nothing, so the control is not scoreable by counting objects |
 | 8 | `multipleFaults` | `fault-storefront` | 3 findings: `orders-api` imagepull, `recommendation-etl` unschedulable, `inventory-sync` job failure | Critical | **Yes** — three faults in one scenario, all three kinds now exist |
-| 9 | `cascade` | `fault-sessions` | Pod / `session-store` / `CrashLoopBackOff` **(root)** → Service / `session-store` / `NoEndpoints` | Critical | Not yet — needs a crash-looping workload *behind its own Service*, so the missing endpoints are a consequence and not the fault. `SelectorDrift` has the Service and a healthy workload; `ContainerExitLoop` has the crash loop and no Service |
+| 9 | `cascade` | `fault-sessions` | Pod / `session-store` / `CrashLoopBackOff` **(root)** → Service / `session-store` / `NoEndpoints` | Critical | **Yes** — `kube-state` `BackendCrashLoop`, the crash loop *behind its own Service*, so the missing endpoints are a consequence and not the fault |
 | 10 | `unboundVolume` | `fault-ledger` | PersistentVolumeClaim / `ledger-data` / `VolumeBindingFailed` | Critical | **Yes** — `kube-state` `UnboundClaim` |
 | 11 | `silentFailure` | `fault-invoicing` | Pod / `invoice-reconciler` / `DependencyFailure` — Deployment Available, Service has endpoints, every broad check reports clean | Critical | **Yes** — `kube-state` `DependencyStall`, gated through the `logs` probe type |
 
@@ -146,8 +143,13 @@ born wrong, in the API server.
 the document. It was not an indictment of the engines — Chaos Mesh is excellent
 at what it does — it was a statement that Simian had been building one half of
 the fault space and the eval rig needed the other half first. Deliverable A
-below is the answer, and all nine of its kinds have shipped — ten of eleven
-fixtures are reproducible today, with only the `cascade` shape (9) still open.
+below is the answer, and eleven of eleven fixtures are reproducible today.
+
+The last one to close is the one worth naming. `cascade` is the only fixture
+whose ground truth distinguishes a **root** from a symptom, so it is the only
+one that can ask whether a subject stopped at what a user noticed. Reproducing
+it took a thirteenth kind rather than a composition of two existing ones,
+because the point is precisely that the two findings are *not* independent.
 
 Conversely, `internal/faults` structurally cannot produce anything Simian's
 existing engines are good at. Applying YAML cannot create latency, packet
@@ -160,7 +162,7 @@ So the two halves are complementary, and Simian should own both.
 
 ## 4. Deliverable A — the `kube-state` engine
 
-*Shipped for `synthesize` mode and all twelve kinds (#56, #57, #58). `mutate`
+*Shipped for `synthesize` mode and all thirteen kinds (#56, #57, #58, #61). `mutate`
 mode is #59 and the node-level kinds are the second half of #58; the driver
 rejects `mode: mutate` with an explanatory error rather than ignoring the
 field.*
@@ -191,11 +193,12 @@ reverts on TTL expiry the same way a Chaos Mesh CR is deleted.
 | Kind | Mechanism | Produces | Parity with |
 | --- | --- | --- | --- |
 | `ImageUnresolvable` | patch container image to an unresolvable-but-real-host reference | `ImagePullBackOff` / `ErrImagePull` | 1, 8 |
-| `ContainerExitLoop` | patch command/args to exit non-zero | `CrashLoopBackOff` | 2, 9 |
+| `ContainerExitLoop` | patch command/args to exit non-zero | `CrashLoopBackOff` | 2 |
 | `MemoryLimitSqueeze` | patch `resources.limits.memory` below working set | `OOMKilled` | 3 |
 | `Unschedulable` | patch `resources.requests.cpu` beyond cluster capacity, or an unsatisfiable `nodeSelector` | `Pending` + `FailedScheduling` | 4, 8 |
 | `JobFailure` | create/patch a Job that exhausts `backoffLimit` | `BackoffLimitExceeded` | 5, 8 |
-| `SelectorDrift` | patch `Service.spec.selector` off the workload's labels | empty EndpointSlice | 6, 9 |
+| `SelectorDrift` | patch `Service.spec.selector` off the workload's labels | empty EndpointSlice | 6 |
+| `BackendCrashLoop` | synthesize a crash-looping workload and a Service whose selector *matches* it | EndpointSlice listing the pods with `ready: false`; a root and a symptom in two objects | 9 |
 | `UnboundClaim` | PVC referencing a nonexistent StorageClass, plus a consumer pod | `VolumeBindingFailed` / unbound | 10 |
 | `DependencyStall` | synthesize a workload that serves real HTTP and logs a failing upstream call while staying Ready and Available | log-only signal, all field checks clean | 11 |
 | `PDBGridlock` | a PodDisruptionBudget whose `minAvailable` equals the replica count | `disruptionsAllowed: 0`; every eviction returns 429 | — |
@@ -756,7 +759,7 @@ within a group is independent of its siblings.
 | #59 | `mutate` mode + revert-on-lease-expiry | L | #56 |
 | **Phase 3 — scenarios** |
 | #60 ✅ | `Scenario` type, `ScenarioID` plumbed through executor + audit, pack loader | M | — |
-| #61 | Lookout pack (10) + parity pack (11) + the equivalence-matrix test | M | #57, #58, #60 |
+| #61 | `BackendCrashLoop` — the `cascade` shape, the last parity gap, gated and verified on GKE — then the lookout pack (10) + parity pack (11) + the equivalence-matrix test | M | #57, #58, #60 |
 | **Phase 4 — the rig** |
 | #62 ✅ | `pkg/eval`: `Report`, `Subject`, and the seven measures | M | #60 |
 | #63 ✅ | `cmd/simian-eval` + `exec:`/`noop:` adapters + arena lifecycle, namespace fencing, and the artifacts scored back through #66 | M | #53, #62 |

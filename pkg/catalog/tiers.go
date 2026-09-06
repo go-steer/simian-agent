@@ -81,6 +81,7 @@ var kubeStateNamespaceKinds = map[string]bool{
 	"Unschedulable":      true,
 	"JobFailure":         true,
 	"SelectorDrift":      true,
+	"BackendCrashLoop":   true,
 	"UnboundClaim":       true,
 	"DependencyStall":    true,
 	"RolloutStuck":       true,

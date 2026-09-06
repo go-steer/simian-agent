@@ -597,6 +597,10 @@ func TestTheBundleKindsAreGatedOnEveryHalfOfTheirFault(t *testing.T) {
 	}{
 		{KubeStateJobFailure, []string{ProbeJobFailed}, []string{k8s}},
 		{KubeStateSelectorDrift, []string{ProbeWorkloadReady, ProbeNoEndpoints}, []string{k8s, k8s}},
+		// Root then symptom, and for this kind that ordering is the kind. Both
+		// halves are positive assertions, so neither is forced to go second;
+		// the crash loop is the cause and the endpoints are what it did.
+		{KubeStateBackendCrashLoop, []string{ProbeCrashLooping, ProbeEndpointsNotReady}, []string{k8s, k8s}},
 		{KubeStateUnboundClaim, []string{ProbeClaimPending, ProbeUnschedulable}, []string{k8s, k8s}},
 		// The only kind with a probe that is not a k8s read, because it is the
 		// only kind with no field to read: the two healthy assertions come off
@@ -911,5 +915,67 @@ func TestTheCertGateMatchesAPEMHeaderThroughBase64(t *testing.T) {
 	}
 	if strings.Contains(got, base64.StdEncoding.EncodeToString([]byte("-----BEGIN PRIVATE KEY"))) {
 		t.Error("the gate renders the private key as well as the certificate")
+	}
+}
+
+// BackendCrashLoop and SelectorDrift both end in "the Service is not serving"
+// and are told apart by what the EndpointSlice says. This is the test that the
+// two gates cannot pass against each other's fault — which is what makes the
+// pair worth having, since a subject is being asked to make the same
+// distinction.
+func TestTheBackendCrashLoopGateReadsUnreadyEndpointsNotMissingOnes(t *testing.T) {
+	gs := kubeStateGates[KubeStateBackendCrashLoop]
+	if len(gs) != 2 {
+		t.Fatalf("gates = %d, want the crash loop plus the endpoints", len(gs))
+	}
+	crash, endpoints := gs[0], gs[1]
+
+	// The crash-loop half is the same assertion ContainerExitLoop makes, and
+	// deliberately so: the pods are broken the same way, and a second spelling
+	// of it would be a second thing to keep true.
+	if want := kubeStateGates[KubeStateContainerExitLoop][0]; crash.jsonPath != want.jsonPath || crash.expect != want.expect {
+		t.Errorf("crash gate reads %q==%q, want the ContainerExitLoop gate's %q==%q",
+			crash.jsonPath, crash.expect, want.jsonPath, want.expect)
+	}
+	if endpoints.selectorKey != "kubernetes.io/service-name" {
+		t.Errorf("endpoint gate selects on %q, want the label the endpointslice controller writes", endpoints.selectorKey)
+	}
+
+	// A slice listing pods that are not serving. This is what the fault
+	// produces, and the SelectorDrift gate would pass against it — the
+	// addresses are present, so an emptiness assertion would fail — which is
+	// why the two kinds do not share a gate.
+	unready := map[string]any{"endpoints": []any{
+		map[string]any{"addresses": []any{"10.4.0.9"}, "conditions": map[string]any{"ready": false}},
+		map[string]any{"addresses": []any{"10.4.1.7"}, "conditions": map[string]any{"ready": false}},
+	}}
+	if got := renderPath(t, endpoints.jsonPath, unready); !strings.Contains(got, endpoints.expect) {
+		t.Errorf("an unready slice renders %q, which does not contain %q", got, endpoints.expect)
+	}
+
+	// The same Service once its backends recover. The gate has to stop
+	// passing, or a fault that healed mid-experiment is still reported as
+	// landed.
+	ready := map[string]any{"endpoints": []any{
+		map[string]any{"addresses": []any{"10.4.0.9"}, "conditions": map[string]any{"ready": true}},
+	}}
+	if got := renderPath(t, endpoints.jsonPath, ready); strings.Contains(got, endpoints.expect) {
+		t.Errorf("a ready slice renders %q, which still contains %q", got, endpoints.expect)
+	}
+
+	// SelectorDrift's shape: a placeholder slice with no endpoints at all.
+	// Renders nothing, so this gate correctly refuses to call it a crash loop.
+	if got := renderPath(t, endpoints.jsonPath, map[string]any{}); strings.TrimSpace(got) != "" {
+		t.Errorf("a slice with no endpoints renders %q, want nothing", got)
+	}
+}
+
+// The other half of that pair, from the other side: two replicas, so "the
+// Service has no healthy backend" is a claim about a set. With one pod the
+// Service-level finding and the pod-level finding are the same sentence, and
+// the root-versus-symptom scoring this kind exists for has nothing to grade.
+func TestBackendCrashLoopSynthesizesMoreThanOneBackend(t *testing.T) {
+	if got := KubeStateDefaultReplicas(KubeStateBackendCrashLoop); got < 2 {
+		t.Errorf("default replicas = %d, want at least 2", got)
 	}
 }
