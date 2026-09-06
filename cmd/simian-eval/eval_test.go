@@ -269,6 +269,28 @@ func TestFaultsShorterThanTheSubjectTimeoutAreRefused(t *testing.T) {
 	}
 }
 
+// The dataplane pack has to be runnable whole, at default flags, with no
+// escape hatch.
+//
+// It is the pack whose subjects are slowest — none of its scenarios can be
+// answered from `kubectl get`, and a subject that has to drive traffic and
+// measure it needs the full default timeout — so it is also the pack most
+// likely to be reached for with --allow-short-faults, which is exactly the flag
+// that turns "the lease expired" into "the subject remediated it". Every lease
+// in it is 12m for that reason. This is the guard, because the cost of getting
+// it wrong is a silently wrong score rather than an error.
+//
+// The other packs are deliberately not asserted here. Their short leases are
+// fine for the object-status scenarios they hold and are run with --only or a
+// shorter timeout; this pack is the one whose scenarios take a subject a long
+// time by construction.
+func TestTheDataplanePackOutlastsTheDefaultSubjectTimeout(t *testing.T) {
+	pack := scenario.MustBuiltin(scenario.PackDataplane)
+	if err := checkFaultDurations(pack.Scenarios, harness.DefaultSubjectTimeout); err != nil {
+		t.Errorf("the dataplane pack cannot be run at default flags: %v", err)
+	}
+}
+
 // An unset duration is the executor's business, not this check's: it applies
 // the ceiling, and guessing here would refuse scenarios that are fine.
 func TestAnUnsetFaultDurationIsNotShort(t *testing.T) {

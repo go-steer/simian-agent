@@ -39,6 +39,10 @@ type fakeArena struct {
 	// observe overlap without sleeping.
 	live map[string]int
 	peak map[string]int
+
+	// onTeardown runs inside Teardown, which is where a test can look at the
+	// rest of the world the way the real arena's safety check does.
+	onTeardown func(ns string)
 }
 
 func newFakeArena() *fakeArena {
@@ -61,9 +65,14 @@ func (a *fakeArena) Setup(_ context.Context, ns string) error {
 
 func (a *fakeArena) Teardown(_ context.Context, ns string) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	hook := a.onTeardown
 	a.torndown = append(a.torndown, ns)
 	a.live[ns]--
+	a.mu.Unlock()
+
+	if hook != nil {
+		hook(ns)
+	}
 	return nil
 }
 
@@ -95,6 +104,10 @@ type fakeInjector struct {
 	listErr     error
 	onApply     func(m simian.FaultManifest)
 	clearIsNoop bool
+
+	// clearDelay makes Clear behave like a delete against a CR with a
+	// finalizer: the call returns at once and the object is still there.
+	clearDelay time.Duration
 }
 
 func newFakeInjector() *fakeInjector {
@@ -127,9 +140,19 @@ func (f *fakeInjector) Clear(_ context.Context, uid string) error {
 	if f.clearErr != nil {
 		return f.clearErr
 	}
-	if !f.clearIsNoop {
-		delete(f.active, uid)
+	if f.clearIsNoop {
+		return nil
 	}
+	if f.clearDelay > 0 {
+		go func() {
+			time.Sleep(f.clearDelay)
+			f.mu.Lock()
+			delete(f.active, uid)
+			f.mu.Unlock()
+		}()
+		return nil
+	}
+	delete(f.active, uid)
 	return nil
 }
 

@@ -54,7 +54,18 @@ faults:
   - engine: chaos-mesh
     api_version: chaos-mesh.org/v1alpha1
     resource_kind: NetworkChaos
-    duration: 6m
+    # Twelve minutes, not the six that is the default in the other packs, and
+    # the reason is specific to this one. The gate alone can eat three of them:
+    # an SOT probe waits up to 60s for the substrate to prove it was healthy,
+    # the Settle probes up to 120s plus a 10s dwell, and every one of them is a
+    # request rather than an object read. The settle wait comes out of this
+    # lease. What is left has to be enough for a subject that cannot answer
+    # from `kubectl get` and has to go and measure traffic — which is the whole
+    # premise of the pack, and is slower than reading a field.
+    #
+    # It costs a fast subject nothing. The lease is a ceiling: chaos is cleared
+    # when the subject answers, not when the duration runs out.
+    duration: 12m
     blast_radius_tier: namespace
     spec:
       action: partition
