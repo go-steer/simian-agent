@@ -33,6 +33,25 @@ faults:
       message: 'fatal: config: unknown key "featureFlags.checkoutV2"'
     targets:
       - namespace: lookout-storefront
+# The wedge container exits 1, so the new revision's pod really is in
+# CrashLoopBackOff for the life of the lease. That is a true fact about this
+# namespace and it is not the answer, so it is exempted from the precision
+# measure rather than promoted to an expectation: making it an expectation
+# would mean a subject that reports only the Deployment — the better answer,
+# and the whole point of the scenario — scores recall 0.50 for it. Before the
+# exemption existed the detector scored hallucinated_fault 0.50 here for being
+# right twice.
+#
+# `oom` in this same pack declines the identical exemption, and deliberately.
+# There the crash-loop token is offered *instead of* the diagnosis: a container
+# killed for exceeding its limit is also technically backing off restarts, but
+# a report that says CrashLoopBackOff has named the wrong fix. Here it is
+# offered *alongside* one. That distinction is a judgement about each scenario
+# rather than something the mechanism knows — AlsoTrue is unconditional, and a
+# subject that reports only the crash loop here is charged by recall and not by
+# precision, which is the correct number of times to charge one mistake.
+also_true:
+  - CrashLoopBackOff
 expect:
   # ProgressDeadlineExceeded is the token the Deployment controller writes and
   # is the family member; rollout.stall is the observer's own signal kind, and

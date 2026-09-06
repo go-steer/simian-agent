@@ -465,3 +465,61 @@ func TestTimeToRemediateRefusesANegativeInterval(t *testing.T) {
 		t.Errorf("comment = %q, want it to flag the inconsistency", got.Comment)
 	}
 }
+
+// TestATrueConsequenceIsNotAnInvention is the bad-rollout bug: the wedge
+// container exits non-zero, so the pod really is crash-looping, and a report
+// that says so was charged with inventing a crash loop because only Expect was
+// read to learn what the fault injected.
+func TestATrueConsequenceIsNotAnInvention(t *testing.T) {
+	rollout := scenario.ExpectedFinding{
+		Kind: "Deployment", Name: "web", Reasons: []string{"ProgressDeadlineExceeded"},
+	}
+	report := &Report{Findings: []scenario.Finding{
+		{Kind: "Deployment", ResourceName: "web-abc", Reason: "ProgressDeadlineExceeded", Severity: scenario.SeverityCritical, Namespace: "ns"},
+		{Kind: "Pod", ResourceName: "web-abc-1", Reason: "CrashLoopBackOff", Severity: scenario.SeverityCritical, Namespace: "ns"},
+	}}
+
+	charged := scenario.Scenario{ID: "s", Expect: []scenario.ExpectedFinding{rollout}}
+	if got := (HallucinatedFault{}).Score(charged, Run{Report: report}).Value; got != 0.5 {
+		t.Fatalf("without the exemption: got %v, want 0.5 — the premise of this test", got)
+	}
+
+	exempt := scenario.Scenario{ID: "s", Expect: []scenario.ExpectedFinding{rollout}, AlsoTrue: []string{"CrashLoopBackOff"}}
+	if got := (HallucinatedFault{}).Score(exempt, Run{Report: report}).Value; got != 1 {
+		t.Errorf("with the exemption: got %v, want 1", got)
+	}
+}
+
+// An exemption licenses a family, not a whole report. Everything else the
+// subject invents is still charged.
+func TestAnExemptionDoesNotLicenseTheRestOfTheReport(t *testing.T) {
+	s := scenario.Scenario{
+		ID:       "s",
+		Expect:   []scenario.ExpectedFinding{{Kind: "Deployment", Name: "web", Reasons: []string{"ProgressDeadlineExceeded"}}},
+		AlsoTrue: []string{"CrashLoopBackOff"},
+	}
+	report := &Report{Findings: []scenario.Finding{
+		{Kind: "Pod", ResourceName: "web-abc-1", Reason: "CrashLoopBackOff", Severity: scenario.SeverityCritical, Namespace: "ns"},
+		{Kind: "Pod", ResourceName: "web-abc-1", Reason: "OOMKilled", Severity: scenario.SeverityCritical, Namespace: "ns"},
+	}}
+	got := (HallucinatedFault{}).Score(s, Run{Report: report}).Value
+	if got != 0.5 {
+		t.Errorf("Score = %v, want 0.5: the OOM claim is still an invention", got)
+	}
+}
+
+// AlsoTrue contributes nothing to recall. The subject that reports only the
+// exempted consequence has still missed the diagnosis.
+func TestAnExemptionIsNotAnExpectation(t *testing.T) {
+	s := scenario.Scenario{
+		ID:       "s",
+		Expect:   []scenario.ExpectedFinding{{Kind: "Deployment", Name: "web", Reasons: []string{"ProgressDeadlineExceeded"}}},
+		AlsoTrue: []string{"CrashLoopBackOff"},
+	}
+	report := &Report{Findings: []scenario.Finding{
+		{Kind: "Pod", ResourceName: "web-abc-1", Reason: "CrashLoopBackOff", Severity: scenario.SeverityCritical, Namespace: "ns"},
+	}}
+	if got := (Recall{}).Score(s, Run{Report: report}).Value; got != 0 {
+		t.Errorf("Recall = %v, want 0: an exemption is not an answer", got)
+	}
+}

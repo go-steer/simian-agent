@@ -246,6 +246,15 @@ func (SeverityDistance) Score(s scenario.Scenario, run Run) Score {
 //
 // This is what makes a healthy control cost something, and it doubles as a
 // misdiagnosis check on the broken ones.
+//
+// # What counts as injected
+//
+// The set of injected failure modes is read from the scenario's ground truth
+// rather than from a table here, so a new scenario cannot forget to register
+// itself. It reads both Expect and AlsoTrue: a fault often produces true
+// consequences beyond the one the subject is asked for, and those are still
+// true. See scenario.Scenario.AlsoTrue for why they are not simply extra
+// expectations.
 type HallucinatedFault struct{}
 
 // Name implements Measure.
@@ -257,15 +266,25 @@ func (HallucinatedFault) Score(s scenario.Scenario, run Run) Score {
 		return Score{Name: MeasureHallucination, Value: 0, Unit: UnitFraction, Comment: noReport}
 	}
 
-	// The families this scenario actually injected, taken from its own
-	// expectations so that adding a scenario cannot forget to update a second
-	// table.
+	// The families this scenario actually injected, taken from its own ground
+	// truth so that adding a scenario cannot forget to update a second table.
+	//
+	// Both halves of the ground truth, because required and true are
+	// different sets. Expect names the findings a correct report must contain;
+	// AlsoTrue names the ones it may contain without being wrong — a stuck
+	// rollout really does leave a pod crash-looping, and reading only Expect
+	// charged that observation as an invention.
 	injected := map[string]bool{}
 	for _, e := range s.Expect {
 		for _, r := range e.Reasons {
 			if fam := familyOf(r); fam != "" {
 				injected[fam] = true
 			}
+		}
+	}
+	for _, r := range s.AlsoTrue {
+		if fam := familyOf(r); fam != "" {
+			injected[fam] = true
 		}
 	}
 

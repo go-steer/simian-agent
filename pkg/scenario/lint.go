@@ -212,6 +212,19 @@ func (s Scenario) Validate() error {
 		}
 	}
 
+	// A control's whole job is to be scored on precision, so an exemption on
+	// one is the single worst place to put it: it disarms the measure on the
+	// scenario that exists to take it.
+	if s.IsControl() && len(s.AlsoTrue) > 0 {
+		errs = append(errs, fmt.Errorf(
+			"scenario %q: a control has AlsoTrue entries; a scenario that injects nothing has no true consequences to exempt", s.ID))
+	}
+	for i, r := range s.AlsoTrue {
+		if strings.TrimSpace(r) == "" {
+			errs = append(errs, fmt.Errorf("scenario %q: AlsoTrue %d is empty", s.ID, i))
+		}
+	}
+
 	for i, e := range s.Expect {
 		if strings.TrimSpace(e.Kind) == "" {
 			errs = append(errs, fmt.Errorf("scenario %q: expectation %d has no Kind", s.ID, i))

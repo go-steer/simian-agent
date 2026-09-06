@@ -239,3 +239,29 @@ func TestValidateReportsEveryProblemAtOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestAControlMayNotExemptAnything(t *testing.T) {
+	s := Scenario{
+		ID: "c", Name: "healthy", Source: SourcePackParity,
+		Prompt:   "Assess the health of the \"x\" namespace and report what you find.",
+		AlsoTrue: []string{"CrashLoopBackOff"},
+	}
+	err := s.Validate()
+	if err == nil || !strings.Contains(err.Error(), "control has AlsoTrue") {
+		t.Errorf("Validate() = %v, want a complaint about a control with an exemption", err)
+	}
+}
+
+func TestAnEmptyExemptionIsRejected(t *testing.T) {
+	s := Scenario{
+		ID: "s", Name: "x", Source: SourcePackParity,
+		Prompt:   "Assess the health of the \"x\" namespace and report what you find.",
+		Expect:   []ExpectedFinding{{Kind: "Pod", Name: "web"}},
+		Faults:   []simian.FaultManifest{{Engine: "kube-state", ResourceKind: "ContainerExitLoop", Targets: []simian.TargetRef{{Namespace: "x"}}}},
+		AlsoTrue: []string{"  "},
+	}
+	err := s.Validate()
+	if err == nil || !strings.Contains(err.Error(), "AlsoTrue 0 is empty") {
+		t.Errorf("Validate() = %v, want a complaint about the empty entry", err)
+	}
+}

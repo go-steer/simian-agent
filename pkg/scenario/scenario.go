@@ -277,6 +277,37 @@ type Scenario struct {
 	// mode everywhere.
 	Expect []ExpectedFinding `json:"expect,omitempty"`
 
+	// AlsoTrue names failure modes the fault genuinely produces that the
+	// subject is *not* required to report.
+	//
+	// It exists because "correct" and "required" are different sets, and only
+	// Expect was expressing both. A stuck rollout is diagnosed at Deployment
+	// altitude — new_ready=0/N against old_ready=N/N — and that is the only
+	// finding worth demanding. But the reason the new revision is not ready is
+	// that its container exits non-zero, so there is also a pod in
+	// CrashLoopBackOff, and a subject that mentions it has said something true
+	// about the cluster.
+	//
+	// With only Expect to read from, the precision measure inferred the
+	// injected failure modes from the required ones and charged that true
+	// statement as an invention: bad-rollout scored hallucinated_fault 0.50
+	// against a detector that was right twice. Promoting the pod to an
+	// expectation would have fixed precision by breaking recall — the subject
+	// that reports only the Deployment gives the better answer and would have
+	// scored 0.50 for it.
+	//
+	// So these tokens suppress the hallucination charge and contribute nothing
+	// to recall. They are reason tokens, not objects: the claim being licensed
+	// is "this namespace contains a crash loop", and which pod is the
+	// subject's business rather than ground truth's.
+	//
+	// Use it only for a consequence the fault *mechanically* produces, and
+	// keep the list short. Every entry is a claim the subject can no longer be
+	// charged for, so a generous one turns precision off. A control may not
+	// have any, which is enforced: a scenario that injects nothing has no
+	// consequences, and a control with an exemption measures nothing at all.
+	AlsoTrue []string `json:"also_true,omitempty"`
+
 	// Severity is the report-level severity a correct report carries.
 	Severity Severity `json:"severity,omitempty"`
 
