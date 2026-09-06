@@ -164,6 +164,23 @@ func TestLoadPacksNamesASinglePackAfterItsDirectory(t *testing.T) {
 	}
 }
 
+// --pack takes a built-in name as well as a path, and the two mix. Without
+// this a scored run of the shipped packs depends on the operator having a
+// checkout of this repository next to the binary, which is the opposite of
+// what embedding them was for.
+func TestLoadPacksTakesBuiltinNamesAndPathsTogether(t *testing.T) {
+	pack, err := loadPacks([]string{scenario.PackParity, packDir(t, "extra", lookoutScenario)})
+	if err != nil {
+		t.Fatalf("loadPacks: %v", err)
+	}
+	if pack.Name != "parity+extra" {
+		t.Errorf("pack name = %q, want parity+extra", pack.Name)
+	}
+	if _, ok := pack.ByID("parity-image-pull"); !ok {
+		t.Error("the built-in parity pack's scenarios did not survive the merge")
+	}
+}
+
 // Two packs run as one suite rather than back to back, because the namespace
 // fencing, the concurrency ceiling and the scorecard are all defined over one
 // set of scenarios.
@@ -209,7 +226,8 @@ func TestLoadPacksRefusesWhatItCannotRead(t *testing.T) {
 		dirs []string
 		want string
 	}{
-		{"none", nil, "no pack directories"},
+		{"none", nil, "no packs given"},
+		{"a name that is neither built in nor a path", []string{"paritty"}, "neither a built-in pack"},
 		{"missing", []string{filepath.Join(dir, "nope")}, "open pack"},
 		{"a file", []string{filepath.Join(dir, "s.yaml")}, "not a directory"},
 		{"one of several missing", []string{dir, filepath.Join(dir, "nope")}, "open pack"},

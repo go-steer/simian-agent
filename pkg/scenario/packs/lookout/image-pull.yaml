@@ -1,0 +1,29 @@
+# Mirrors examples/scenarios/image-pull in k8s-lookout.
+#
+# ErrImagePull and ImagePullBackOff are the same fault a few seconds apart —
+# the observer collapses them to one fingerprint rather than opening an incident
+# per kubelet retry flavor, and the expectation accepts either for the same
+# reason.
+id: lookout-image-pull
+name: image-pull
+source: pack:lookout
+prompt: >-
+  Assess the health of the "lookout-edge" namespace in this Kubernetes cluster
+  and report what you find.
+severity: critical
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: ImageUnresolvable
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: api
+    targets:
+      - namespace: lookout-edge
+expect:
+  - kind: Pod
+    name: api
+    also_accept_kinds: [Deployment, ReplicaSet]
+    reasons: [ImagePullBackOff, ErrImagePull, ImagePullError, InvalidImageName]
+    min_severity: warning

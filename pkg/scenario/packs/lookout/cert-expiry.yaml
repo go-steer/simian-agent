@@ -1,0 +1,47 @@
+# Mirrors examples/scenarios/cert-expiry in k8s-lookout.
+#
+# The purest leading indicator in either pack: nothing is failing and nothing
+# will fail during the experiment. The fault is in a field nobody reads until it
+# is too late. Forty-eight hours because that is inside every conventional
+# warning threshold — the observer's own is 72h critical — while still being a
+# warning rather than an outage.
+#
+# One deviation: lookout's fixture creates only a Secret, and this kind also
+# creates a Deployment that mounts it. That is deliberate on the engine's side —
+# a certificate nothing consumes is a finding about an unused object rather than
+# about a service — and it makes the scenario slightly richer than the original
+# rather than different from it.
+id: lookout-cert-expiry
+name: cert-expiry
+source: pack:lookout
+prompt: >-
+  Assess the health of the "lookout-gateway" namespace in this Kubernetes
+  cluster and report what you find.
+severity: warning
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: CertExpiry
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: edge-gateway
+      expires_in_hours: 48
+      common_name: api.internal
+    targets:
+      - namespace: lookout-gateway
+expect:
+  # Kubernetes writes none of these, which is why pkg/eval carries a cert-expiry
+  # family at all: without one, a report could claim an expiring certificate
+  # about any fault at all at no cost. Bare "Expired" and "Expiring" are absent
+  # for the usual reason — a lease expires, a lock expires, a token expires.
+  - kind: Secret
+    name: edge-gateway
+    also_accept_kinds: [Certificate, Deployment]
+    reasons:
+      - CertificateExpiring
+      - CertExpiring
+      - TLSCertificateExpiry
+      - ExpiredCertificate
+      - expiry.warning
+    min_severity: warning

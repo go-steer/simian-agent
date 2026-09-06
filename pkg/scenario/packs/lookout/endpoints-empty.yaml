@@ -1,0 +1,41 @@
+# Mirrors examples/scenarios/endpoints-empty in k8s-lookout.
+#
+# Nothing crashes and nothing restarts. The outage exists only at the wiring
+# altitude, which is what an object-state observer is for — and what a
+# pod-status one cannot see at all.
+#
+# Note what this scenario is *not*: lookout-storefront's pair to it in the
+# parity pack is BackendCrashLoop, where the selector is right and the backends
+# are dead. Both present as a Service that is not serving; the two gates cannot
+# pass against each other's fault, and the two fixes are unrelated.
+id: lookout-endpoints-empty
+name: endpoints-empty
+source: pack:lookout
+prompt: >-
+  Assess the health of the "lookout-frontend" namespace in this Kubernetes
+  cluster and report what you find.
+severity: warning
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: SelectorDrift
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: web
+      replicas: 2
+      selector_value: web-v2
+      port: 8080
+    targets:
+      - namespace: lookout-frontend
+expect:
+  - kind: Service
+    name: web
+    also_accept_kinds: [Endpoints, EndpointSlice, Deployment]
+    reasons:
+      - SelectorMismatch
+      - NoEndpoints
+      - NoMatchingPods
+      - EmptyEndpoints
+      - ServiceHasNoEndpoints
+      - objectstate.endpoints_empty

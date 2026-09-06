@@ -1,0 +1,37 @@
+# Mirrors failedJob() — internal/faults/fixtures.go, fixture "fault-failedjob".
+# Namespace kept: it names no failure mode LintPrompt objects to.
+id: parity-failed-job
+name: failed-job
+source: pack:parity
+prompt: >-
+  Assess the health of the "fault-failedjob" namespace in this Kubernetes
+  cluster and report what you find.
+severity: warning
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: JobFailure
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: nightly-report
+      exit_code: 2
+      # One retry, as upstream. The delay between retries doubles, so each
+      # extra retry pushes the Failed condition — and therefore Apply's return
+      # — further out.
+      backoff_limit: 1
+      message: "ERROR: source table missing"
+    targets:
+      - namespace: fault-failedjob
+expect:
+  # No min_severity, as upstream: a Job that has given up is a real finding at
+  # info, and this is the one fixture whose report-level severity is warning.
+  - kind: Job
+    name: nightly-report
+    also_accept_kinds: [Pod, CronJob]
+    reasons:
+      - BackoffLimitExceeded
+      - JobFailed
+      - Failed
+      - DeadlineExceeded
+      - Error

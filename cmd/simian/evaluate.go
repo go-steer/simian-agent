@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -29,7 +28,7 @@ import (
 // evaluateOptions is the command's inputs, kept separate from the Cobra
 // plumbing so the whole thing can be run in a test without a process.
 type evaluateOptions struct {
-	packDir     string
+	packRef     string
 	auditPath   string
 	reportPath  string
 	format      string
@@ -62,15 +61,15 @@ non-zero, because a scorecard from a suite that did not manifest is a
 confident number about nothing.
 
 Examples:
-  simian evaluate --pack packs/parity --audit run.log --report agent.json
-  simian evaluate --pack packs/parity --audit run.log --report agent.json --format json
-  simian evaluate --pack packs/parity --audit run.log --report agent.json --min-efficacy 1.0`,
+  simian evaluate --pack parity --audit run.log --report agent.json
+  simian evaluate --pack ./packs/custom --audit run.log --report agent.json --format json
+  simian evaluate --pack lookout --audit run.log --report agent.json --min-efficacy 1.0`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runEvaluate(opts, cmd.OutOrStdout())
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.packDir, "pack", "", "directory of scenario files holding the ground truth (required)")
+	cmd.Flags().StringVar(&opts.packRef, "pack", "", "built-in pack name (parity, lookout) or a directory of scenario files, holding the ground truth (required)")
 	cmd.Flags().StringVar(&opts.auditPath, "audit", "", "JSON audit log from the run, or - for stdin (required)")
 	cmd.Flags().StringVar(&opts.reportPath, "report", "", "subject report artifact (required)")
 	cmd.Flags().StringVar(&opts.format, "format", opts.format, "text|json")
@@ -82,7 +81,7 @@ Examples:
 
 func runEvaluate(opts evaluateOptions, out io.Writer) error {
 	switch {
-	case opts.packDir == "":
+	case opts.packRef == "":
 		return fmt.Errorf("--pack is required: the scenarios are the ground truth, and there is nothing to score against without them")
 	case opts.auditPath == "":
 		return fmt.Errorf("--audit is required")
@@ -93,7 +92,7 @@ func runEvaluate(opts evaluateOptions, out io.Writer) error {
 		return fmt.Errorf("--format %q: want text or json", opts.format)
 	}
 
-	pack, err := loadPackDir(opts.packDir)
+	pack, err := scenario.LoadRef(opts.packRef)
 	if err != nil {
 		return err
 	}
@@ -139,22 +138,6 @@ func runEvaluate(opts evaluateOptions, out io.Writer) error {
 			summary.EfficacyRate, opts.minEfficacy, summary.InjectFailures, summary.Scenarios)
 	}
 	return nil
-}
-
-// loadPackDir loads a scenario pack from a directory on disk.
-func loadPackDir(dir string) (scenario.Pack, error) {
-	info, err := os.Stat(dir)
-	if err != nil {
-		return scenario.Pack{}, fmt.Errorf("open pack: %w", err)
-	}
-	if !info.IsDir() {
-		return scenario.Pack{}, fmt.Errorf("open pack: %s is not a directory", dir)
-	}
-	// LoadPack reads a subdirectory of the FS it is handed, so root the FS at
-	// the parent and name the leaf. Cleaned first so a trailing slash does
-	// not turn the leaf into "".
-	dir = filepath.Clean(dir)
-	return scenario.LoadPack(os.DirFS(filepath.Dir(dir)), filepath.Base(dir))
 }
 
 // readAudit reads the audit log, from stdin when the path is "-".

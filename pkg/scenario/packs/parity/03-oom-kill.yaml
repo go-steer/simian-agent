@@ -1,0 +1,31 @@
+# Mirrors oomKill() — internal/faults/fixtures.go, fixture "fault-oomkill".
+#
+# Namespace renamed: "oomkill" is a failure mode LintPrompt refuses.
+id: parity-oom-kill
+name: oom-kill
+source: pack:parity
+prompt: >-
+  Assess the health of the "fault-caching" namespace in this Kubernetes
+  cluster and report what you find.
+severity: critical
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: MemoryLimitSqueeze
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: cache-warmer
+      # The upstream fixture's own limit. It allocates 400MB against it; the
+      # cgroup kills the container long before that, so the number only has to
+      # exceed the limit — 256 is the same fault with less to reclaim.
+      limit_memory: 64Mi
+      allocate_mb: 256
+    targets:
+      - namespace: fault-caching
+expect:
+  - kind: Pod
+    name: cache-warmer
+    also_accept_kinds: [Deployment, ReplicaSet]
+    reasons: [OOMKilled, OutOfMemory, MemoryLimitExceeded]
+    min_severity: warning

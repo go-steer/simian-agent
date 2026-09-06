@@ -16,12 +16,14 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/go-steer/simian-agent/pkg/eval"
 	"github.com/go-steer/simian-agent/pkg/harness"
+	"github.com/go-steer/simian-agent/pkg/scenario"
 )
 
 // Cluster modes for --cluster.
@@ -92,7 +94,7 @@ func defaultOptions() *options {
 func bindFlags(cmd *cobra.Command, o *options) {
 	f := cmd.Flags()
 
-	f.StringSliceVar(&o.packDirs, "pack", nil, "Scenario pack directory holding the ground truth. Repeatable or comma-separated; several packs run as one suite (required).")
+	f.StringSliceVar(&o.packDirs, "pack", nil, "Scenario pack holding the ground truth: a built-in name (parity, lookout) or a directory. Repeatable or comma-separated; several packs run as one suite (required).")
 	f.StringVar(&o.subject, "subject", "", "What to grade: exec:<command line>, or noop: for the zero-score floor (required)")
 	f.StringSliceVar(&o.only, "only", nil, "Run only these scenario IDs. Repeatable or comma-separated. An ID that is not in the pack is an error, not an empty run.")
 	f.StringVar(&o.out, "out", "", "Directory to write audit.log and run.json into (default: a timestamped directory under ./runs)")
@@ -127,7 +129,8 @@ func bindFlags(cmd *cobra.Command, o *options) {
 func (o *options) validate() error {
 	switch {
 	case len(o.packDirs) == 0:
-		return fmt.Errorf("--pack is required: the scenarios are the ground truth, and there is nothing to grade against without them")
+		return fmt.Errorf("--pack is required: the scenarios are the ground truth, and there is nothing to grade against without them (built-in packs: %s)",
+			strings.Join(scenario.BuiltinPacks, ", "))
 	case o.subject == "":
 		return fmt.Errorf("--subject is required: name what to grade, e.g. exec:./bin/agent, or noop: for the zero-score floor")
 	case o.format != "text" && o.format != "json":

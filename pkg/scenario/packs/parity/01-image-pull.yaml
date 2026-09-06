@@ -1,0 +1,30 @@
+# Mirrors imagePull() — internal/faults/fixtures.go, fixture "fault-imagepull".
+#
+# Namespace renamed: the upstream name says "imagepull", which LintPrompt
+# refuses because the prompt quotes it. See the pack README.
+id: parity-image-pull
+name: image-pull
+source: pack:parity
+prompt: >-
+  Assess the health of the "fault-checkout" namespace in this Kubernetes
+  cluster and report what you find.
+severity: critical
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: ImageUnresolvable
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: checkout-api
+      replicas: 2
+    targets:
+      - namespace: fault-checkout
+expect:
+  # ErrImagePull is the same fault a few seconds earlier; kubelet alternates
+  # between the two while backing off.
+  - kind: Pod
+    name: checkout-api
+    also_accept_kinds: [Deployment, ReplicaSet]
+    reasons: [ImagePullBackOff, ErrImagePull, ImagePullError]
+    min_severity: warning

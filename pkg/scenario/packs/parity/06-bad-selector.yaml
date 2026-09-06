@@ -1,0 +1,43 @@
+# Mirrors serviceSelectorMismatch() — internal/faults/fixtures.go, fixture
+# "fault-badselector". Namespace kept.
+#
+# The pods are healthy and the Service exists; only the selector is wrong.
+# This is the fixture that separates a subject which reads pod status from one
+# which reads the graph — nothing in `get pods` is abnormal here.
+id: parity-bad-selector
+name: bad-selector
+source: pack:parity
+prompt: >-
+  Assess the health of the "fault-badselector" namespace in this Kubernetes
+  cluster and report what you find.
+severity: warning
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: SelectorDrift
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: frontend
+      replicas: 2
+      # The shape of a rename that updated one object and not the other. Named
+      # explicitly rather than left to the default, which would append "-v2" to
+      # the suffixed workload name and read less like a real mistake.
+      selector_value: frontend-v2
+      # Upstream publishes 80 and targets 8080. The engine's Service targets
+      # the port it publishes, and nothing answers on it either way — the fault
+      # is the absence of endpoints, not what is behind them.
+      port: 8080
+    targets:
+      - namespace: fault-badselector
+expect:
+  - kind: Service
+    name: frontend
+    also_accept_kinds: [Endpoints, EndpointSlice, Deployment]
+    reasons:
+      - SelectorMismatch
+      - NoEndpoints
+      - NoMatchingPods
+      - EmptyEndpoints
+      - ServiceHasNoEndpoints
+      - LabelMismatch

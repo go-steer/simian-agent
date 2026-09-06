@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/go-steer/simian-agent/pkg/eval"
+	"github.com/go-steer/simian-agent/pkg/scenario"
 )
 
 const scenarioYAML = `id: s-1
@@ -89,7 +90,7 @@ func artifacts(t *testing.T, auditBody string) evaluateOptions {
 		auditBody = auditLog
 	}
 	return evaluateOptions{
-		packDir:     pack,
+		packRef:     pack,
 		auditPath:   write(filepath.Join(dir, "run.log"), auditBody),
 		reportPath:  write(filepath.Join(dir, "agent.json"), reportJSON),
 		format:      "text",
@@ -233,12 +234,12 @@ func TestEvaluateRejectsIncompleteInvocations(t *testing.T) {
 		edit func(*evaluateOptions)
 		want string
 	}{
-		{"no pack", func(o *evaluateOptions) { o.packDir = "" }, "--pack is required"},
+		{"no pack", func(o *evaluateOptions) { o.packRef = "" }, "--pack is required"},
 		{"no audit", func(o *evaluateOptions) { o.auditPath = "" }, "--audit is required"},
 		{"no report", func(o *evaluateOptions) { o.reportPath = "" }, "--report is required"},
 		{"bad format", func(o *evaluateOptions) { o.format = "yaml" }, "want text or json"},
-		{"missing pack dir", func(o *evaluateOptions) { o.packDir = filepath.Join(o.packDir, "nope") }, "open pack"},
-		{"pack is a file", func(o *evaluateOptions) { o.packDir = o.reportPath }, "not a directory"},
+		{"missing pack dir", func(o *evaluateOptions) { o.packRef = filepath.Join(o.packRef, "nope") }, "open pack"},
+		{"pack is a file", func(o *evaluateOptions) { o.packRef = o.reportPath }, "not a directory"},
 		{"missing audit", func(o *evaluateOptions) { o.auditPath += ".gone" }, "open audit log"},
 		{"missing report", func(o *evaluateOptions) { o.reportPath += ".gone" }, "open report"},
 	} {
@@ -259,9 +260,9 @@ func TestEvaluateRejectsIncompleteInvocations(t *testing.T) {
 // the pack's name into "".
 func TestLoadPackDirToleratesATrailingSlash(t *testing.T) {
 	opts := artifacts(t, "")
-	pack, err := loadPackDir(opts.packDir + string(filepath.Separator))
+	pack, err := scenario.LoadRef(opts.packRef + string(filepath.Separator))
 	if err != nil {
-		t.Fatalf("loadPackDir: %v", err)
+		t.Fatalf("LoadRef: %v", err)
 	}
 	if pack.Name != "parity" {
 		t.Errorf("pack name = %q, want parity", pack.Name)
@@ -277,7 +278,7 @@ func TestEvaluateCmdWiresItsFlags(t *testing.T) {
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 	cmd.SetArgs([]string{
-		"--pack", opts.packDir,
+		"--pack", opts.packRef,
 		"--audit", opts.auditPath,
 		"--report", opts.reportPath,
 		"--format", "json",

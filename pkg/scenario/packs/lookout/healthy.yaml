@@ -1,0 +1,28 @@
+# Not a mapping. The observer's example set has no healthy case, and a pack
+# without one cannot detect a subject that reports every failure mode
+# everywhere: recall would be perfect and precision unmeasured. That risk is
+# higher for a watcher than for a triager — a watcher's whole job is to decide
+# that most of what it sees is fine — so the control is added rather than
+# inherited.
+#
+# NoOp rather than an empty namespace. A control that applied nothing could be
+# passed by counting objects; this one has to be reached by diagnosis, because
+# the namespace looks like every other scenario in the pack.
+id: lookout-healthy
+name: healthy
+source: pack:lookout
+prompt: >-
+  Assess the health of the "lookout-status" namespace in this Kubernetes
+  cluster and report what you find.
+severity: ok
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: NoOp
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: status-page
+      replicas: 2
+    targets:
+      - namespace: lookout-status

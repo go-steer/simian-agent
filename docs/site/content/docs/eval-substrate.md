@@ -309,27 +309,89 @@ a late expiry to the right scenario.
 
 ### 6.2 The packs
 
-`pkg/scenario/packs/parity/` — the eleven scenarios from §3, transcribed. Plus
-a checked-in equivalence matrix and a test asserting that the transcription
-still matches the upstream declarations, so drift is caught by CI rather than
-by a confusing baseline delta.
+{{% pageinfo %}}
+**Shipped 2026-09-06 (#61).** Both hand-written packs are embedded in the
+binary: `parity` at eleven of eleven, `lookout` at eight of ten plus a control
+the original set does not have. The per-pack equivalence matrices live next to
+the scenarios, in each pack's `README.md`; the two gaps are named below.
+{{% /pageinfo %}}
+
+`pkg/scenario/packs/parity/` — the eleven scenarios from §3, transcribed one
+file per scenario, embedded rather than read from a path so a scored run cannot
+be affected by the working directory. Both binaries take either kind of
+reference on `--pack`: a built-in name resolves to the embedded pack, anything
+with a path separator in it is read from disk, and `./parity` is how you say
+you meant the directory.
+
+Drift is caught in two halves, because there are two different things that can
+drift and only one of them is visible to CI:
+
+* **The pack moved and the record did not.** `testdata/upstream-fixtures.yaml`
+  records what the upstream fixtures said at transcription time — every
+  expected kind, name, accepted reason, `AlsoAcceptKinds`, `MinSeverity` and
+  root marker. `TestParityPackMatchesTheUpstreamRecord` compares the loaded
+  pack against it on every run. This is where a comparability claim quietly
+  stops being true: an extra accepted reason changes what the number means
+  without changing anything looser than a deep comparison would notice.
+* **Upstream moved and the record did not.** `TestUpstreamRecordStillMatchesTheSource`
+  answers that one and is opt-in, via `SIMIAN_UPSTREAM_FIXTURES=<path to
+  fixtures.go>`. It skips otherwise, because CI has no access to that
+  repository and never will — a build dependency would be the exact coupling
+  §2.1 exists to avoid. It reads the source as text, which is weaker than
+  compiling against it and is the strongest check available with the dependency
+  graph empty in both directions.
+
+Four namespaces are renamed. `fault-imagepull`, `fault-crashloop`,
+`fault-oomkill` and `fault-unschedulable` name their own fault, the prompt
+quotes the namespace, and `LintPrompt` refuses a prompt that leaks its
+diagnosis. That makes those four scenarios *harder* here than upstream, which
+is a divergence and is recorded per fixture rather than inferred — a test
+asserts that every rename was one the linter would actually have refused, so a
+difference nobody had to make cannot survive as a comment. Upstream applies the
+same rule from `cascade` onward; the pack applies it to the earlier six too.
+
+One deviation changes what is measured, and it is `silent-failure`. Upstream
+*produces* the failure — the container runs `wget` against a port nothing
+serves — precisely so the diagnosis is not readable out of the pod spec.
+`DependencyStall` writes a configured line that reaches the container through
+its environment, so a subject that reads the Deployment and never reads a log
+can still answer. Recall stays comparable; the read-path claim does not.
 
 `pkg/scenario/packs/lookout/` — k8s-lookout's `examples/scenarios/` is a
 **third** fixture corpus, ten scenarios each with `inject`/`verify`/`revert`.
-Six overlap the parity set (`crashloop`, `oom`, `image-pull`,
-`pending`≈`unschedulable`, `endpoints-empty`≈`badselector`,
-`failed-mount`≈`unboundVolume`) and four do not:
+Eight map onto a `kube-state` kind:
 
-| Scenario | Adds a `kube-state` fault kind |
-| --- | --- |
-| `node-failure` | `NodeUnready` — cordon/stop, the only multi-node fixture |
-| `pdb-gridlock` | `PDBGridlock` — a PDB that makes eviction impossible |
-| `cert-expiry` | `CertExpiry` — a Secret holding an expired certificate |
-| `bad-rollout` | `RolloutStuck` — a Deployment wedged mid-rollout |
+| Scenario | Kind | Note |
+| --- | --- | --- |
+| `crashloop` | `ContainerExitLoop` | — |
+| `oom` | `MemoryLimitSqueeze` | fixed allocation rather than a ramp |
+| `image-pull` | `ImageUnresolvable` | — |
+| `pending` | `Unschedulable` | engine-default CPU request, not lookout's 64 cores, which an autoscaler would satisfy |
+| `endpoints-empty` | `SelectorDrift` | — |
+| `pdb-gridlock` | `PDBGridlock` | budget written with no headroom rather than scaled into gridlock |
+| `cert-expiry` | `CertExpiry` | also creates the Deployment that mounts the Secret |
+| `bad-rollout` | `RolloutStuck` | — |
 
-Those four are worth having independently of lookout: `pdb-gridlock` and
+The last three are worth having independently of lookout: `pdb-gridlock` and
 `bad-rollout` in particular are failure modes an operator meets constantly and
 that neither of the other two corpora contains.
+
+Two do not map, and an earlier draft of this document got one of them wrong by
+calling `failed-mount` an approximate `unboundVolume`. It is not: a claim that
+will never bind and a volume referencing a ConfigMap that was never created are
+different diagnoses with different fixes, and treating them as the same would
+credit a subject for the wrong answer.
+
+| Scenario | Why not | Cost to close |
+| --- | --- | --- |
+| `failed-mount` | No kind. The only fault in either pack that is a *dangling reference* — a pod stuck in `ContainerCreating` because a name it points at does not exist | Small: one bundle, gated on the `FailedMount` event or on a container status of `ContainerCreating` |
+| `node-failure` | No kind, and it is a missing **tier**, not a missing bundle. Every `kube-state` kind is namespace-scoped by construction; a fault that takes a node down breaks workloads nobody consented to break | Large: `NodeUnready` needs node-tier safety fences, and the fence is the hard part |
+
+The lookout pack also carries a control the original set does not have. A pack
+without one cannot detect a subject that reports every failure mode everywhere
+— recall would be perfect and precision unmeasured — and the risk is higher for
+a watcher than for a triager, whose whole job is deciding that most of what it
+sees is fine. A test asserts every shipped pack has at least one.
 
 Then `pkg/scenario/packs/dataplane/` — the scenarios `internal/faults` cannot
 express. First five, chosen because each has a symptom that appears somewhere
@@ -356,7 +418,7 @@ operator binary that runs in-cluster with chaos RBAC, and mirroring
 
 ```
 simian-eval \
-  --pack packs/parity,packs/dataplane \
+  --pack parity,lookout \
   --subject exec:./bin/sre-agent \
   --cluster kind \
   --out runs/2026-08-18/
@@ -504,7 +566,7 @@ no subject execution. `simian-eval` orchestrates and calls the same
 to run a kind harness.
 
 ```
-simian evaluate --pack packs/parity --audit run.log --report agent.json
+simian evaluate --pack parity --audit run.log --report agent.json
 ```
 
 **Two artifacts, split along the line of who observed what.** The audit log is
@@ -759,7 +821,7 @@ within a group is independent of its siblings.
 | #59 | `mutate` mode + revert-on-lease-expiry | L | #56 |
 | **Phase 3 — scenarios** |
 | #60 ✅ | `Scenario` type, `ScenarioID` plumbed through executor + audit, pack loader | M | — |
-| #61 | `BackendCrashLoop` — the `cascade` shape, the last parity gap, gated and verified on GKE — then the lookout pack (10) + parity pack (11) + the equivalence-matrix test | M | #57, #58, #60 |
+| #61 ✅ | `BackendCrashLoop` — the `cascade` shape, the last parity gap, gated and verified on GKE — then the parity pack (11 of 11) + the lookout pack (8 of 10, plus a control) + the equivalence matrices and the two-halved drift test | M | #57, #58, #60 |
 | **Phase 4 — the rig** |
 | #62 ✅ | `pkg/eval`: `Report`, `Subject`, and the seven measures | M | #60 |
 | #63 ✅ | `cmd/simian-eval` + `exec:`/`noop:` adapters + arena lifecycle, namespace fencing, and the artifacts scored back through #66 | M | #53, #62 |

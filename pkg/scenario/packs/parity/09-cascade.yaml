@@ -1,0 +1,61 @@
+# Mirrors cascade() — internal/faults/fixtures.go, fixture "fault-sessions".
+# Namespace kept: upstream already declined to name it after the fault, for
+# the reason this whole scenario exists.
+#
+# A crash loop and the outage it causes. The Service selector is correct and
+# the Deployment exists; the pods are simply never ready, so the Service has
+# endpoints and none of them serve. Both findings are true and a subject should
+# report both, but they are not worth the same: "the session store is
+# unreachable" is what an operator sees and "the container exits 1 on boot" is
+# what they have to fix. Recall cannot express that — it scores symptom-only and
+# cause-only identically at 0.5 — so the crash loop is marked root.
+#
+# This is the scenario BackendCrashLoop was added for. Before it, the pack could
+# reproduce ten of eleven upstream fixtures and this was the one that needed two
+# objects in two different wrong states.
+id: parity-cascade
+name: cascade
+source: pack:parity
+prompt: >-
+  Assess the health of the "fault-sessions" namespace in this Kubernetes
+  cluster and report what you find.
+severity: critical
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: BackendCrashLoop
+    # The crash half of the gate waits for a terminated reason of Error, which
+    # is observable much sooner than CrashLoopBackOff, but two replicas still
+    # have to get there.
+    duration: 8m
+    blast_radius_tier: namespace
+    spec:
+      name: session-store
+      replicas: 2
+      exit_code: 1
+      message: "FATAL: cannot open append-only file"
+      port: 6379
+    targets:
+      - namespace: fault-sessions
+expect:
+  - kind: Pod
+    name: session-store
+    also_accept_kinds: [Deployment, ReplicaSet]
+    reasons: [CrashLoopBackOff, CrashLoop]
+    min_severity: warning
+    root: true
+  # "Unavailable" is upstream's and is kept, because dropping it would make a
+  # report that upstream credits score lower here. It is deliberately not a
+  # member of the no-endpoints family in pkg/eval — the word names a state and
+  # not a cause — so it is accepted for recall and can never be charged as an
+  # invention. See the note on failureFamilies.
+  - kind: Service
+    name: session-store
+    also_accept_kinds: [Endpoints, EndpointSlice]
+    reasons:
+      - NoEndpoints
+      - NoReadyEndpoints
+      - EmptyEndpoints
+      - ServiceHasNoEndpoints
+      - NoHealthyBackends
+      - Unavailable

@@ -1,0 +1,84 @@
+# Mirrors silentFailure() — internal/faults/fixtures.go, fixture
+# "fault-invoicing". Namespace kept: upstream named it for the domain and not
+# the fault, and that binds harder here than anywhere else in the set, because
+# every broad check reports this namespace clean and the namespace name is very
+# nearly the only signal in the prompt.
+#
+# A workload that is Running, Ready and unrestarted, and is doing none of its
+# job. Nothing in status, the graph or the event stream says so; the evidence is
+# what the container is writing. Every other scenario in this pack is visible in
+# object status, which is not a property anyone chose — it is what "inject a
+# fault" tends to produce — and a subject whose log path is never *needed*
+# cannot be shown to have one.
+#
+# The Service is not decoration. Without it the namespace holds a Deployment and
+# no Service, which is a legitimate finding about the wrong thing; worse, a
+# subject spelling that observation "NoEndpoints" would be charged with
+# inventing a no-endpoints fault this scenario does not inject. A Service whose
+# selector matches and whose endpoints are ready removes the observation.
+#
+# # The deviation, which is real and is not hidden
+#
+# Upstream *produces* the failure — the container runs wget against a port
+# nothing serves and the error is wget's own stderr — specifically so that the
+# diagnosis is not in the pod spec. The first version of that fixture echoed the
+# error on a timer and scored 1.00 by being read straight out of
+# `containers[0].command`, measuring nothing.
+#
+# DependencyStall writes a configured line, and that line reaches the container
+# through its environment, so it is in the pod spec here. A subject that reads
+# the Deployment and never reads a log can still answer. That makes this
+# scenario strictly easier than its upstream twin and the score is not
+# comparable on the read-path claim; it remains comparable on recall, which is
+# what the pack is for. Closing it needs an engine change — a stall kind that
+# produces the failure rather than describing it — and is tracked as its own
+# piece of work.
+id: parity-silent-failure
+name: silent-failure
+source: pack:parity
+prompt: >-
+  Assess the health of the "fault-invoicing" namespace in this Kubernetes
+  cluster and report what you find.
+# Critical rather than warning, and the discriminator is impact rather than
+# symptom. Nothing is crashing and nothing is restarting — the symptom-level
+# reading is "two healthy pods" — but the workload performs zero percent of its
+# function and has since it started.
+severity: critical
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: DependencyStall
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: invoice-reconciler
+      replicas: 2
+      # Names the dependency, the address and the failure, because that is what
+      # the diagnosis turns on: the workload is fine and the thing behind it is
+      # not. Two seconds because density is what makes a repeating failure look
+      # repeating — upstream's first run read a sparse error window as a startup
+      # blip and filed it info.
+      message: >-
+        level=error msg="reconcile failed" upstream=billing-db
+        addr=10.4.11.7:5432 err="connection refused"
+      interval_seconds: 2
+      port: 9102
+    targets:
+      - namespace: fault-invoicing
+expect:
+  # Five compounds, each asserting the cause rather than the evidence, and each
+  # chosen so the shorter tokens the bidirectional matcher lets in with it are
+  # still harmless. Every "…Unavailable" and every "…Errors" token upstream
+  # once had is out: the matcher is bidirectional, so a bare "Unavailable" —
+  # which is a real Deployment condition a subject could assert without reading
+  # anything — would otherwise score full recall here.
+  - kind: Pod
+    name: invoice-reconciler
+    also_accept_kinds: [Deployment, ReplicaSet, Container]
+    reasons:
+      - ConnectionRefused
+      - ConnectionFailure
+      - Unreachable
+      - DependencyFailure
+      - DependencyMissing
+    min_severity: warning

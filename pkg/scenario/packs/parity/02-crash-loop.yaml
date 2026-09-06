@@ -1,0 +1,32 @@
+# Mirrors crashLoop() — internal/faults/fixtures.go, fixture "fault-crashloop".
+#
+# Namespace renamed: "crashloop" is a failure mode LintPrompt refuses.
+id: parity-crash-loop
+name: crash-loop
+source: pack:parity
+prompt: >-
+  Assess the health of the "fault-payments" namespace in this Kubernetes
+  cluster and report what you find.
+severity: critical
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: ContainerExitLoop
+    # Longer than the six-minute default elsewhere in this pack. The upstream
+    # note on crashLoopSettle measures CrashLoopBackOff as observable roughly
+    # 170s after the pod first starts — 10s + 20s + 40s + 80s of kubelet
+    # backoff — and the settle wait comes out of the fault's own lease.
+    duration: 8m
+    blast_radius_tier: namespace
+    spec:
+      name: payments-worker
+      exit_code: 1
+      message: "FATAL: connection refused"
+    targets:
+      - namespace: fault-payments
+expect:
+  - kind: Pod
+    name: payments-worker
+    also_accept_kinds: [Deployment, ReplicaSet]
+    reasons: [CrashLoopBackOff, CrashLoop]
+    min_severity: warning

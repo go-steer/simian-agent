@@ -16,36 +16,34 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/go-steer/simian-agent/pkg/scenario"
 )
 
-// loadPacks reads one or more pack directories and returns them as a single
-// suite.
+// loadPacks reads one or more packs — built-in names or directories — and
+// returns them as a single suite.
 //
 // Merged rather than run one after another, because everything downstream —
 // the namespace fencing, the concurrency ceiling, the scorecard — is defined
 // over one set of scenarios. Two packs that share a scenario ID are a load
 // error: IDs are the key the audit log joins to the report on, and a duplicate
 // silently merges two scenarios' evidence into a plausible-looking wrong score.
-func loadPacks(dirs []string) (scenario.Pack, error) {
-	if len(dirs) == 0 {
-		return scenario.Pack{}, fmt.Errorf("no pack directories given")
+func loadPacks(refs []string) (scenario.Pack, error) {
+	if len(refs) == 0 {
+		return scenario.Pack{}, fmt.Errorf("no packs given")
 	}
-	if len(dirs) == 1 {
-		return loadPackDir(dirs[0])
+	if len(refs) == 1 {
+		return scenario.LoadRef(refs[0])
 	}
 
 	var (
 		merged scenario.Pack
 		names  []string
 	)
-	for _, dir := range dirs {
-		p, err := loadPackDir(dir)
+	for _, ref := range refs {
+		p, err := scenario.LoadRef(ref)
 		if err != nil {
 			return scenario.Pack{}, err
 		}
@@ -58,22 +56,6 @@ func loadPacks(dirs []string) (scenario.Pack, error) {
 		return scenario.Pack{}, fmt.Errorf("packs %s do not compose: %w", merged.Name, err)
 	}
 	return merged, nil
-}
-
-// loadPackDir loads a scenario pack from a directory on disk.
-func loadPackDir(dir string) (scenario.Pack, error) {
-	info, err := os.Stat(dir)
-	if err != nil {
-		return scenario.Pack{}, fmt.Errorf("open pack: %w", err)
-	}
-	if !info.IsDir() {
-		return scenario.Pack{}, fmt.Errorf("open pack: %s is not a directory", dir)
-	}
-	// LoadPack reads a subdirectory of the FS it is handed, so root the FS at
-	// the parent and name the leaf. Cleaned first so a trailing slash does not
-	// turn the leaf into "".
-	dir = filepath.Clean(dir)
-	return scenario.LoadPack(os.DirFS(filepath.Dir(dir)), filepath.Base(dir))
 }
 
 // checkFaultDurations reports scenarios whose faults expire before the subject
