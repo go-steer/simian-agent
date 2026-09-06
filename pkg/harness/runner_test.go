@@ -640,39 +640,6 @@ func TestARunnerWithNoAuditorStillRuns(t *testing.T) {
 	}
 }
 
-func TestNamespacesOfIsTheScorersDerivation(t *testing.T) {
-	cases := []struct {
-		name string
-		s    scenario.Scenario
-		want []string
-	}{
-		{"one fault one namespace", scenarioIn("s", "ns-a", 1), []string{"ns-a"}},
-		{"a control names none", controlScenario("c"), nil},
-		{
-			"duplicates collapse and the result is sorted",
-			scenario.Scenario{Faults: []simian.FaultManifest{
-				{Targets: []simian.TargetRef{{Namespace: "z"}, {Namespace: "a"}}},
-				{Targets: []simian.TargetRef{{Namespace: "a"}, {Namespace: "m"}}},
-			}},
-			[]string{"a", "m", "z"},
-		},
-		{
-			"a target with no namespace contributes nothing",
-			scenario.Scenario{Faults: []simian.FaultManifest{
-				{Targets: []simian.TargetRef{{Namespace: ""}, {Namespace: "ns-a"}}},
-			}},
-			[]string{"ns-a"},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := namespacesOf(tc.s); !slices.Equal(got, tc.want) {
-				t.Errorf("namespacesOf = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestDescribeNamesThePackAndTheSelection(t *testing.T) {
 	pack := packOf(scenarioIn("s-1", "ns-a", 1), scenarioIn("s-2", "ns-b", 1), scenarioIn("s-3", "ns-c", 1))
 	got := Describe(pack, pack.Scenarios[:2])

@@ -42,8 +42,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +57,18 @@ import (
 type Arena interface {
 	Setup(ctx context.Context, namespace string) error
 	Teardown(ctx context.Context, namespace string) error
+}
+
+// Substrates stands a scenario's named SUT up in a namespace and takes it
+// down again. Only scenarios that set Scenario.Substrate need one.
+//
+// Known is separate from Deploy so that a pack naming a SUT nobody registered
+// is refused before the run starts, rather than in the middle of scenario
+// seven with six arenas already spent.
+type Substrates interface {
+	Known(name string) bool
+	Deploy(ctx context.Context, namespace, name string) error
+	Destroy(ctx context.Context, namespace, name string) error
 }
 
 // Injector is the executor, narrowed to what a run needs. *executor.Executor
@@ -93,6 +103,10 @@ type Runner struct {
 	Subject  eval.Subject
 	Arena    Arena
 	Injector Injector
+
+	// Substrates is consulted only by scenarios that set a Substrate. A pack
+	// with none never touches it, which is why it is not in validate().
+	Substrates Substrates
 
 	// Auditor is the same auditor the executor writes through. The harness
 	// uses it for one thing: a line per scenario it attempted, so that a
@@ -150,6 +164,9 @@ func (r *Runner) Run(ctx context.Context) ([]eval.Run, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := r.checkSubstrates(selected); err != nil {
+		return nil, err
+	}
 
 	locks := newNamespaceLocks()
 	sem := make(chan struct{}, max(r.concurrency(), 1))
@@ -164,7 +181,7 @@ func (r *Runner) Run(ctx context.Context) ([]eval.Run, error) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			release := locks.acquire(namespacesOf(s))
+			release := locks.acquire(s.Namespaces())
 			defer release()
 
 			runs[i] = r.runScenario(ctx, s)
@@ -186,6 +203,29 @@ func (r *Runner) validate() error {
 	default:
 		return nil
 	}
+}
+
+// checkSubstrates refuses a selection naming a SUT this run cannot deploy.
+//
+// Before the first namespace, for the same reason --only is resolved early: a
+// name that will never resolve should cost nothing to discover, and a suite
+// that dies partway through has already spent cluster time on scenarios whose
+// scorecard it will not produce.
+func (r *Runner) checkSubstrates(selected []scenario.Scenario) error {
+	var errs []error
+	for _, s := range selected {
+		if s.Substrate == "" {
+			continue
+		}
+		if r.Substrates == nil {
+			errs = append(errs, fmt.Errorf("harness: scenario %q needs substrate %q but this run has no substrate registry", s.ID, s.Substrate))
+			continue
+		}
+		if !r.Substrates.Known(s.Substrate) {
+			errs = append(errs, fmt.Errorf("harness: scenario %q names substrate %q, which is not registered", s.ID, s.Substrate))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Selection resolves --only against the pack.
@@ -239,7 +279,7 @@ func (r *Runner) runScenario(ctx context.Context, s scenario.Scenario) eval.Run 
 	run := eval.Run{ScenarioID: s.ID, Subject: r.Subject.Name()}
 	log := r.logger().With(slog.String("scenario", s.ID))
 
-	namespaces := namespacesOf(s)
+	namespaces := s.Namespaces()
 	r.emit(ctx, simian.AuditEvent{
 		Event:      audit.EventEvalScenarioStarted,
 		ScenarioID: s.ID,
@@ -258,12 +298,23 @@ func (r *Runner) runScenario(ctx context.Context, s scenario.Scenario) eval.Run 
 		})
 	}()
 
-	var applied []string
+	var applied, substrated []string
 	provisioned, err := r.setup(ctx, namespaces)
-	defer func() { r.teardown(ctx, log, provisioned, applied) }()
+	defer func() { r.teardown(ctx, log, provisioned, substrated, s.Substrate, applied) }()
 	if err != nil {
 		run.InjectError = err.Error()
 		log.Error("harness: arena setup failed", slog.String("error", err.Error()))
+		return run
+	}
+
+	// Before the faults, because the faults are aimed at it. A dataplane
+	// scenario's fault selects the substrate's pods by name or by label, and
+	// a NetworkChaos that matches nothing is applied, gated and cleared
+	// without ever having perturbed anything.
+	substrated, err = r.deploySubstrate(ctx, log, s, provisioned)
+	if err != nil {
+		run.InjectError = err.Error()
+		log.Error("harness: substrate deploy failed", slog.String("error", err.Error()))
 		return run
 	}
 
@@ -308,6 +359,24 @@ func (r *Runner) setup(ctx context.Context, namespaces []string) ([]string, erro
 	for _, ns := range namespaces {
 		if err := r.Arena.Setup(ctx, ns); err != nil {
 			return made, fmt.Errorf("arena %s: %w", ns, err)
+		}
+		made = append(made, ns)
+	}
+	return made, nil
+}
+
+// deploySubstrate stands the scenario's SUT up in every namespace it was
+// given, returning the ones that took it so a partial failure still cleans up
+// what it made.
+func (r *Runner) deploySubstrate(ctx context.Context, log *slog.Logger, s scenario.Scenario, namespaces []string) ([]string, error) {
+	if s.Substrate == "" {
+		return nil, nil
+	}
+	var made []string
+	for _, ns := range namespaces {
+		log.Info("harness: deploying substrate", slog.String("substrate", s.Substrate), slog.String("namespace", ns))
+		if err := r.Substrates.Deploy(ctx, ns, s.Substrate); err != nil {
+			return made, fmt.Errorf("substrate %s in %s: %w", s.Substrate, ns, err)
 		}
 		made = append(made, ns)
 	}
@@ -402,8 +471,8 @@ func (r *Runner) allCleared(ctx context.Context, namespaces, uids []string) bool
 // Ctrl-C in the middle of a suite must still take the chaos out of the
 // cluster: the alternative is a partition left behind in someone's namespace
 // because they changed their mind about the run.
-func (r *Runner) teardown(ctx context.Context, log *slog.Logger, namespaces, faultUIDs []string) {
-	if len(namespaces) == 0 && len(faultUIDs) == 0 {
+func (r *Runner) teardown(ctx context.Context, log *slog.Logger, namespaces, substrated []string, substrate string, faultUIDs []string) {
+	if len(namespaces) == 0 && len(substrated) == 0 && len(faultUIDs) == 0 {
 		return
 	}
 
@@ -419,6 +488,17 @@ func (r *Runner) teardown(ctx context.Context, log *slog.Logger, namespaces, fau
 	for _, uid := range faultUIDs {
 		if err := r.Injector.Clear(ctx, uid); err != nil {
 			log.Warn("harness: clearing fault failed", slog.String("fault_uid", uid), slog.String("error", err.Error()))
+		}
+	}
+	// Then the substrate, before the namespace that holds it. Destroying it
+	// is nearly always redundant — the arena teardown deletes the whole
+	// namespace a moment later — but not under --keep-arenas, which is the
+	// mode somebody uses to look at the wreckage, and a substrate left
+	// running there is a workload nobody remembers deploying.
+	for _, ns := range substrated {
+		if err := r.Substrates.Destroy(ctx, ns, substrate); err != nil {
+			log.Warn("harness: substrate teardown failed",
+				slog.String("substrate", substrate), slog.String("namespace", ns), slog.String("error", err.Error()))
 		}
 	}
 	for _, ns := range namespaces {
@@ -463,23 +543,6 @@ func (r *Runner) logger() *slog.Logger {
 		return r.Logger
 	}
 	return slog.New(slog.DiscardHandler)
-}
-
-// namespacesOf returns the distinct namespaces a scenario's faults target,
-// sorted. This is the same derivation the scorer uses to decide which findings
-// are in scope, so the namespace the harness provisions is the namespace the
-// ground truth is about.
-func namespacesOf(s scenario.Scenario) []string {
-	var out []string
-	for _, f := range s.Faults {
-		for _, t := range f.Targets {
-			if t.Namespace != "" && !slices.Contains(out, t.Namespace) {
-				out = append(out, t.Namespace)
-			}
-		}
-	}
-	sort.Strings(out)
-	return out
 }
 
 // namespaceLocks serialises scenarios that would otherwise share a namespace.

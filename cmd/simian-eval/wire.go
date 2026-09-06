@@ -32,10 +32,20 @@ import (
 	"github.com/go-steer/simian-agent/pkg/driver/kubestate"
 	"github.com/go-steer/simian-agent/pkg/driver/networkpolicy"
 	"github.com/go-steer/simian-agent/pkg/executor"
+	"github.com/go-steer/simian-agent/pkg/harness"
 	"github.com/go-steer/simian-agent/pkg/lease"
 	"github.com/go-steer/simian-agent/pkg/probe"
 	"github.com/go-steer/simian-agent/pkg/simian"
+	"github.com/go-steer/simian-agent/pkg/sut"
+	"github.com/go-steer/simian-agent/pkg/sut/onlineboutique"
 )
+
+func init() {
+	// Built-in SUTs register at process start, not inside buildPlane:
+	// MustRegister panics on a duplicate name, and a plane built twice in one
+	// process — which a test does — would take the whole binary down.
+	onlineboutique.Register()
+}
 
 // plane is everything the run needs on the cluster side, built once.
 type plane struct {
@@ -43,6 +53,13 @@ type plane struct {
 	executor *executor.Executor
 	arenas   *arena.Manager
 	reaper   *lease.Reaper
+
+	// substrates is nil-free but idle unless a scenario asks for a SUT. It
+	// carries no Store, so the baselines it captures live and die with the
+	// process — an eval run has no use for a baseline that outlives it, and
+	// writing one into a ConfigMap in the arena would leave an object in the
+	// namespace the subject is about to be asked to describe.
+	substrates *harness.SUTSubstrates
 }
 
 // buildPlane wires the same four engines, the same safety config, the same
@@ -102,6 +119,10 @@ func buildPlane(cfg *rest.Config, o *options, auditor simian.Auditor, logger *sl
 		k8s:      clientset,
 		executor: exec,
 		arenas:   mgr,
+		substrates: &harness.SUTSubstrates{
+			Manager:  sut.NewManager(clientset, dyn, cached, sut.Default),
+			Registry: sut.Default,
+		},
 		reaper: &lease.Reaper{
 			Registry: registry,
 			Drivers:  drivers,
