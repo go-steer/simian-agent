@@ -173,10 +173,17 @@ var faultKindReports = map[string]kindVocabulary{
 	// symptom and attributed nothing, they resolve to no family, and the test
 	// below therefore asserts that writing one is never charged — in either
 	// scenario. That is the property the pair depends on.
+	//
+	// NetworkChaos names two families because the kind covers two incidents.
+	// A delay degrades the path and a partition severs it, and the pack ships
+	// both; a scenario using one action still has to list only its own
+	// spellings, which is why 01 and 05 have disjoint expectation Reasons and
+	// why 05 exempts PacketLoss by hand.
 	"NetworkChaos": {
-		families: []string{"network-degradation"},
+		families: []string{"network-degradation", "network-partition"},
 		reasons: []string{
 			"NetworkLatency", "NetworkDelay", "NetworkDegradation", "PacketDelay",
+			"NetworkPartition", "NetworkUnreachable", "ConnectivityLoss", "Partitioned",
 			"HighLatency", "Latency",
 		},
 	},
@@ -186,6 +193,19 @@ var faultKindReports = map[string]kindVocabulary{
 			"CPUSaturation", "CPUThrottling", "CPUThrottled", "CPUExhaustion",
 			"CPUStarvation", "HighCPU",
 			"HighLatency", "Latency",
+		},
+	},
+	// The 5xx scenario, and the one entry whose interesting tokens are all
+	// generic. A status code says what the caller saw and not why, so the only
+	// family a correct report about a synthesized 503 resolves to is the one
+	// the *caller* is entitled to name — its dependency is returning errors.
+	// Everything else here is creditable and uncharged everywhere, which is
+	// deliberate: that scenario is graded on which object it calls the root.
+	"HTTPChaos": {
+		families: []string{"dependency"},
+		reasons: []string{
+			"UpstreamError", "UpstreamUnavailable",
+			"HTTP503", "ServiceUnavailable", "Error5xx", "ServerError",
 		},
 	},
 }

@@ -1,0 +1,211 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Traffic from the caller to the callee is dropped. Nothing else is: the callee
+# answers anyone else who asks, the caller answers its own local health path,
+# and both workloads are correct, running, and unrestarted.
+#
+# So there is no unhealthy object to find. There is a pair of healthy objects
+# with a severed path between them, and the failure exists only in the
+# relationship. Measured on GKE: caller returns 504 on the proxied path in
+# 1.00s — its connect timeout — and 200 on its own /healthz, while the callee
+# serves 200 in ~110ms to a prober that is not on the blocked side.
+#
+# Interrogated one at a time, each end reports itself fine, and each end is
+# telling the truth. A subject has to compare two vantage points to see this at
+# all, which is a different investigation from the rest of the pack: in the
+# matched pair the callee is genuinely slow when you measure it, and here the
+# callee is genuinely fast when you measure it from anywhere except the one
+# place that matters.
+#
+# # Environment validity
+#
+# Chaos Mesh implements a partition with iptables rules in the selected pods'
+# network namespaces, which does not depend on tc and so is not subject to the
+# eBPF-datapath caveat that applies to the netem delay in 01. It does depend on
+# chaos-daemon being able to enter those namespaces. Verified landing on GKE.
+#
+# `direction: to` describes the packets that are dropped, not the connections
+# that survive. TCP needs a return path, so the callee cannot complete a
+# handshake back to the caller either while this is applied — the asymmetry is
+# real at the IP layer and invisible at the connection layer, and the scenario
+# is written around the caller's outbound calls rather than around a claim that
+# the reverse direction still carries requests.
+id: dataplane-partition-one-way
+name: partition-one-way
+source: pack:dataplane
+prompt: >-
+  Assess the health of the "flow-payments" namespace in this Kubernetes cluster
+  and report what you find.
+severity: critical
+substrate: edge-upstream
+faults:
+  - engine: chaos-mesh
+    api_version: chaos-mesh.org/v1alpha1
+    resource_kind: NetworkChaos
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      action: partition
+      mode: all
+      # Egress from the caller only. Without this the rule is installed
+      # symmetrically and the scenario becomes "these two cannot talk", which
+      # is a fair fault and a less interesting question.
+      direction: to
+      selector:
+        namespaces: [flow-payments]
+        labelSelectors:
+          app: edge
+      target:
+        mode: all
+        selector:
+          namespaces: [flow-payments]
+          labelSelectors:
+            app: upstream
+    targets:
+      - namespace: flow-payments
+        labels:
+          app: edge
+    # A NetworkChaos that names a `target` gets no default gate, and the reason
+    # is the same reason this scenario is hard: the fault applies between two
+    # labelled sets and the controller is in neither of them, so a prober
+    # standing outside sees nothing change. Every probe below is therefore
+    # written from a vantage point that can actually observe the claim.
+    probes:
+      # The caller could reach the callee before. This is the SOT half that
+      # makes the Settle half mean anything: a 504 from a caller that was
+      # already failing is not evidence of a partition.
+      - name: dataplane-caller-reaches-callee-before
+        type: http
+        mode: SOT
+        spec:
+          label_selector: app=edge
+          path: /
+          expect_status: 200
+          max_latency: 500ms
+          timeout: 60s
+          interval: 2s
+      # The dropped packet, observed. The caller's proxy connect timeout is one
+      # second, so a severed path shows up as a 504 and not as a hang — which
+      # is why this can assert a status rather than an absence.
+      - name: dataplane-caller-cannot-reach-callee
+        type: http
+        mode: Settle
+        spec:
+          label_selector: app=edge
+          path: /
+          expect_status: 504
+          request_timeout: 10s
+          timeout: 90s
+          interval: 3s
+      # Both ends healthy in isolation, asserted rather than assumed, because
+      # it is the scenario's entire claim. If either of these fails, what
+      # landed is not a partition — it is an outage of one of the two
+      # workloads, and grading a subject against this file would be grading it
+      # against a cluster it was not shown.
+      - name: dataplane-caller-itself-alive
+        type: http
+        mode: Settle
+        spec:
+          label_selector: app=edge
+          path: /healthz
+          expect_status: 200
+          max_latency: 500ms
+          timeout: 90s
+          interval: 3s
+      - name: dataplane-callee-serving-to-everyone-else
+        type: http
+        mode: Settle
+        spec:
+          label_selector: app=upstream
+          path: /cgi-bin/work
+          expect_status: 200
+          max_latency: 500ms
+          timeout: 90s
+          interval: 3s
+      - name: dataplane-caller-serving-before
+        type: k8s
+        mode: SOT
+        spec:
+          resource: deployments
+          label_selector: app=edge
+          jsonpath: "{.items[*].status.readyReplicas}"
+          expect_at_least: 2
+          timeout: 60s
+          interval: 2s
+      - name: dataplane-caller-not-serving
+        type: k8s
+        mode: Settle
+        spec:
+          resource: deployments
+          label_selector: app=edge
+          # readyReplicas is omitempty, so zero renders as nothing at all.
+          expect_empty: true
+          jsonpath: "{.items[*].status.readyReplicas}"
+          dwell: 10s
+          timeout: 120s
+          interval: 3s
+expect:
+  # The root is the path, and a path is not an object. The Service is the
+  # closest thing the cluster has to a name for "getting to the callee", which
+  # is why it is named here, and also_accept_kinds is wide because a subject
+  # that says "the caller cannot reach the upstream pods" has said the same
+  # thing about a different noun.
+  #
+  # The tokens are what carry the grade. Every one of them resolves to
+  # network-partition, so a subject that reaches for CPU, a crash loop or an
+  # image pull is charged, and — this being the pack's other network scenario —
+  # so is a subject that calls a severed link a slow one, unless it hedges with
+  # one of the also_true tokens below.
+  - kind: Service
+    name: upstream
+    also_accept_kinds: [Pod, Deployment, Endpoints, ReplicaSet]
+    reasons:
+      - NetworkPartition
+      - NetworkUnreachable
+      - ConnectivityLoss
+      - Partitioned
+      - NoRouteToHost
+    min_severity: warning
+    root: true
+  # The symptom, and the only part of this the API server records.
+  - kind: Deployment
+    name: edge
+    also_accept_kinds: [Pod, ReplicaSet, Container]
+    reasons:
+      - ReadinessProbeFailed
+      - ProbeFailure
+      - NotReady
+      - NoReadyReplicas
+      - Unavailable
+    min_severity: warning
+# True, and not required.
+#
+# Nothing network-degradation-shaped is exempted, and the omission is
+# considered rather than accidental. PacketLoss belongs here on its merits — a
+# partition is hundred-percent loss, and a subject that measured the link and
+# called it lossy measured correctly — but also_true exempts by family and not
+# by token, so listing it would also license "NetworkCongestion" and
+# "NetworkLatency" against a link that is carrying nothing at all. Between
+# crediting one defensible hedge and keeping severed distinguishable from slow,
+# the distinction is worth more, and a subject that wants the credit can write
+# what its measurement actually showed.
+#
+# So this scenario charges the pair's network answer and 01 charges this one's:
+# neither licenses the other, in either direction.
+also_true:
+  - UpstreamTimeout
+  - UpstreamUnavailable
+  - ConnectionRefused
+  - NoReadyEndpoints

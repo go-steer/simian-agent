@@ -185,6 +185,28 @@ var failureFamilies = map[string][]string{
 		"CPUSaturation", "CPUThrottling", "CPUThrottled", "CPUExhaustion",
 		"CPUStarvation", "CPUPressure", "HighCPU", "CPULimitExceeded",
 	},
+
+	// The path between two workloads is not slow, it is severed. Kubernetes
+	// writes none of these either: a dropped packet leaves no field anywhere,
+	// and both ends of a partition go on reporting themselves healthy.
+	//
+	// Separate from network-degradation, because the two take different
+	// remediations — you tune or reroute a slow link and you go looking for
+	// what is dropping traffic on a severed one — and because a subject that
+	// says "the link is congested" about a link carrying nothing has described
+	// the wrong incident. The boundary is admittedly soft at the limit: total
+	// loss is a partition. That is handled where it belongs, in the partition
+	// scenario's own also_true, rather than by refusing to draw the line.
+	//
+	// "Unreachable" alone is absent. A node is unreachable, an API endpoint is
+	// unreachable, a registry is unreachable; only the spellings that name the
+	// network or the host make a claim about connectivity. "Partitioned" stays
+	// because nothing else in a cluster is described that way.
+	"network-partition": {
+		"NetworkPartition", "Partitioned", "NetworkUnreachable",
+		"HostUnreachable", "ConnectivityLoss", "TrafficBlackholed",
+		"NoRouteToHost",
+	},
 }
 
 // genericReasons name *that* something failed without naming *how*.
@@ -213,17 +235,37 @@ var failureFamilies = map[string][]string{
 // observation and not chargeable as an invention. Listing them explicitly is
 // what stops someone adding "HighLatency" to network-degradation later and
 // silently turning a symptom into a diagnosis.
+//
+// The HTTP statuses are here on the same argument, one step further along. A
+// status code is the most concrete thing a subject can report and still be
+// describing only what it saw: a 503 can be a synthesized abort, a proxy with
+// no healthy backend, an overloaded application shedding load, or a service
+// mesh circuit breaker, and the number distinguishes none of them. So a
+// subject that writes "the caller is returning 503s" is credited with the
+// observation wherever it is true and charged with a diagnosis nowhere, and
+// the pack's 5xx scenario is graded on whether it named the right object as
+// the root — which is the thing that scenario is actually about.
 var genericReasons = map[string]bool{
-	"pending":          true,
-	"failed":           true,
-	"error":            true,
-	"unhealthy":        true,
-	"failedscheduling": true,
-	"unschedulable":    true,
-	"latency":          true,
-	"highlatency":      true,
-	"slow":             true,
-	"slowresponse":     true,
+	"pending":             true,
+	"failed":              true,
+	"error":               true,
+	"unhealthy":           true,
+	"failedscheduling":    true,
+	"unschedulable":       true,
+	"latency":             true,
+	"highlatency":         true,
+	"slow":                true,
+	"slowresponse":        true,
+	"http500":             true,
+	"http502":             true,
+	"http503":             true,
+	"http504":             true,
+	"error5xx":            true,
+	"servererror":         true,
+	"internalservererror": true,
+	"badgateway":          true,
+	"serviceunavailable":  true,
+	"gatewaytimeout":      true,
 }
 
 // normReason folds a reason the way scenario.ExpectedFinding.MatchesReason
