@@ -67,10 +67,6 @@ const ManagedLabel = "simian.chaos/managed"
 // FaultUIDLabel ties the workload back to the fault that created it.
 const FaultUIDLabel = "simian.chaos/fault-uid"
 
-// KindLabel records which fault kind synthesized it, so `kubectl get deploy -L`
-// in a wrecked arena says what happened without a round trip to the audit log.
-const KindLabel = "simian.chaos/kind"
-
 // BundleLabel groups the objects one fault synthesized. A fault is not always
 // one object — a Service pointing at nothing needs the workload it misses, a
 // claim that never binds needs something to mount it — and this is what lets
@@ -181,7 +177,7 @@ func (d *Driver) Apply(ctx context.Context, m simian.FaultManifest) (string, err
 		return "", fmt.Errorf("kube-state apply: %w", err)
 	}
 
-	labels := bundleLabels(name, m.ResourceKind, m.UID)
+	labels := bundleLabels(name, m.UID)
 	annotations := expiryAnnotation(now, m.Duration)
 	for i, obj := range objs {
 		if err := stamp(obj, labels, annotations); err != nil {
@@ -222,12 +218,28 @@ func (d *Driver) Apply(ctx context.Context, m simian.FaultManifest) (string, err
 // again. Deleting by name across every type this engine creates would be
 // simpler and is not what this does — the label is a promise that Simian only
 // removes objects it put there.
-func bundleLabels(name, kind, faultUID string) map[string]string {
+//
+// # Why the fault kind is not among them
+//
+// It used to be, as simian.chaos/kind, so that `kubectl get deploy -L` in a
+// wrecked arena said what happened without a round trip to the audit log. Then
+// an LLM subject read it and reported it. The value is the diagnosis — a label
+// reading ContainerExitLoop hands over the answer the rig exists to ask for —
+// and no code read it back, so it is gone; join FaultUIDLabel to the audit log
+// instead.
+//
+// The three that remain say only that Simian is here, never what it did.
+// That much is irreducible: the reaper finds orphaned objects by selecting on
+// ManagedLabel, and a mark a controller can select on is a mark a subject can
+// read. So a subject can always tell it is inside an experiment, and an agent
+// that reasons about that is reasoning about a real property of the cluster it
+// was pointed at. What it must not be able to do is read the answer off an
+// object, and that is now the line.
+func bundleLabels(name, faultUID string) map[string]string {
 	return map[string]string{
 		ManagedLabel:  "true",
 		BundleLabel:   name,
 		FaultUIDLabel: faultUID,
-		KindLabel:     kind,
 	}
 }
 

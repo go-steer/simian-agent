@@ -1073,12 +1073,14 @@ func servicePort(spec map[string]any) (int32, error) {
 
 // newDeployment wraps a pod spec in the Deployment that carries it.
 //
-// Only `app` goes on here. simian.chaos/managed, the fault UID and the kind
+// Only `app` goes on here. simian.chaos/managed, the bundle and the fault UID
 // are stamped by the driver onto every object in the bundle, because
 // ReapExpired has to be able to list what this engine created without help
 // from the in-memory registry. None of them reach the pod template: pods are
 // what a subject under evaluation inspects, and a pod wearing a label with our
-// name on it answers the question the rig is supposed to be asking.
+// name on it answers the question the rig is supposed to be asking. None of
+// them name the fault either — see bundleLabels for why that was not always
+// true.
 func newDeployment(s synthesis, pod corev1.PodSpec) *appsv1.Deployment {
 	podLabels := map[string]string{"app": s.name}
 	replicas := s.replicas
