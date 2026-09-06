@@ -307,6 +307,46 @@ func TestEveryFaultAimedAtASubstrateProvesItWasHealthyFirst(t *testing.T) {
 	}
 }
 
+// The dataplane pack's premise is that its faults leave no field on any
+// object, which means a gate made of object reads cannot prove one landed.
+//
+// A k8s probe watching the caller go NotReady is worth having and is not
+// evidence: the caller can go NotReady because its own image was replaced,
+// because a node drained, or because the substrate came up wrong. Only a
+// request proves the dataplane changed — a measured latency, an observed 503,
+// a connection that used to complete and now does not. So every fault here has
+// to carry an http probe on each side of the fault.
+//
+// This is the acceptance criterion the pack was commissioned against, and it
+// is the kind that erodes: a scenario added in a hurry gets a k8s gate because
+// a k8s gate is easier to write and passes just as green.
+func TestEveryDataplaneFaultIsProvedByARequest(t *testing.T) {
+	for _, s := range MustBuiltin(PackDataplane).Scenarios {
+		for i, f := range s.Faults {
+			if f.Engine == simian.EngineKubeState {
+				// The control's NoOp. It injects nothing, so there is no
+				// dataplane change for a request to observe.
+				continue
+			}
+			for _, mode := range []string{simian.ProbeModeSOT, simian.ProbeModeSettle} {
+				if !hasHTTPProbe(gateFor(f), mode) {
+					t.Errorf("scenario %q fault %d (%s): no http probe in mode %s; nothing in this gate proves the dataplane changed rather than that the CR applied",
+						s.ID, i, f.ResourceKind, mode)
+				}
+			}
+		}
+	}
+}
+
+func hasHTTPProbe(probes []simian.ProbeSpec, mode string) bool {
+	for _, p := range probes {
+		if p.Mode == mode && p.Type == simian.ProbeTypeHTTP {
+			return true
+		}
+	}
+	return false
+}
+
 // gateFor is every probe a fault actually runs: the ones written into the
 // manifest, plus whatever the catalog attaches that the manifest did not
 // already declare by name.

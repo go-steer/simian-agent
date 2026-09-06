@@ -422,8 +422,8 @@ than the fault:
 | `latency-not-saturation` | NetworkChaos netem delay on the callee | Every resource metric is green; the symptom is on a *caller* | shipped |
 | `stress-real` | StressChaos CPU | The matched pair for `latency-not-saturation` — same symptom, different cause | shipped |
 | `dataplane-healthy` | `NoOp`, over a healthy substrate | The pack's precision floor: the namespace where "it is slow" is wrong | shipped |
-| `abort-503-not-a-bug` | Envoy synthetic aborts | Looks like an application bug in the wrong service | |
-| `partition-one-way` | NetworkChaos/NetworkPolicy asymmetric | Both ends look healthy in isolation | |
+| `abort-503-not-a-bug` | HTTPChaos synthetic 503 | Looks like an application bug in the wrong service | shipped |
+| `partition-one-way` | NetworkChaos partition, `direction: to` | Both ends look healthy in isolation | shipped |
 | `dns-blackhole-partial` | DNSChaos on one name | Intermittent, and the failing pod is not the misconfigured one | |
 
 `stress-real` and `latency-not-saturation` as a matched pair is the point: an
@@ -440,11 +440,25 @@ that reports only slowness scores the shared symptom in both halves and the
 cause in neither. `pkg/eval/matched_pair_test.go` asserts that rather than
 describing it.
 
-The second is that `latency-not-saturation` is netem rather than the Envoy L7
-delay this table originally proposed. Envoy injection is off for this substrate
-because the sidecar breaks the gRPC kubelet probes; netem also has the better
-property for the pair, which is that it degrades the path without touching the
-callee at all.
+The second is that neither of the two scenarios this table assigned to Envoy
+uses it. Envoy injection is off for this substrate because the sidecar breaks
+the gRPC kubelet probes, and both replacements turned out to be better fits
+anyway: netem degrades the path without touching the callee at all, and an
+HTTPChaos response replacement leaves the callee's own health probes returning
+200 on a different path, which is what makes the 5xx scenario's misattribution
+trap work.
+
+All four critical scenarios ended up producing the same object status — caller
+0/2 Ready, callee 2/2 — which was not planned and is the pack's best property.
+They are four causes behind one symptom, and the API server distinguishes none
+of them.
+
+`dns-blackhole-partial` is the one still outstanding, and it needs a substrate
+change rather than just a scenario file: nginx resolves a literal `proxy_pass`
+hostname once at startup, so DNSChaos against the caller is measurably applied
+and changes nothing at all. Verified on GKE — `nslookup` from inside the caller
+fails while the caller goes on serving 200. Making it re-resolve is a small
+edit and belongs with that scenario rather than ahead of it.
 
 ### 6.3 `cmd/simian-eval`
 

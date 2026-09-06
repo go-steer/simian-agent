@@ -1,0 +1,183 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The callee answers every request with a 503 and is in perfect health while it
+# does it. Its liveness and readiness probes hit a different path, so they keep
+# returning 200; its pods stay Ready, its Deployment stays Available, and its
+# container has never restarted.
+#
+# The caller in front of it proxies that 503 straight through, fails its own
+# readiness check on it, and goes NotReady. So the only workload the cluster
+# reports as unhealthy is the one that is behaving correctly, and the only
+# workload behaving incorrectly is reported as healthy. Measured on GKE: callee
+# 2/2 Ready serving 503 on /cgi-bin/work and 200 on /healthz; caller 0/2.
+#
+# This one is not graded on the vocabulary. An HTTP status is an observation,
+# not a diagnosis — 503 is what a synthesized abort, a shed load and an empty
+# backend pool all look like — so every reason token below is generic and
+# nothing here can be charged as an invented cause. What is graded is which
+# object the subject calls the root. Blaming the caller is the whole trap, and
+# it is a trap a subject falls into by reading object status, which is exactly
+# the reading this pack exists to test.
+#
+# # Environment validity
+#
+# HTTPChaos works by putting a transparent proxy in the target pod's network
+# namespace, which needs a container runtime chaos-daemon can join and a
+# plaintext HTTP port to intercept. It does not apply to HTTPS. Verified
+# landing on GKE with containerd. If the tproxy cannot be installed the CR
+# reports AllInjected=false and the Settle gate below never sees its 503, so
+# the fault is rolled back rather than graded.
+id: dataplane-abort-503-not-a-bug
+name: abort-503-not-a-bug
+source: pack:dataplane
+prompt: >-
+  Assess the health of the "flow-checkout" namespace in this Kubernetes cluster
+  and report what you find.
+# Nothing is serving the user. Nothing has crashed either, which is why the
+# object-status reading of this namespace understates it.
+severity: critical
+substrate: edge-upstream
+faults:
+  - engine: chaos-mesh
+    api_version: chaos-mesh.org/v1alpha1
+    resource_kind: HTTPChaos
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      # Replace the response rather than abort the connection. An abort is a
+      # TCP reset, which the caller turns into a 502 and which also trips its
+      # liveness path; a replaced status code keeps the callee looking exactly
+      # as healthy as it is, which is the point of the scenario.
+      target: Response
+      action: replace
+      mode: all
+      port: 80
+      # Scoped to the work path. The callee's own probes hit /healthz and must
+      # go on succeeding — a callee that fails its readiness check is a
+      # scenario the API server describes perfectly well, and not this one.
+      path: /cgi-bin/work
+      replace:
+        code: 503
+      selector:
+        namespaces: [flow-checkout]
+        labelSelectors:
+          app: upstream
+    targets:
+      - namespace: flow-checkout
+        labels:
+          app: upstream
+    # HTTPChaos has no default gate — there is no field on any object that
+    # records a synthesized status code — so the whole gate is written out.
+    probes:
+      - name: dataplane-callee-200-before
+        type: http
+        mode: SOT
+        spec:
+          label_selector: app=upstream
+          path: /cgi-bin/work
+          expect_status: 200
+          timeout: 60s
+          interval: 2s
+      # The observed 503: the dataplane changed, and this is the request that
+      # proves it rather than the CR's own status saying it was injected.
+      - name: dataplane-callee-503
+        type: http
+        mode: Settle
+        spec:
+          label_selector: app=upstream
+          path: /cgi-bin/work
+          expect_status: 503
+          timeout: 90s
+          interval: 3s
+      # And the other half of the claim, which is just as load-bearing: the
+      # callee is still healthy on the path its kubelet probes use. Without
+      # this the scenario could silently degrade into "the callee is down",
+      # which any subject can find by listing pods.
+      - name: dataplane-callee-healthy-anyway
+        type: http
+        mode: Settle
+        spec:
+          label_selector: app=upstream
+          path: /healthz
+          expect_status: 200
+          max_latency: 500ms
+          timeout: 90s
+          interval: 3s
+      - name: dataplane-caller-serving-before
+        type: k8s
+        mode: SOT
+        spec:
+          resource: deployments
+          label_selector: app=edge
+          jsonpath: "{.items[*].status.readyReplicas}"
+          expect_at_least: 2
+          timeout: 60s
+          interval: 2s
+      - name: dataplane-caller-not-serving
+        type: k8s
+        mode: Settle
+        spec:
+          resource: deployments
+          label_selector: app=edge
+          # readyReplicas is omitempty, so zero renders as nothing at all.
+          expect_empty: true
+          jsonpath: "{.items[*].status.readyReplicas}"
+          dwell: 10s
+          timeout: 120s
+          interval: 3s
+expect:
+  # The root: the callee, which is the object that changed and the object every
+  # piece of object status says is fine.
+  #
+  # None of these tokens resolve to a failure family, deliberately — see
+  # genericReasons in pkg/eval/families.go. They score recall and nothing else,
+  # so the grade on this scenario turns on `root: true` being satisfied here
+  # rather than on the symptom below.
+  - kind: Pod
+    name: upstream
+    also_accept_kinds: [Deployment, Service, ReplicaSet, Container]
+    reasons:
+      - HTTP503
+      - ServiceUnavailable
+      - Error5xx
+      - ServerError
+      - "503"
+    min_severity: warning
+    root: true
+  # The symptom, and the trap. A subject that reports this and calls it the
+  # root has described the caller's readiness failure accurately and blamed the
+  # wrong service for it.
+  - kind: Deployment
+    name: edge
+    also_accept_kinds: [Pod, ReplicaSet, Container]
+    reasons:
+      - ReadinessProbeFailed
+      - ProbeFailure
+      - NotReady
+      - NoReadyReplicas
+      - Unavailable
+    min_severity: warning
+# True, and not required.
+#
+# The caller really does have a dependency returning errors, and once both its
+# pods are NotReady the Service in front of them really does have no ready
+# endpoints. A subject that reports either has read the cluster correctly.
+#
+# Nothing latency-shaped or CPU-shaped is exempted, so a subject that arrives
+# here from the matched pair and reaches for its answer is charged.
+also_true:
+  - UpstreamError
+  - UpstreamUnavailable
+  - NoReadyEndpoints
