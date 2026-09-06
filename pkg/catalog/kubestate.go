@@ -32,6 +32,7 @@ const (
 	KubeStateUnschedulable      = "Unschedulable"
 	KubeStateJobFailure         = "JobFailure"
 	KubeStateSelectorDrift      = "SelectorDrift"
+	KubeStateBackendCrashLoop   = "BackendCrashLoop"
 	KubeStateUnboundClaim       = "UnboundClaim"
 	KubeStateDependencyStall    = "DependencyStall"
 	KubeStatePDBGridlock        = "PDBGridlock"
@@ -49,6 +50,7 @@ var kubeStateDefaultNames = map[string]string{
 	KubeStateUnschedulable:      "batch-runner",
 	KubeStateJobFailure:         "schema-migrate",
 	KubeStateSelectorDrift:      "storefront",
+	KubeStateBackendCrashLoop:   "orders-api",
 	KubeStateUnboundClaim:       "media-store",
 	KubeStateDependencyStall:    "checkout-api",
 	KubeStatePDBGridlock:        "ledger-api",
@@ -95,6 +97,13 @@ var kubeStateDefaultReplicas = map[string]int{
 	// service and matches the shape the lookout fixture this kind is
 	// transcribed from produces: new_ready=0/1, old_ready=2/2.
 	KubeStateRolloutStuck: 2,
+
+	// A Service that lost every backend is a different diagnosis from a pod
+	// that is crash-looping, and with one replica the two are the same
+	// sentence. Two makes "all of them are down" a claim about a set, which is
+	// what the Service-level finding is about, and matches the shape of the
+	// upstream cascade fixture this kind is transcribed from.
+	KubeStateBackendCrashLoop: 2,
 }
 
 // KubeStateDefaultReplicas is how many replicas a kind synthesizes when the

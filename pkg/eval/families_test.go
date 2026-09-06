@@ -83,6 +83,19 @@ var faultKindReports = map[string]kindVocabulary{
 		// found this one.
 		reasons: []string{"NoEndpoints", "SelectorMismatch", "NoMatchingPods", "EmptyEndpoints", "ServiceHasNoEndpoints"},
 	},
+	kubestate.KindBackendCrashLoop: {
+		families: []string{"crash-loop", "no-endpoints"},
+		// Two families, and unlike RolloutStuck's pair neither is the whole
+		// answer on its own. The pods really are crash-looping and the Service
+		// really has no ready backend; a report naming only the Service has
+		// found what a user noticed, and a report naming only the pods has not
+		// said what broke. Both spellings have to be listed or the true half a
+		// subject did report gets charged as an invention.
+		reasons: []string{
+			"CrashLoopBackOff", "CrashLooping", "Error", "Failed",
+			"NoReadyEndpoints", "NoHealthyBackends", "NoEndpoints", "ServiceHasNoEndpoints",
+		},
+	},
 	kubestate.KindUnboundClaim: {
 		families: []string{"volume-binding"},
 		// The scheduler's own tokens for a pod blocked behind a claim are

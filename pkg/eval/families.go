@@ -55,8 +55,24 @@ var failureFamilies = map[string][]string{
 	// so that particular trap is disarmed, but the token still fails the
 	// name-a-cause test on its own terms: a subject writing the bare word
 	// about a stalled rollout is not making a claim about a Job.
-	"job-failed":   {"BackoffLimitExceeded", "JobFailed"},
-	"no-endpoints": {"NoEndpoints", "SelectorMismatch", "NoMatchingPods", "EmptyEndpoints", "ServiceHasNoEndpoints"},
+	"job-failed": {"BackoffLimitExceeded", "JobFailed"},
+
+	// A Service with nothing behind it. The family covers both ways that
+	// happens — a selector that matches no pod (SelectorDrift) and pods that
+	// match and are not serving (BackendCrashLoop) — because they are the same
+	// claim about the Service, and a subject reporting one of these tokens has
+	// said "traffic to this Service goes nowhere" either way. Which of the two
+	// it is, is a question about the *root*, and root-vs-symptom is scored
+	// separately rather than by splitting this family in half.
+	//
+	// "Unavailable" is deliberately absent, and it is the token the upstream
+	// cascade fixture reaches for. A Deployment is Unavailable, a node is
+	// Unavailable, an API is Unavailable; the word names a state and not a
+	// cause, so it can neither be credited nor charged.
+	"no-endpoints": {
+		"NoEndpoints", "SelectorMismatch", "NoMatchingPods", "EmptyEndpoints",
+		"ServiceHasNoEndpoints", "NoReadyEndpoints", "NoHealthyBackends",
+	},
 
 	// The workload is fine and something it calls is not. Every token names
 	// that relationship, which is what makes the claim falsifiable: a subject

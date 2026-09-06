@@ -48,6 +48,7 @@ const (
 	KindUnschedulable      = "Unschedulable"
 	KindJobFailure         = "JobFailure"
 	KindSelectorDrift      = "SelectorDrift"
+	KindBackendCrashLoop   = "BackendCrashLoop"
 	KindUnboundClaim       = "UnboundClaim"
 	KindDependencyStall    = "DependencyStall"
 	KindPDBGridlock        = "PDBGridlock"
@@ -120,9 +121,10 @@ const (
 	// report failure until long after the lease expires.
 	maxBackoffLimit = 6
 
-	// defaultServicePort is what SelectorDrift's Service listens on. Nothing
-	// answers on it either way — the point is a Service with no endpoints, not
-	// a Service that serves.
+	// defaultServicePort is what the Service listens on for every kind that
+	// has one. Nothing answers on it in SelectorDrift or BackendCrashLoop —
+	// the point is a Service with nothing serving behind it, not a Service
+	// that serves.
 	defaultServicePort = 8080
 
 	// defaultDriftSuffix is appended to the workload's own name to make the
@@ -278,6 +280,7 @@ var builders = map[string]builder{
 	KindNoOp:               deploymentOf(healthyPod),
 	KindJobFailure:         jobFailureBundle,
 	KindSelectorDrift:      selectorDriftBundle,
+	KindBackendCrashLoop:   backendCrashLoopBundle,
 	KindUnboundClaim:       unboundClaimBundle,
 	KindDependencyStall:    dependencyStallBundle,
 	KindPDBGridlock:        pdbGridlockBundle,
@@ -553,12 +556,9 @@ func selectorDriftBundle(s synthesis) ([]runtime.Object, error) {
 	if err != nil {
 		return nil, err
 	}
-	port, err := optInt(s.spec, "port", defaultServicePort)
+	port, err := servicePort(s.spec)
 	if err != nil {
 		return nil, err
-	}
-	if port < 1 || port > 65535 {
-		return nil, fmt.Errorf("spec.port must be between 1 and 65535, got %d", port)
 	}
 	drifted := optString(s.spec, "selector_value", s.name+defaultDriftSuffix)
 	if drifted == s.name {
@@ -569,25 +569,69 @@ func selectorDriftBundle(s synthesis) ([]runtime.Object, error) {
 		return nil, fmt.Errorf("spec.selector_value %q is not a valid label value: %s", drifted, strings.Join(errs, "; "))
 	}
 
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      s.name,
-			Namespace: s.namespace,
-			Labels:    map[string]string{"app": s.name},
-		},
-		Spec: corev1.ServiceSpec{
-			// The drift itself: the pods are labelled app=<name>, and this
-			// asks for something else. One character off is what this looks
-			// like in the field — a rename that updated the Deployment and
-			// not the Service.
-			Selector: map[string]string{"app": drifted},
-			Ports: []corev1.ServicePort{{
-				Name:       "http",
-				Port:       int32(port),
-				TargetPort: intstr.FromInt32(int32(port)),
-			}},
-		},
+	// The drift itself: the pods are labelled app=<name>, and the Service asks
+	// for something else. One character off is what this looks like in the
+	// field — a rename that updated the Deployment and not the Service.
+	svc := newService(s, port, drifted)
+	return []runtime.Object{newDeployment(s, pod), svc}, nil
+}
+
+// backendCrashLoopBundle: a crash-looping workload behind a Service that
+// selects it correctly. Produces a Service whose only endpoints are not ready.
+//
+// The inverse of SelectorDrift in what is wrong and the same in what it costs
+// to diagnose. There the Service is broken and the pods are fine; here the
+// Service is written correctly and has nothing healthy to point at. Both
+// present as "this Service is not serving", and telling them apart is the
+// whole exercise: one is fixed by editing a selector, the other by fixing an
+// application that will not start.
+//
+// This is the only kind whose bundle has a cause and a consequence that are
+// both visible as separate objects in separate states, which is what makes it
+// the one a scoring run can use to ask whether a subject reported the root or
+// only the symptom. A report that names the Service and stops has described
+// what a user would notice and said nothing about why.
+func backendCrashLoopBundle(s synthesis) ([]runtime.Object, error) {
+	pod, err := containerExitLoopPod(s.spec)
+	if err != nil {
+		return nil, err
 	}
+	port, err := servicePort(s.spec)
+	if err != nil {
+		return nil, err
+	}
+
+	c := &pod.Containers[0]
+	c.Ports = []corev1.ContainerPort{{Name: "http", ContainerPort: port}}
+	// A readiness probe on a container that exits in under a second looks
+	// redundant, and is not. Without one the kubelet calls a container Ready
+	// the moment it is Running, so every restart flickers the pod Ready and
+	// the endpointslice controller copies that into `conditions.ready`.
+	// Measured on GKE 1.36 against exactly this bundle minus the probe: the
+	// endpoints read ready on 2 of the first 45 polls, both inside the first
+	// 90 seconds, before the kubelet's backoff grew long enough to hide it.
+	//
+	// The efficacy gate would survive that — it polls until it sees the state
+	// it wants, so a flicker costs it one poll. What does not survive it is the
+	// subject. This kind's whole symptom is a Service with no healthy backend,
+	// and a symptom that is intermittently absent is one a correct diagnosis
+	// can be graded wrong against, in the first ninety seconds, which is
+	// exactly when something triaging the namespace is looking.
+	//
+	// It is also what the fault would look like anyway. A readiness probe is
+	// the normal case for a service, and it is what keeps a crashing backend
+	// out of rotation rather than black-holing requests into it.
+	c.ReadinessProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			Exec: &corev1.ExecAction{Command: []string{"/bin/false"}},
+		},
+		PeriodSeconds:    5,
+		FailureThreshold: 1,
+	}
+
+	// Correct, and that is the point: the selector matches, so the missing
+	// backends are a consequence of the pods rather than a second mistake.
+	svc := newService(s, port, s.name)
 	return []runtime.Object{newDeployment(s, pod), svc}, nil
 }
 
@@ -671,12 +715,9 @@ func unboundClaimBundle(s synthesis) ([]runtime.Object, error) {
 // for the wrong reason: the diagnosis this kind poses is "the thing behind it
 // is broken", not "this is broken".
 func dependencyStallBundle(s synthesis) ([]runtime.Object, error) {
-	port, err := optInt(s.spec, "port", defaultServicePort)
+	port, err := servicePort(s.spec)
 	if err != nil {
 		return nil, err
-	}
-	if port < 1 || port > 65535 {
-		return nil, fmt.Errorf("spec.port must be between 1 and 65535, got %d", port)
 	}
 	every, err := optInt(s.spec, "interval_seconds", defaultStallSeconds)
 	if err != nil {
@@ -701,7 +742,7 @@ func dependencyStallBundle(s synthesis) ([]runtime.Object, error) {
 		Containers: []corev1.Container{{
 			Name:  containerName,
 			Image: optString(s.spec, "image", defaultRunnerImage),
-			Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: int32(port)}},
+			Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: port}},
 			Env:   []corev1.EnvVar{{Name: stallMessageEnv, Value: msg}},
 			// busybox httpd daemonizes, so the `&&` chain reaches the loop and
 			// the loop is what keeps PID 1 alive. If httpd cannot bind, the
@@ -714,7 +755,7 @@ func dependencyStallBundle(s synthesis) ([]runtime.Object, error) {
 				stallServeRoot, port, stallMessageEnv, every)},
 			ReadinessProbe: &corev1.Probe{
 				ProbeHandler: corev1.ProbeHandler{
-					HTTPGet: &corev1.HTTPGetAction{Path: "/", Port: intstr.FromInt32(int32(port))},
+					HTTPGet: &corev1.HTTPGetAction{Path: "/", Port: intstr.FromInt32(port)},
 				},
 				PeriodSeconds:    2,
 				TimeoutSeconds:   2,
@@ -723,24 +764,10 @@ func dependencyStallBundle(s synthesis) ([]runtime.Object, error) {
 		}},
 	}
 
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      s.name,
-			Namespace: s.namespace,
-			Labels:    map[string]string{"app": s.name},
-		},
-		Spec: corev1.ServiceSpec{
-			// Correct, deliberately, and the inverse of SelectorDrift. The
-			// Service having endpoints is half of what makes this fault what it
-			// is, and the gate asserts it.
-			Selector: map[string]string{"app": s.name},
-			Ports: []corev1.ServicePort{{
-				Name:       "http",
-				Port:       int32(port),
-				TargetPort: intstr.FromInt32(int32(port)),
-			}},
-		},
-	}
+	// Correct, deliberately, and the inverse of SelectorDrift. The Service
+	// having *ready* endpoints is half of what makes this fault what it is,
+	// and the gate asserts it.
+	svc := newService(s, port, s.name)
 	return []runtime.Object{newDeployment(s, pod), svc}, nil
 }
 
@@ -1001,6 +1028,48 @@ func certExpiryBundle(s synthesis) ([]runtime.Object, error) {
 
 // ptr returns a pointer to v, for the API types that take one.
 func ptr[T any](v T) *T { return &v }
+
+// newService builds the Service that fronts a bundle, selecting on the given
+// `app` label value.
+//
+// The selector is a parameter rather than derived from the synthesis because
+// whether it matches is the difference between two fault kinds: SelectorDrift
+// passes a value the pods do not carry, DependencyStall and BackendCrashLoop
+// pass the workload's own name. Everything else about the three Services is
+// identical, which is what makes "the selector is wrong" a diagnosis rather
+// than a guess at which of several differences mattered.
+func newService(s synthesis, port int32, selector string) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      s.name,
+			Namespace: s.namespace,
+			Labels:    map[string]string{"app": s.name},
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{"app": selector},
+			Ports: []corev1.ServicePort{{
+				Name:       "http",
+				Port:       port,
+				TargetPort: intstr.FromInt32(port),
+			}},
+		},
+	}
+}
+
+// servicePort reads and validates spec.port for the three kinds that publish
+// one. Returns int32 rather than int because every consumer is an API field of
+// that width, and narrowing here — once, next to the bounds check that makes it
+// safe — is what keeps the conversion out of three call sites.
+func servicePort(spec map[string]any) (int32, error) {
+	port, err := optInt(spec, "port", defaultServicePort)
+	if err != nil {
+		return 0, err
+	}
+	if port < 1 || port > 65535 {
+		return 0, fmt.Errorf("spec.port must be between 1 and 65535, got %d", port)
+	}
+	return int32(port), nil
+}
 
 // newDeployment wraps a pod spec in the Deployment that carries it.
 //

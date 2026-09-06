@@ -553,6 +553,7 @@ func TestCatalog(t *testing.T) {
 // in sync is this test.
 func TestKindsMatchCatalogConstants(t *testing.T) {
 	inCatalog := []string{
+		catalog.KubeStateBackendCrashLoop,
 		catalog.KubeStateCertExpiry,
 		catalog.KubeStateContainerExitLoop,
 		catalog.KubeStateDependencyStall,

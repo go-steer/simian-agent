@@ -28,25 +28,26 @@ import (
 // manifest that deliberately overrides one has to say so by name, and so an
 // audit record makes it obvious which probes the operator did not write.
 const (
-	ProbeReachableBefore = "simian-reachable-before"
-	ProbePartitioned     = "simian-partitioned"
-	ProbeFastBefore      = "simian-fast-before"
-	ProbeDelayed         = "simian-delayed"
-	ProbeEnvoyRuntime    = "simian-envoy-runtime"
-	ProbeImagePullFailed = "simian-image-pull-failed"
-	ProbeCrashLooping    = "simian-crash-looping"
-	ProbeOOMKilled       = "simian-oom-killed"
-	ProbeUnschedulable   = "simian-unschedulable"
-	ProbeJobFailed       = "simian-job-failed"
-	ProbeWorkloadReady   = "simian-workload-ready"
-	ProbeNoEndpoints     = "simian-no-endpoints"
-	ProbeClaimPending    = "simian-claim-pending"
-	ProbeEndpointsReady  = "simian-endpoints-ready"
-	ProbeDependencyStall = "simian-dependency-stalled"
-	ProbePDBGridlocked   = "simian-pdb-gridlocked"
-	ProbeRolloutStuck    = "simian-rollout-stuck"
-	ProbeRolloutServing  = "simian-rollout-serving"
-	ProbeCertPresent     = "simian-cert-present"
+	ProbeReachableBefore   = "simian-reachable-before"
+	ProbePartitioned       = "simian-partitioned"
+	ProbeFastBefore        = "simian-fast-before"
+	ProbeDelayed           = "simian-delayed"
+	ProbeEnvoyRuntime      = "simian-envoy-runtime"
+	ProbeImagePullFailed   = "simian-image-pull-failed"
+	ProbeCrashLooping      = "simian-crash-looping"
+	ProbeOOMKilled         = "simian-oom-killed"
+	ProbeUnschedulable     = "simian-unschedulable"
+	ProbeJobFailed         = "simian-job-failed"
+	ProbeWorkloadReady     = "simian-workload-ready"
+	ProbeNoEndpoints       = "simian-no-endpoints"
+	ProbeClaimPending      = "simian-claim-pending"
+	ProbeEndpointsReady    = "simian-endpoints-ready"
+	ProbeEndpointsNotReady = "simian-endpoints-not-ready"
+	ProbeDependencyStall   = "simian-dependency-stalled"
+	ProbePDBGridlocked     = "simian-pdb-gridlocked"
+	ProbeRolloutStuck      = "simian-rollout-stuck"
+	ProbeRolloutServing    = "simian-rollout-serving"
+	ProbeCertPresent       = "simian-cert-present"
 )
 
 // Envoy runtime keys, mirrored from pkg/sut/envoy's bootstrap. Duplicated
@@ -116,6 +117,10 @@ var gates = map[gateKey]gate{
 	},
 	{simian.EngineKubeState, KubeStateSelectorDrift}: {
 		describe: "the synthesized workload's pods must be Ready and the Service in front of them must have no endpoint addresses",
+		build:    kubeStateProbes,
+	},
+	{simian.EngineKubeState, KubeStateBackendCrashLoop}: {
+		describe: "the synthesized workload's containers must report a last termination of Error, and the Service that selects them must report every endpoint not ready",
 		build:    kubeStateProbes,
 	},
 	{simian.EngineKubeState, KubeStateUnboundClaim}: {
@@ -429,6 +434,45 @@ var kubeStateGates = map[string][]kubeStateGate{
 			jsonPath:    "{.items[*].endpoints[*].addresses[*]}",
 			expectEmpty: true,
 			timeout:     "30s",
+		},
+	},
+	KubeStateBackendCrashLoop: {
+		{
+			// The cause first, and here the order carries the meaning rather
+			// than only the failure message. This kind is the one scoring uses
+			// to ask whether a subject found the root or stopped at the
+			// symptom, so the gate proves them in that order too: the pods are
+			// crash-looping, and *therefore* the Service has nothing ready.
+			//
+			// Same expression and same reasoning as ContainerExitLoop —
+			// lastState.terminated.reason rather than the CrashLoopBackOff
+			// waiting reason, which is a coin flip on any given poll.
+			probeName: ProbeCrashLooping,
+			jsonPath:  "{.items[*].status.containerStatuses[*].lastState.terminated.reason}",
+			expect:    "Error",
+			timeout:   "90s",
+		},
+		{
+			probeName:   ProbeEndpointsNotReady,
+			resource:    "endpointslices",
+			selectorKey: "kubernetes.io/service-name",
+			// Not expectEmpty, and the difference from SelectorDrift is the
+			// whole point of having both kinds. A Service that selects nothing
+			// gets a slice with no addresses; a Service that selects pods which
+			// are not serving gets a slice that lists them with ready false.
+			// Asserting emptiness here would fail against a fault that landed,
+			// and asserting this against SelectorDrift would render nothing at
+			// all — the two shapes are distinguishable, which is what a subject
+			// is being asked to do.
+			//
+			// A crash-looping container is Ready whenever it is Running, so this
+			// condition flickers unless the container carries a readiness probe
+			// that can never pass. It carries one — not for this gate's sake,
+			// which polls and would simply wait out the flicker, but for the
+			// subject's; see backendCrashLoopBundle.
+			jsonPath: "{.items[*].endpoints[*].conditions.ready}",
+			expect:   "false",
+			timeout:  "90s",
 		},
 	},
 	KubeStateUnboundClaim: {

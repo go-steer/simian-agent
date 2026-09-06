@@ -390,6 +390,7 @@ var descriptions = map[string]string{
 	KindUnschedulable:      "Synthesize a workload the scheduler cannot place, producing a Pending pod and FailedScheduling events.",
 	KindJobFailure:         "Synthesize a Job whose pods exit non-zero until it exhausts its backoff limit, producing a Failed Job with reason BackoffLimitExceeded.",
 	KindSelectorDrift:      "Synthesize a healthy workload behind a Service whose selector does not match it, producing an endpointless Service in front of Running pods.",
+	KindBackendCrashLoop:   "Synthesize a crash-looping workload behind a Service that selects it correctly, producing a Service whose endpoints are all not ready. The cause and its consequence are separate objects in separate states.",
 	KindUnboundClaim:       "Synthesize a PersistentVolumeClaim on a StorageClass that does not exist, and a workload that mounts it, producing a Pending claim and an unschedulable pod.",
 	KindDependencyStall:    "Synthesize a workload that serves normally and logs upstream failures. Every API-server check is clean — Ready, Available, endpointed — and the only evidence is in the pod log.",
 	KindPDBGridlock:        "Synthesize a healthy workload under a PodDisruptionBudget with no headroom, producing a namespace where nothing is failing and no pod can be evicted — node drains and autoscaler scale-downs hang indefinitely.",
@@ -488,6 +489,26 @@ Spec (every field optional):
 
 Every pod is Running and Ready and the Deployment is Available. The fault is
 in the relationship between the two objects and is invisible in either alone.
+` + commonSpecNotes,
+
+	KindBackendCrashLoop: `Creates a Deployment whose container exits immediately, and a Service
+that selects it correctly.
+
+Spec (every field optional):
+  {"exit_code": 1, "message": "fatal: initialization failed", "port": 8080}
+
+  - exit_code: 1-255. Must be non-zero.
+  - message:   written to stderr before exiting.
+  - port:      the port the Service publishes and the pods declare.
+
+Defaults to 2 replicas, so "the Service has no healthy backend" is a statement
+about a set rather than about one pod.
+
+The Service is written correctly and has nothing ready to point at. Presents
+identically to SelectorDrift — a Service that is not serving — and is a
+different fix: the selector is right and the application is broken. The root
+cause and its consequence are separate objects, which is what makes this the
+kind a scoring run uses to ask whether a report stopped at the symptom.
 ` + commonSpecNotes,
 
 	KindUnboundClaim: `Creates a PersistentVolumeClaim that can never bind, and a Deployment
