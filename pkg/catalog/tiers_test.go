@@ -138,9 +138,11 @@ func TestClassifyKubeStateKinds(t *testing.T) {
 			t.Errorf("Classify(kube-state, %s) = %q, want %q", kind, got, simian.TierNamespace)
 		}
 	}
-	// #57/#58 bring NodeUnready under this same engine name. It cordons a
-	// node, and it must not inherit namespace tier — and so the default
-	// policy's permission — just by arriving here.
+	// NodeUnready is the kind this engine does not have: a phantom Node is
+	// deleted by the cloud-node-controller within seconds, so anything that
+	// produced it would act on a real node. If it ever arrives here it must not
+	// inherit namespace tier — and so the default policy's permission — just by
+	// being spelled with this engine name.
 	if got := Classify(simian.EngineKubeState, "NodeUnready"); got != simian.TierExternal {
 		t.Errorf("Classify(kube-state, NodeUnready) = %q, want %q — new kinds must fail closed", got, simian.TierExternal)
 	}

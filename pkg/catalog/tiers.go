@@ -146,10 +146,10 @@ func Classify(engine simian.Engine, kind string) simian.BlastRadiusTier {
 	case simian.EngineKubeState:
 		// Only kinds the driver actually synthesizes are namespace-scoped.
 		// Falling through for anything else keeps the fail-closed default
-		// meaningful as kinds are added: #57 and #58 bring NodeUnready, which
-		// cordons a node and is emphatically not namespace tier, and it must
-		// not inherit a namespace classification just because it arrived under
-		// this engine name.
+		// meaningful as kinds are added. NodeUnready is the standing example:
+		// every mechanism that could produce it acts on a real node, so it is
+		// emphatically not namespace tier, and it must not inherit a namespace
+		// classification just by arriving under this engine name.
 		if kubeStateNamespaceKinds[kind] {
 			return simian.TierNamespace
 		}
