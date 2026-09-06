@@ -181,7 +181,19 @@ func roleRules() []rbacv1.PolicyRule {
 			// writable for this one, so they are listed apart from the
 			// read-only core rule below rather than folded into it.
 			APIGroups: []string{""},
-			Resources: []string{"services", "persistentvolumeclaims"},
+			Resources: []string{"services", "persistentvolumeclaims", "secrets"},
+			Verbs:     []string{"create", "get", "list", "watch", "patch", "delete"},
+		},
+		{
+			// PodDisruptionBudgets, for PDBGridlock. Worth naming separately
+			// because this is the one object the engine creates whose effect
+			// reaches past the namespace it lives in: a budget with no headroom
+			// blocks eviction of its own pods, and so blocks a drain of whatever
+			// node they landed on. Bounded by the arena Role like everything
+			// else, and by the fault's own lease — but an operator reading this
+			// grant should know that is what it buys.
+			APIGroups: []string{"policy"},
+			Resources: []string{"poddisruptionbudgets"},
 			Verbs:     []string{"create", "get", "list", "watch", "patch", "delete"},
 		},
 		{

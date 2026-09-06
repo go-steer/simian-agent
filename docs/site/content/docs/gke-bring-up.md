@@ -85,15 +85,22 @@ bin/simian chaos --engine network-policy --kind NetworkPolicy \
   --spec '{"labelSelectors":{"app":"cartservice"},"directions":["ingress","egress"]}'
 
 # Declarative state, no dataplane at all: a workload synthesized broken.
-# Every field of the spec is optional; run each of the nine kinds. NoOp is the
+# Every field of the spec is optional; run each of the twelve kinds. NoOp is the
 # control — it synthesizes a *healthy* workload, and its gate passing is what
 # tells you a later empty finding means "nothing was wrong" and not "the probe
 # never worked here".
 for kind in ImageUnresolvable ContainerExitLoop MemoryLimitSqueeze Unschedulable \
-            JobFailure SelectorDrift UnboundClaim DependencyStall NoOp; do
+            JobFailure SelectorDrift UnboundClaim DependencyStall \
+            PDBGridlock CertExpiry NoOp; do
   bin/simian chaos --engine kube-state --kind "$kind" --api-version apps/v1 \
     --namespace simian-gke-1 --duration 4m
 done
+
+# RolloutStuck is held out of the loop because it needs a longer lease than the
+# rest: Apply waits for a healthy revision to come up before wedging the next
+# one, and the gate then waits out the Deployment's progress deadline.
+bin/simian chaos --engine kube-state --kind RolloutStuck --api-version apps/v1 \
+  --namespace simian-gke-1 --duration 10m
 ```
 
 What the run above produced:
@@ -115,10 +122,13 @@ What the run above produced:
 | `kube-state` `UnboundClaim` | both gates passed, 0.1s then 0.1s | claim `Pending`, and the pod that mounts it `Unschedulable` |
 | `kube-state` `DependencyStall` | all three gates passed, 2.2s / 0.1s / 0.2s | pods `Ready=True`, EndpointSlice `conditions.ready` true, and then the log line found in `checkout-api-…-s7btf` |
 | `kube-state` `NoOp` | gate passed in 2.2s | pods `Ready=True` — the control, and it is supposed to pass |
+| `kube-state` `PDBGridlock` | both gates passed, 2.3s then 0.1s | pods `Ready=True`, budget reporting `disruptionsAllowed: 0` — and an eviction call against the pod returned `429 Cannot evict pod as it would violate the pod's disruption budget` |
+| `kube-state` `CertExpiry` | both gates passed, 2.3s then 0.1s | pods `Ready=True`, `tls.crt` present in the mounted Secret; `openssl x509` read back `notAfter` exactly six hours out and `notBefore` ninety days back |
+| `kube-state` `RolloutStuck` | both gates passed, 61.8s then 0.1s, twice within 0.05s of each other | `Progressing` reason `ProgressDeadlineExceeded` — the deployment's own 60s deadline, to the second — with the previous revision still `2/2 Running` and the new pod in `CrashLoopBackOff` |
 
-The last five rows were measured a day later, 2026-09-05, on the same cluster and
+The bundle rows were measured a day later, 2026-09-05/06, on the same cluster and
 in a scratch namespace; everything above them came from the single run described
-at the top. Efficacy rate across those five was 1.00.
+at the top. Efficacy rate across them was 1.00.
 
 The multi-gate kinds are worth a second look. `SelectorDrift` and `UnboundClaim`
 each prove their fault in two steps, in order, because the second step's evidence
@@ -135,6 +145,21 @@ against a crash-looping pod that printed the line on its way down; with them,
 the finding means "and only the log is wrong", which is the whole point of the
 kind. It is also the one kind where `kubectl get pods`, `kubectl get svc` and
 `kubectl describe deploy` all report a healthy namespace.
+
+`RolloutStuck` is the one that only a live cluster could have taught. The first
+GKE run took the arena down: a container with no readiness probe is Ready for as
+long as it is running, and a container that exits after 200ms is running for
+200ms — long enough that the kubelet reported the broken pods Ready, the
+Deployment controller declared the new ReplicaSet available and scaled the
+working revision to zero. A completed rollout does not un-complete, so the
+progress-deadline clock had already stopped when the pods began to crash, and the
+gate correctly refused the fault: `ProgressDeadlineExceeded` never arrived. Adding
+`minReadySeconds` fixed the outage but not the timing — the deadline now reset on
+every restart's readiness flicker, so the condition first appeared at 159s and
+then flipped back to `ReplicaSetUpdated`. The kind now ships with a readiness
+probe on the broken revision that cannot pass, and the condition lands at 61.8s
+and stays. None of this is visible against a fake clientset, where status is
+whatever the test writes.
 
 `NetworkChaos` landing on Dataplane V2 contradicts what this project documented for the last year. It is a real measurement, not a correction of a mistake: the bypass was verified at the time on an older Cilium. Treat it as version-dependent and re-check per cluster — see [known limitations]({{< relref "known-limitations.md" >}}#chaos-meshs-networkchaos-may-or-may-not-work-on-gke-dataplane-v2--measure-it). Reading the audit record is the check:
 

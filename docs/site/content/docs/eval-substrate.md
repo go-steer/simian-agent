@@ -160,9 +160,10 @@ So the two halves are complementary, and Simian should own both.
 
 ## 4. Deliverable A — the `kube-state` engine
 
-*Shipped for `synthesize` mode and all nine kinds (#56, #57). `mutate` mode is
-#59 and the node-level kinds are #58; the driver rejects `mode: mutate` with an
-explanatory error rather than ignoring the field.*
+*Shipped for `synthesize` mode and all twelve kinds (#56, #57, #58). `mutate`
+mode is #59 and the node-level kinds are the second half of #58; the driver
+rejects `mode: mutate` with an explanatory error rather than ignoring the
+field.*
 
 A fifth driver, `EngineKubeState Engine = "kube-state"`, that produces
 declarative-state faults. It slots in behind the existing `ChaosDriver`
@@ -197,6 +198,9 @@ reverts on TTL expiry the same way a Chaos Mesh CR is deleted.
 | `SelectorDrift` | patch `Service.spec.selector` off the workload's labels | empty EndpointSlice | 6, 9 |
 | `UnboundClaim` | PVC referencing a nonexistent StorageClass, plus a consumer pod | `VolumeBindingFailed` / unbound | 10 |
 | `DependencyStall` | synthesize a workload that serves real HTTP and logs a failing upstream call while staying Ready and Available | log-only signal, all field checks clean | 11 |
+| `PDBGridlock` | a PodDisruptionBudget whose `minAvailable` equals the replica count | `disruptionsAllowed: 0`; every eviction returns 429 | — |
+| `RolloutStuck` | bring up a working revision, wait for it, then patch in one that cannot start | `ProgressDeadlineExceeded` with the previous revision still fully available | — |
+| `CertExpiry` | synthesize a `kubernetes.io/tls` Secret whose certificate expires within hours, and mount it | a healthy workload serving a certificate about to expire | — |
 | `NoOp` | applies nothing; still leases and audits | healthy control | 7 |
 
 `NoOp` is not a curiosity. It is how the eval measures false positives, and it
@@ -748,7 +752,7 @@ within a group is independent of its siblings.
 | **Phase 2 — the `kube-state` engine** |
 | #56 | ✅ Driver skeleton + `synthesize` mode + 4 kinds: `ImageUnresolvable`, `ContainerExitLoop`, `MemoryLimitSqueeze`, `Unschedulable`, each with a default efficacy gate; verified on GKE | L | #54 |
 | #57 ✅ | Remaining parity kinds: `JobFailure`, `SelectorDrift`, `UnboundClaim`, `NoOp`, and `DependencyStall` with the `logs` probe type it needed — each gated and verified on GKE | L | #56 |
-| #58 | Lookout-only kinds: `NodeUnready`, `PDBGridlock`, `CertExpiry`, `RolloutStuck` | M | #56 |
+| #58 | Lookout-only kinds: `PDBGridlock`, `RolloutStuck`, `CertExpiry` ✅ (namespace tier, gated and verified on GKE); `NodeUnready` still open — it is node tier, and the driver is namespace-scoped and synthesize-only | M | #56 |
 | #59 | `mutate` mode + revert-on-lease-expiry | L | #56 |
 | **Phase 3 — scenarios** |
 | #60 ✅ | `Scenario` type, `ScenarioID` plumbed through executor + audit, pack loader | M | — |

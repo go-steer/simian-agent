@@ -255,6 +255,9 @@ a vote on.
 | `kube-state` | `SelectorDrift` | Pods are Ready **and** the Service's EndpointSlices carry no addresses |
 | `kube-state` | `UnboundClaim` | The claim is `Pending` **and** the pod mounting it reports `Unschedulable` |
 | `kube-state` | `DependencyStall` | Pods are Ready **and** the Service's EndpointSlices report ready endpoints **and** the workload's log carries the failing-call line |
+| `kube-state` | `PDBGridlock` | Pods are Ready **and** the PodDisruptionBudget reports exactly `0` disruptions allowed |
+| `kube-state` | `RolloutStuck` | The Deployment's `Progressing` condition carries reason `ProgressDeadlineExceeded` **and** every replica of the previous revision is still available |
+| `kube-state` | `CertExpiry` | Pods are Ready **and** the mounted Secret carries a PEM certificate |
 | `kube-state` | `NoOp` | Pods are Ready — the control's gate is the one every other kind fails |
 
 The table is keyed by `(engine, kind)`, not by cluster. The Chaos Mesh catalog
@@ -346,6 +349,32 @@ is wrong", which is the whole claim this kind makes. They are also the cheapest
 possible check that the fault is the one advertised, since a stall that
 accidentally broke readiness would fail its own gate rather than land as a
 workload that merely looks healthy.
+
+`PDBGridlock` is gated on a jsonpath *filter* rather than on a rendered value,
+and the difference matters. The obvious spelling — render
+`status.disruptionsAllowed` and expect `"0"` — is a substring match against a
+decimal number, so it passes just as happily against `10` and `20`. The gate
+instead selects budgets whose `disruptionsAllowed` is exactly zero and renders
+their *name*, so the value either matches exactly or the gate sees nothing at
+all. (This is also why the gate reads the dynamic client's `int64`: client-go's
+jsonpath refuses to compare a `float64` against an integer literal.)
+
+`RolloutStuck` is the one kind gated on a *reason* rather than on a condition's
+presence, because `Progressing` is a condition every healthy Deployment also
+carries — a gate that matched on the type would pass against a rollout that
+completed perfectly. Its second probe asserts the old revision is still fully
+available, which is the half that makes the fault what it claims to be: a deploy
+that broke while the previous pods kept serving. A wedged rollout in front of
+nothing is just an outage.
+
+`CertExpiry`'s gate is honestly weaker than its fault, and says so. No probe type
+here can parse a certificate, so the gate proves the Secret landed and a pod
+mounted it — the base64 of the PEM header, checked as a prefix. That the
+certificate actually expires when the spec says is proved in the driver's unit
+tests against the generated DER. Gating on "a certificate is present" and
+claiming to have verified the expiry would be exactly the vacuous pass this
+document exists to refuse; gating on the arithmetic elsewhere and saying which
+half is which is the honest version.
 
 `NoOp`, the control, is gated on its workload being **healthy**. A control needs
 a gate as much as a fault does: without one it would "inject" successfully

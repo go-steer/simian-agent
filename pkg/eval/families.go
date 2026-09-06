@@ -80,6 +80,48 @@ var failureFamilies = map[string][]string{
 	"node-down":      {"NodeNotReady", "NodeUnreachable"},
 	"disk":           {"DiskPressure", "Evicted", "VolumeMountFailed", "FailedMount"},
 	"volume-binding": {"Unbound", "UnboundImmediatePersistentVolumeClaims", "VolumeBindingFailed", "ProvisioningFailed", "StorageClassNotFound", "NoStorageClass", "MissingStorageClass"},
+
+	// A deploy that did not land. "ProgressDeadlineExceeded" is the token the
+	// Deployment controller actually writes, and the family exists mostly to
+	// hold it: it used to fall through to no family at all, which meant a
+	// subject could call any fault a stuck rollout for free.
+	//
+	// "Progressing" is deliberately absent. It is a condition type that is
+	// True on every healthy rollout, so it names no failure. So is
+	// "Degraded", which belongs to Argo and OpenShift rather than to
+	// Kubernetes and is written for half a dozen unrelated situations.
+	"rollout": {
+		"ProgressDeadlineExceeded", "RolloutStuck", "StuckRollout",
+		"FailedRollout", "RolloutStalled", "DeploymentStuck", "BadDeploy",
+	},
+
+	// Eviction blocked by a budget with no headroom. Every token names the
+	// budget as the thing in the way, which is the claim: a subject saying
+	// "PDB blocked" about a node that was merely slow to drain has got it
+	// wrong.
+	//
+	// "DrainBlocked" is the loosest of these and is still in, because a drain
+	// is blocked by remarkably few things and a disruption budget is the first
+	// of them. "Blocked" and "Stuck" on their own are not, for the usual
+	// reason: they name a state and no cause.
+	"disruption-budget": {
+		"PDBGridlock", "PDBBlocked", "DisruptionsNotAllowed",
+		"DisruptionBudgetBlocked", "DrainBlocked",
+	},
+
+	// A certificate past — or nearly past — its notAfter. Kubernetes writes
+	// none of these itself, which is exactly why the family is needed: the
+	// tokens come from the subject's own vocabulary, so without a family they
+	// would be ungradeable, and a report could claim an expiring certificate
+	// about any fault at all at no cost.
+	//
+	// "Expired" and "Expiring" alone are absent. A lease expires, a lock
+	// expires, a token expires; only the spellings that name a certificate
+	// make a claim about one.
+	"cert-expiry": {
+		"CertificateExpired", "CertificateExpiring", "CertExpired",
+		"CertExpiring", "ExpiredCertificate", "TLSCertificateExpiry",
+	},
 }
 
 // genericReasons name *that* something failed without naming *how*.

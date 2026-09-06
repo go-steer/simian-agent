@@ -95,6 +95,17 @@ type Driver struct {
 	// Now is the clock used to stamp expiries. Nil means time.Now; tests
 	// override it to make the stamp assertable.
 	Now func() time.Time
+
+	// RolloutSettle bounds how long a finisher waits for the cluster to reach
+	// the state it needs before it can be wedged. Zero means
+	// rolloutSettleTimeout.
+	//
+	// Overridable because the wait is a real wait against a real controller,
+	// and the fake clientset unit tests run against has none. Without this a
+	// test of RolloutStuck would either sleep out the full timeout or have to
+	// skip the finisher, and skipping it would leave the one step this kind
+	// cannot be built without untested.
+	RolloutSettle time.Duration
 }
 
 // New creates a Driver.
@@ -107,6 +118,13 @@ func (d *Driver) now() time.Time {
 		return d.Now()
 	}
 	return time.Now()
+}
+
+func (d *Driver) rolloutSettle() time.Duration {
+	if d.RolloutSettle > 0 {
+		return d.RolloutSettle
+	}
+	return rolloutSettleTimeout
 }
 
 // Engine implements ChaosDriver.
@@ -138,25 +156,33 @@ func (d *Driver) Apply(ctx context.Context, m simian.FaultManifest) (string, err
 	if err != nil {
 		return "", fmt.Errorf("kube-state apply: %w", err)
 	}
-	replicas, err := optInt(m.Spec, "replicas", 1)
+	// The default comes from the catalog rather than from a literal here,
+	// because a kind whose gate asserts on the replica count has to be able to
+	// compute the same number before Apply runs. See
+	// catalog.KubeStateDefaultReplicas.
+	replicas, err := optInt(m.Spec, "replicas", catalog.KubeStateDefaultReplicas(m.ResourceKind))
 	if err != nil {
 		return "", fmt.Errorf("kube-state apply: %w", err)
 	}
 	if replicas < 1 || replicas > maxReplicas {
 		return "", fmt.Errorf("kube-state apply: spec.replicas must be between 1 and %d, got %d", maxReplicas, replicas)
 	}
-	objs, err := build(synthesis{
+	now := d.now()
+	s := synthesis{
 		name:      name,
 		namespace: ns,
 		replicas:  int32(replicas),
 		spec:      m.Spec,
-	})
+		now:       now,
+		settle:    d.rolloutSettle(),
+	}
+	objs, err := build(s)
 	if err != nil {
 		return "", fmt.Errorf("kube-state apply: %w", err)
 	}
 
 	labels := bundleLabels(name, m.ResourceKind, m.UID)
-	annotations := expiryAnnotation(d.now(), m.Duration)
+	annotations := expiryAnnotation(now, m.Duration)
 	for i, obj := range objs {
 		if err := stamp(obj, labels, annotations); err != nil {
 			return "", fmt.Errorf("kube-state apply: %w", err)
@@ -171,6 +197,19 @@ func (d *Driver) Apply(ctx context.Context, m simian.FaultManifest) (string, err
 					describeObject(obj), ns, name, err, i, cerr)
 			}
 			return "", fmt.Errorf("kube-state apply: create %s %s/%s: %w", describeObject(obj), ns, name, err)
+		}
+	}
+
+	// A kind whose failure state is arrived at rather than created gets its
+	// second step here — see finisher. Rolled back the same way a failed create
+	// is: a bundle that got half way to being a fault is one nothing will ever
+	// clear, because a failed Apply is never leased.
+	if finish, ok := finishers[m.ResourceKind]; ok {
+		if err := finish(ctx, d.clientset, s); err != nil {
+			if cerr := d.clearBundle(ctx, ns, name); cerr != nil {
+				return "", fmt.Errorf("kube-state apply: %w (and rolling back the bundle: %v)", err, cerr)
+			}
+			return "", fmt.Errorf("kube-state apply: %w", err)
 		}
 	}
 	return engineUID(ns, name), nil
@@ -353,6 +392,9 @@ var descriptions = map[string]string{
 	KindSelectorDrift:      "Synthesize a healthy workload behind a Service whose selector does not match it, producing an endpointless Service in front of Running pods.",
 	KindUnboundClaim:       "Synthesize a PersistentVolumeClaim on a StorageClass that does not exist, and a workload that mounts it, producing a Pending claim and an unschedulable pod.",
 	KindDependencyStall:    "Synthesize a workload that serves normally and logs upstream failures. Every API-server check is clean — Ready, Available, endpointed — and the only evidence is in the pod log.",
+	KindPDBGridlock:        "Synthesize a healthy workload under a PodDisruptionBudget with no headroom, producing a namespace where nothing is failing and no pod can be evicted — node drains and autoscaler scale-downs hang indefinitely.",
+	KindRolloutStuck:       "Synthesize a Deployment, let it become fully available, then roll out a revision that can never become ready. The previous revision keeps serving every request, so nothing alerts and the deploy silently never landed.",
+	KindCertExpiry:         "Synthesize a TLS Secret whose certificate expires within hours (or has already expired) and a workload that mounts it. Nothing is failing yet; the failure is scheduled.",
 	KindNoOp:               "Synthesize a workload with nothing wrong with it. The control case: a namespace that looks like every other scenario and holds no fault.",
 }
 
@@ -365,7 +407,8 @@ Common to every kube-state kind:
               in the target namespace; nothing already running is touched.
   - name:     optional; the workload name. A short random suffix is always
               appended. Defaults to a neutral per-kind name.
-  - replicas: optional, default 1.
+  - replicas: optional, default 1 — except RolloutStuck, which defaults to 2
+              so "the old revision is still serving" means more than one pod.
 
 Give these faults a duration of at least 3m. Apply does not return until the
 efficacy probe has seen the failure state, the settle wait comes out of the
@@ -480,6 +523,75 @@ Running and Ready, the Service has ready endpoints, nothing has restarted and
 no event has fired. Use this when the scenario is about whether the subject
 reads logs at all — a diagnosis built from ` + "`kubectl get`" + ` alone reports the
 namespace healthy.
+` + commonSpecNotes,
+
+	KindPDBGridlock: `Creates a healthy Deployment and a PodDisruptionBudget over it that
+permits no disruptions at all.
+
+Spec (every field optional):
+  {"min_available": 1}
+
+  - min_available: how many pods the budget requires to stay up. Defaults to
+                   the replica count, which leaves exactly zero headroom.
+                   Refused if it is below the replica count, because then the
+                   budget allows an eviction and blocks nothing.
+
+Nothing is failing. Every pod is Ready and the Deployment is Available; the
+fault only shows when something tries to move a pod, and then it never
+finishes. Use this when the scenario is about a drain that hangs, a node pool
+upgrade that stalls on its first node, or an autoscaler that will not scale
+down.
+
+Be aware of what this does to a shared cluster: the budget is namespaced and
+covers only the fault's own pods, but for as long as the fault lasts, the node
+hosting those pods cannot be drained.
+` + commonSpecNotes,
+
+	KindRolloutStuck: `Creates a Deployment, waits for it to be fully available, then updates it
+to a revision that can never become ready.
+
+Spec (every field optional):
+  {"progress_deadline_seconds": 60, "broken_image": "busybox:1.37",
+   "message": "fatal: config: unknown key \"featureFlags.checkoutV2\""}
+
+  - progress_deadline_seconds: 30-600. How long before the Deployment reports
+                               Progressing=False/ProgressDeadlineExceeded. Low
+                               by default: the Kubernetes default of 600 is ten
+                               minutes of the fault's lease spent waiting.
+  - broken_image:              what the wedged revision rolls to. A different
+                               tag of the same base by default, which is what a
+                               bad deploy looks like.
+  - message:                   written to stderr by the new revision's pods
+                               before they exit. Single line.
+
+Apply takes longer for this kind than for any other: it does not return until
+the healthy revision is available and the wedge is applied, which is up to two
+minutes before the efficacy gate even begins. Give it a duration of 10m or
+more, and note that the gate itself then waits out
+progress_deadline_seconds.
+
+The rollout is stuck with maxUnavailable 0, so the previous revision keeps
+serving at full capacity. Nothing alerts. The Deployment is Available, the
+error rate is flat, and the only symptom is that a deploy everyone believes
+shipped is still not running.
+` + commonSpecNotes,
+
+	KindCertExpiry: `Creates a TLS Secret holding a self-signed certificate that expires soon,
+and a Deployment that mounts it.
+
+Spec (every field optional):
+  {"expires_in_hours": 48, "common_name": "api.internal"}
+
+  - expires_in_hours: -168 to 8760. Negative means already expired, which is a
+                      real and different diagnosis — "it broke last Tuesday"
+                      rather than "it breaks on Thursday".
+  - common_name:      the certificate subject, also used as its DNS SAN.
+
+Nothing is failing and nothing will fail during the experiment. The pods are
+Ready, the Secret is well-formed, and every API-server check is clean. The
+fault is in a field nobody reads until it is too late: the certificate's
+notAfter. Use this when the scenario is about whether the subject inspects
+what it finds or only lists it.
 ` + commonSpecNotes,
 
 	KindNoOp: `Creates a Deployment with nothing wrong with it.

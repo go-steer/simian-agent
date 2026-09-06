@@ -16,7 +16,9 @@ package catalog
 
 import (
 	"bytes"
+	"encoding/base64"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -602,6 +604,12 @@ func TestTheBundleKindsAreGatedOnEveryHalfOfTheirFault(t *testing.T) {
 		{KubeStateDependencyStall,
 			[]string{ProbeWorkloadReady, ProbeEndpointsReady, ProbeDependencyStall},
 			[]string{k8s, k8s, logs}},
+		{KubeStatePDBGridlock, []string{ProbeWorkloadReady, ProbePDBGridlocked}, []string{k8s, k8s}},
+		// The one pair whose order is chosen rather than forced. Neither half is
+		// an absence gate, so either could run first; the stall is the fault, and
+		// failing on it first makes the failure report say the useful thing.
+		{KubeStateRolloutStuck, []string{ProbeRolloutStuck, ProbeRolloutServing}, []string{k8s, k8s}},
+		{KubeStateCertExpiry, []string{ProbeWorkloadReady, ProbeCertPresent}, []string{k8s, k8s}},
 		{KubeStateNoOp, []string{ProbeWorkloadReady}, []string{k8s}},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
@@ -764,5 +772,144 @@ func TestDependencyStallLeavesNothingWrongOnAnyObject(t *testing.T) {
 	custom := "level=error upstream=ledger"
 	if got := log.expectFrom(kubeStateManifest(KubeStateDependencyStall, map[string]any{"message": custom})); got != custom {
 		t.Errorf("with a custom message the log gate looks for %q, want %q", got, custom)
+	}
+}
+
+// renderPath evaluates a gate's jsonpath the way the k8s prober does, against
+// the shape the dynamic client actually produces.
+//
+// The distinction matters for the numeric filters below. A dynamic-client list
+// decodes JSON numbers to int64; a plain json.Unmarshal produces float64, and
+// client-go's jsonpath refuses to compare a float64 against an integer literal
+// with "incompatible types for comparison". A test written over float64 would
+// fail against a filter that works in a cluster, and — worse — a filter written
+// to satisfy such a test would fail against one that does not.
+func renderPath(t *testing.T, expr string, items ...any) string {
+	t.Helper()
+	jp := jsonpath.New("gate")
+	jp.AllowMissingKeys(true)
+	if err := jp.Parse(expr); err != nil {
+		t.Fatalf("parse %q: %v", expr, err)
+	}
+	var buf bytes.Buffer
+	if err := jp.Execute(&buf, map[string]any{"items": items}); err != nil {
+		t.Fatalf("execute %q: %v", expr, err)
+	}
+	return buf.String()
+}
+
+// The obvious spelling of this gate — render disruptionsAllowed, expect "0" —
+// is a substring match against a decimal number, so it passes against 10 and
+// 20 as well. The filter moves the comparison into the jsonpath and renders the
+// name instead, so the value is either exactly zero or the gate sees nothing.
+func TestThePDBGateOnlyMatchesExactlyZeroDisruptions(t *testing.T) {
+	gs := kubeStateGates[KubeStatePDBGridlock]
+	if len(gs) != 2 {
+		t.Fatalf("gates = %d, want the readiness assertion plus the budget", len(gs))
+	}
+	g := gs[1]
+	budget := func(name string, allowed int64) any {
+		return map[string]any{
+			"metadata": map[string]any{"name": name},
+			"status":   map[string]any{"disruptionsAllowed": allowed},
+		}
+	}
+	if got := renderPath(t, g.jsonPath, budget("ledger-api", 0)); !strings.Contains(got, "ledger-api") {
+		t.Errorf("a gridlocked budget renders %q, want its name", got)
+	}
+	for _, allowed := range []int64{1, 10, 20} {
+		if got := renderPath(t, g.jsonPath, budget("ledger-api", allowed)); strings.TrimSpace(got) != "" {
+			t.Errorf("a budget allowing %d disruptions renders %q, which satisfies the gate", allowed, got)
+		}
+	}
+	// The disruption controller writes no status at all until it has observed
+	// the pods, and AllowMissingKeys has to carry that or the gate errors on its
+	// first poll instead of waiting.
+	if got := renderPath(t, g.jsonPath, map[string]any{"metadata": map[string]any{"name": "ledger-api"}}); strings.TrimSpace(got) != "" {
+		t.Errorf("a budget with no status yet renders %q", got)
+	}
+
+	// And the name the gate looks for is the one Apply will create.
+	m := kubeStateManifest(KubeStatePDBGridlock, nil)
+	if got, want := g.expectFrom(m), KubeStateWorkloadName(KubeStatePDBGridlock, "", m.UID); got != want {
+		t.Errorf("the gate looks for %q, Apply creates %q", got, want)
+	}
+}
+
+// The second half of RolloutStuck is that nothing is down, and the number of
+// replicas that must still be available is one the gate has to know before Apply
+// creates any of them.
+func TestTheRolloutGateExpectsThePreviousRevisionIntact(t *testing.T) {
+	gs := kubeStateGates[KubeStateRolloutStuck]
+	if len(gs) != 2 {
+		t.Fatalf("gates = %d, want the stall plus the serving half", len(gs))
+	}
+	stuck, serving := gs[0], gs[1]
+
+	// Progressing is a condition every healthy rollout also has, so the gate
+	// reads its reason and not merely its presence.
+	dep := func(reason string, available int64) any {
+		return map[string]any{"status": map[string]any{
+			"conditions": []any{
+				map[string]any{"type": "Available", "status": "True", "reason": "MinimumReplicasAvailable"},
+				map[string]any{"type": "Progressing", "status": "False", "reason": reason},
+			},
+			"availableReplicas": available,
+		}}
+	}
+	if got := renderPath(t, stuck.jsonPath, dep("ProgressDeadlineExceeded", 2)); !strings.Contains(got, stuck.expect) {
+		t.Errorf("a wedged rollout renders %q, want %q", got, stuck.expect)
+	}
+	// A healthy rollout's Progressing reason. If the gate matched on the
+	// condition type it would pass here too, and prove nothing.
+	if got := renderPath(t, stuck.jsonPath, dep("NewReplicaSetAvailable", 2)); strings.Contains(got, stuck.expect) {
+		t.Errorf("a completed rollout renders %q, which satisfies the gate", got)
+	}
+
+	if got := renderPath(t, serving.jsonPath, dep("ProgressDeadlineExceeded", 2)); strings.TrimSpace(got) != "2" {
+		t.Errorf("serving gate renders %q, want the available replica count", got)
+	}
+	m := kubeStateManifest(KubeStateRolloutStuck, nil)
+	if got, want := serving.expectFrom(m), strconv.Itoa(KubeStateDefaultReplicas(KubeStateRolloutStuck)); got != want {
+		t.Errorf("the gate expects %q available, the driver creates %q", got, want)
+	}
+	explicit := kubeStateManifest(KubeStateRolloutStuck, map[string]any{"replicas": float64(4)})
+	if got := serving.expectFrom(explicit); got != "4" {
+		t.Errorf("with spec.replicas 4 the gate expects %q, want 4", got)
+	}
+}
+
+// The CertExpiry gate reads the Secret's own data, which comes back base64. It
+// can prove the certificate landed and mounted; it cannot prove the expiry,
+// because no probe type here can decode a certificate. That limit is stated in
+// the gate's comment and the arithmetic is tested in the driver.
+func TestTheCertGateMatchesAPEMHeaderThroughBase64(t *testing.T) {
+	gs := kubeStateGates[KubeStateCertExpiry]
+	if len(gs) != 2 {
+		t.Fatalf("gates = %d, want the readiness assertion plus the Secret", len(gs))
+	}
+	g := gs[1]
+	if g.expect != KubeStateCertPEMPrefix {
+		t.Errorf("gate expects %q, want the computed PEM prefix %q", g.expect, KubeStateCertPEMPrefix)
+	}
+	// A whole number of base64 groups, or the encoding of the prefix is not a
+	// prefix of the encoding and the gate silently never matches.
+	if len(KubeStateCertPEMPrefix)%4 != 0 {
+		t.Errorf("the prefix %q is not a whole number of base64 groups", KubeStateCertPEMPrefix)
+	}
+
+	pemCert := "-----BEGIN CERTIFICATE-----\nMIIB…\n-----END CERTIFICATE-----\n"
+	secret := map[string]any{"data": map[string]any{
+		"tls.crt": base64.StdEncoding.EncodeToString([]byte(pemCert)),
+		"tls.key": base64.StdEncoding.EncodeToString([]byte("-----BEGIN PRIVATE KEY-----\n")),
+	}}
+	// The escaped dot is what makes jsonpath read `tls.crt` as one field name
+	// rather than two; unescaped it renders nothing and the gate never passes.
+	got := renderPath(t, g.jsonPath, secret)
+	if !strings.HasPrefix(strings.TrimSpace(got), g.expect) {
+		t.Errorf("the Secret renders %q, which does not begin with %q", got, g.expect)
+	}
+	if strings.Contains(got, base64.StdEncoding.EncodeToString([]byte("-----BEGIN PRIVATE KEY"))) {
+		t.Error("the gate renders the private key as well as the certificate")
 	}
 }

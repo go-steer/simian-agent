@@ -21,6 +21,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -119,6 +120,40 @@ var managedResources = []managedResource{
 			return c.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, name, metav1.DeleteOptions{})
 		},
 	},
+	{
+		plural: "poddisruptionbudgets",
+		list: func(ctx context.Context, c kubernetes.Interface, ns, selector string) ([]metav1.ObjectMeta, error) {
+			l, err := c.PolicyV1().PodDisruptionBudgets(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+			if err != nil {
+				return nil, err
+			}
+			out := make([]metav1.ObjectMeta, len(l.Items))
+			for i := range l.Items {
+				out[i] = l.Items[i].ObjectMeta
+			}
+			return out, nil
+		},
+		del: func(ctx context.Context, c kubernetes.Interface, ns, name string) error {
+			return c.PolicyV1().PodDisruptionBudgets(ns).Delete(ctx, name, metav1.DeleteOptions{})
+		},
+	},
+	{
+		plural: "secrets",
+		list: func(ctx context.Context, c kubernetes.Interface, ns, selector string) ([]metav1.ObjectMeta, error) {
+			l, err := c.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+			if err != nil {
+				return nil, err
+			}
+			out := make([]metav1.ObjectMeta, len(l.Items))
+			for i := range l.Items {
+				out[i] = l.Items[i].ObjectMeta
+			}
+			return out, nil
+		},
+		del: func(ctx context.Context, c kubernetes.Interface, ns, name string) error {
+			return c.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{})
+		},
+	},
 }
 
 // createObject applies one object of a bundle.
@@ -141,6 +176,12 @@ func createObject(ctx context.Context, c kubernetes.Interface, ns string, obj ru
 	case *corev1.PersistentVolumeClaim:
 		_, err := c.CoreV1().PersistentVolumeClaims(ns).Create(ctx, o, metav1.CreateOptions{})
 		return err
+	case *policyv1.PodDisruptionBudget:
+		_, err := c.PolicyV1().PodDisruptionBudgets(ns).Create(ctx, o, metav1.CreateOptions{})
+		return err
+	case *corev1.Secret:
+		_, err := c.CoreV1().Secrets(ns).Create(ctx, o, metav1.CreateOptions{})
+		return err
 	default:
 		return fmt.Errorf("no create path for %T", obj)
 	}
@@ -160,6 +201,10 @@ func describeObject(obj runtime.Object) string {
 		return "service"
 	case *corev1.PersistentVolumeClaim:
 		return "persistentvolumeclaim"
+	case *policyv1.PodDisruptionBudget:
+		return "poddisruptionbudget"
+	case *corev1.Secret:
+		return "secret"
 	default:
 		return fmt.Sprintf("%T", obj)
 	}
