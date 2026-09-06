@@ -80,6 +80,29 @@ The chaos-daemon DaemonSet won't land on NAP-provisioned nodes without (a) the r
 
 This is an install-time concern, not a Simian bug — but it affects every chaos-mesh-using install on GKE NAP. Documented in the README's "Known cluster-side gotchas" section.
 
+## `NodeUnready` cannot be synthesized on a cloud-managed cluster
+
+The `kube-state` engine synthesizes objects rather than damaging existing ones,
+which is what makes it safe to point at a namespace you care about. The obvious
+way to extend that to a node-tier fault is a **phantom Node**: create a `Node`
+object with no kubelet behind it, let the node-lifecycle-controller notice
+nothing is heartbeating, and get `Ready=Unknown` / `NodeStatusNeverUpdated` after
+the grace period — non-destructive, and revertible by deleting the object.
+
+It does not survive contact with a managed cluster. Measured on GKE
+1.36.3-gke.1537000: a phantom Node, cordoned and tainted, was **deleted within
+10 seconds**. The cloud-node-controller reconciles `Node` objects against the
+provider's instance list and garbage-collects any node with no VM behind it,
+which is exactly the property the fault depends on.
+
+So `NodeUnready` has no synthesize-mode implementation. The remaining
+mechanisms — cordon, drain, or an `unreachable:NoExecute` taint on a **real**
+node — all mutate infrastructure that was there before Simian arrived, which is
+`mutate` mode's problem (revert-on-lease-expiry, #59) rather than this engine's,
+and a genuine blast radius on a shared cluster rather than a bounded one. The
+kind is deliberately not in the catalog: an engine that cannot produce a fault
+should not list it.
+
 ## Autonomous LLM bias toward chaos-mesh
 
 Without `--hypothesis-hint`, the LLM almost never picks the new `network-policy` or `envoy-fault` engines because chaos-mesh has 12+ catalog entries vs 1+2. Possible mitigations: (a) tier-policy filtering, (b) explicit per-engine "weight" in the catalog, (c) prompt rule that encourages cross-engine plans. Not blocking; the hypothesis-hint workaround is reliable.

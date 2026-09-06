@@ -752,7 +752,7 @@ within a group is independent of its siblings.
 | **Phase 2 — the `kube-state` engine** |
 | #56 | ✅ Driver skeleton + `synthesize` mode + 4 kinds: `ImageUnresolvable`, `ContainerExitLoop`, `MemoryLimitSqueeze`, `Unschedulable`, each with a default efficacy gate; verified on GKE | L | #54 |
 | #57 ✅ | Remaining parity kinds: `JobFailure`, `SelectorDrift`, `UnboundClaim`, `NoOp`, and `DependencyStall` with the `logs` probe type it needed — each gated and verified on GKE | L | #56 |
-| #58 | Lookout-only kinds: `PDBGridlock`, `RolloutStuck`, `CertExpiry` ✅ (namespace tier, gated and verified on GKE); `NodeUnready` still open — it is node tier, and the driver is namespace-scoped and synthesize-only | M | #56 |
+| #58 ✅ | Lookout-only kinds: `PDBGridlock`, `RolloutStuck`, `CertExpiry` — namespace tier, gated and verified on GKE. `NodeUnready` is **not shippable in this engine**: a phantom Node is deleted by the cloud-node-controller within 10s on GKE, and every other mechanism mutates a real node, which is #59's problem ([known limitations]({{< relref "known-limitations.md" >}}#nodeunready-cannot-be-synthesized-on-a-cloud-managed-cluster)) | M | #56 |
 | #59 | `mutate` mode + revert-on-lease-expiry | L | #56 |
 | **Phase 3 — scenarios** |
 | #60 ✅ | `Scenario` type, `ScenarioID` plumbed through executor + audit, pack loader | M | — |
