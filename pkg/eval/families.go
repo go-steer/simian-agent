@@ -207,6 +207,26 @@ var failureFamilies = map[string][]string{
 		"HostUnreachable", "ConnectivityLoss", "TrafficBlackholed",
 		"NoRouteToHost",
 	},
+
+	// The name does not resolve. The packets would arrive if anything sent
+	// them, and nothing does, because the caller never learns where to send.
+	//
+	// Held apart from network-partition on the same grounds that separates
+	// partition from degradation: the remediations do not overlap. You look at
+	// the resolver, the Service, and the search path for one; you look at
+	// policy, routes and firewalls for the other. And the two are told apart by
+	// a measurement anyone can take — resolve the name, then dial the address —
+	// so a subject that says "partitioned" about a resolvable-address-reachable
+	// callee has skipped the step that would have distinguished them.
+	//
+	// "ResolutionFailure" and "Unresolved" are absent: a chart reference, a
+	// dependency version and a merge conflict all fail to resolve. Only the
+	// spellings that name DNS or a hostname make the claim.
+	"dns-failure": {
+		"DNSFailure", "DNSError", "DNSResolutionFailure", "DNSTimeout",
+		"NameResolutionFailure", "NXDOMAIN", "ServFail", "UnknownHost",
+		"NoSuchHost", "HostNotFound", "DNSBlackhole",
+	},
 }
 
 // genericReasons name *that* something failed without naming *how*.

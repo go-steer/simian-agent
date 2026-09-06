@@ -1,0 +1,223 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# One name stops resolving, for one caller. Everything else the caller looks up
+# still answers, the callee is still serving, and the address the name used to
+# return is still reachable — nothing is dropping packets, because nothing is
+# sending any.
+#
+# Which makes this the pack's fourth cause behind the same symptom. Measured on
+# GKE: caller 0/2 Ready, caller returns 502 on the proxied path and 200 on its
+# own /healthz, callee 2/2 Ready serving 200. That is object-for-object what
+# 01, 02, 04 and 05 produce. A subject working from `kubectl get` cannot get
+# past "the edge is NotReady" on any of them, and the five differ only in what
+# a measurement would have shown.
+#
+# The one that matters here is the cheapest measurement in the set: resolve the
+# name, then dial the address. It succeeds on the second step and fails on the
+# first, which is a distinction no other scenario in this pack produces and no
+# amount of reading object status can reach.
+#
+# The near miss is "cluster DNS is broken". It is not — the fault is scoped to
+# a single name below, and the caller goes on resolving everything else — and a
+# subject that reaches for it has generalised from one failing lookup to the
+# whole resolver without checking a second one. See the expectations for how
+# that is scored.
+#
+# # Environment validity
+#
+# DNSChaos rewrites the nameserver line in the target pod's /etc/resolv.conf so
+# that lookups go to a chaos DNS server, which answers matching patterns with
+# an error and forwards everything else. Two consequences, both learned the
+# expensive way on GKE:
+#
+# It needs the chaos-mesh DNS server component installed (`--set
+# dnsServer.create=true`); without it the CR applies and no resolv.conf is
+# touched. And it only affects a process that reads resolv.conf *after* the
+# injection. The first version of the edge-upstream substrate proxied to a
+# literal hostname, which nginx resolves once at config load: the CR reported
+# AllInjected=true, nslookup inside the pod failed, and nginx served 200
+# throughout. The substrate now proxies through a variable and reloads on a
+# resolv.conf change, which is what makes this scenario stageable at all — see
+# pkg/sut/edgeupstream/manifests/edge-upstream.yaml.
+#
+# That is a real caveat and not just a fixture note: a subject's own findings
+# about DNS in a live cluster are worth less against long-lived processes for
+# exactly the same reason.
+id: dataplane-dns-blackhole-partial
+name: dns-blackhole-partial
+source: pack:dataplane
+prompt: >-
+  Assess the health of the "flow-search" namespace in this Kubernetes cluster
+  and report what you find.
+severity: critical
+substrate: edge-upstream
+faults:
+  - engine: chaos-mesh
+    api_version: chaos-mesh.org/v1alpha1
+    resource_kind: DNSChaos
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      # error, not random. A SERVFAIL is a lookup that failed; a random address
+      # is a lookup that succeeded and lied, which is a different and much
+      # harder incident, and one whose symptom would be a connection timeout to
+      # an address nothing is listening on — indistinguishable at the caller
+      # from the partition in 05.
+      action: error
+      mode: all
+      # Scoped to the one name, which is what makes the scenario partial and
+      # what makes "cluster DNS is down" a wrong answer rather than a
+      # differently-worded right one. The fully qualified form is the one that
+      # goes on the wire: nginx's resolver does not apply resolv.conf's search
+      # list, so the caller queries an absolute name.
+      patterns:
+        - upstream.flow-search.svc.cluster.local
+      # The caller, not the callee. The callee's name is fine everywhere else
+      # in the cluster; it is fine from the callee's own neighbours; it is
+      # broken from precisely one workload.
+      selector:
+        namespaces: [flow-search]
+        labelSelectors:
+          app: edge
+    targets:
+      - namespace: flow-search
+        labels:
+          app: edge
+    # DNSChaos has no default gate, and could not have a useful one: a failed
+    # lookup is not a field on any object, and the CR's own AllInjected says
+    # only that resolv.conf was rewritten — which, as the note above records,
+    # was true in the exact configuration where the fault did nothing at all.
+    # The whole gate is written out, from the caller's own vantage point.
+    probes:
+      - name: dataplane-caller-reaches-callee-before
+        type: http
+        mode: SOT
+        spec:
+          label_selector: app=edge
+          path: /
+          expect_status: 200
+          max_latency: 500ms
+          timeout: 60s
+          interval: 2s
+      # The failed lookup, observed as the only thing a caller can observe
+      # about one: nginx cannot resolve the upstream, so it never opens a
+      # connection and answers 502 itself. Not 504 — that is 05's signature,
+      # and the difference between the two status codes is the difference
+      # between "I could not find it" and "I could not reach it".
+      - name: dataplane-caller-cannot-resolve-callee
+        type: http
+        mode: Settle
+        spec:
+          label_selector: app=edge
+          path: /
+          expect_status: 502
+          request_timeout: 10s
+          timeout: 120s
+          interval: 3s
+      # Both ends healthy in isolation, for the same reason as in 05: if either
+      # of these fails, what landed is an outage of a workload and not a
+      # blackholed name, and grading against this file would be grading a
+      # subject on a cluster it was not shown.
+      - name: dataplane-caller-itself-alive
+        type: http
+        mode: Settle
+        spec:
+          label_selector: app=edge
+          path: /healthz
+          expect_status: 200
+          max_latency: 500ms
+          timeout: 90s
+          interval: 3s
+      - name: dataplane-callee-serving-to-everyone-else
+        type: http
+        mode: Settle
+        spec:
+          label_selector: app=upstream
+          path: /cgi-bin/work
+          expect_status: 200
+          max_latency: 500ms
+          timeout: 90s
+          interval: 3s
+      - name: dataplane-caller-serving-before
+        type: k8s
+        mode: SOT
+        spec:
+          resource: deployments
+          label_selector: app=edge
+          jsonpath: "{.items[*].status.readyReplicas}"
+          expect_at_least: 2
+          timeout: 60s
+          interval: 2s
+      - name: dataplane-caller-not-serving
+        type: k8s
+        mode: Settle
+        spec:
+          resource: deployments
+          label_selector: app=edge
+          # readyReplicas is omitempty, so zero renders as nothing at all.
+          expect_empty: true
+          jsonpath: "{.items[*].status.readyReplicas}"
+          dwell: 10s
+          timeout: 120s
+          interval: 3s
+expect:
+  # The root is a name that does not resolve, and the Service is the object
+  # that owns the name. also_accept_kinds is wide because a subject that says
+  # "the edge cannot look up its upstream" has named the same failure with the
+  # caller as the subject of the sentence, and that is not a worse answer.
+  #
+  # Every token resolves to dns-failure, which is what separates this from 05.
+  # A subject that calls this a partition is charged: the address the name used
+  # to return is reachable and the callee is answering on it, so "the path is
+  # severed" is a claim the two-step measurement would have refuted. That cuts
+  # both ways, and 05 charges this scenario's answer in return.
+  - kind: Service
+    name: upstream
+    also_accept_kinds: [Pod, Deployment, Endpoints, ReplicaSet]
+    reasons:
+      - DNSFailure
+      - DNSResolutionFailure
+      - NameResolutionFailure
+      - NXDOMAIN
+      - ServFail
+      - NoSuchHost
+      - HostNotFound
+    min_severity: warning
+    root: true
+  # The symptom, and again the only part of it the API server records.
+  - kind: Deployment
+    name: edge
+    also_accept_kinds: [Pod, ReplicaSet, Container]
+    reasons:
+      - ReadinessProbeFailed
+      - ProbeFailure
+      - NotReady
+      - NoReadyReplicas
+      - Unavailable
+    min_severity: warning
+# True, and not required.
+#
+# The caller really does have an unavailable dependency and its Service really
+# does end up with no ready endpoints, and a subject that reports either has
+# read the cluster correctly.
+#
+# Nothing partition-shaped, latency-shaped or CPU-shaped is exempted, which is
+# the whole grade. In particular this does not exempt the network-partition
+# family: "the edge cannot reach the upstream" is true here and is also true in
+# 05, and if both scenarios accepted it neither would be measuring anything.
+also_true:
+  - UpstreamError
+  - UpstreamUnavailable
+  - NoReadyEndpoints
