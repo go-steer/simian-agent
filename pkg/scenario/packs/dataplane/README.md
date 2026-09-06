@@ -199,6 +199,36 @@ callee is slow" is not evidence of anything without "the callee was fast", and
 probe: an object read cannot tell a fault that landed from a substrate that came
 up wrong.
 
+## Measured against an object-status subject
+
+Run on GKE against `lookout`, which reads the object graph and does not send
+requests. All six scenarios manifested, efficacy 1.00, and the answer was the
+same one five times:
+
+```
+Deployment/edge  RolloutIncomplete  critical
+```
+
+Identical across a netem delay, a saturated cgroup, a synthesized 503, a
+severed link and a blackholed name. That is the pack's premise arriving as
+data rather than as an argument.
+
+The scorecard says the true thing about that answer, which took one fix to
+arrive at: `recall 0.50` — it described the symptom — `root_cause 0.00`,
+`severity 1.00`, `hallucinated_fault 1.00`. It named no cause and it invented
+nothing, and a rig that charged it for either would be lying.
+
+`RolloutIncomplete` scored 0.00 on the first run, because it appeared in no
+expectation's reason list and resolved to no failure family — uncreditable and
+unchargeable at once. It is now in `genericReasons` and in the symptom
+expectation of all five critical scenarios. The distinction the vocabulary is
+drawing: `RolloutStalled` claims the rollout stopped making progress, which is
+a claim about the rollout mechanism; `RolloutIncomplete` claims only that it has
+not finished, which is true of every Deployment short of its replica count for
+any reason at all. `TestTheObjectStatusAnswerScoresTheSymptomAndNoCause` pins
+it, because it is the sort of thing a later tidy-up of a reason list would
+silently undo.
+
 ## Scores from here are not comparable with the other packs
 
 Deliberately. A subject can score 1.00 on parity and 0.00 on every scenario

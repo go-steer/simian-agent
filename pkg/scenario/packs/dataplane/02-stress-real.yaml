@@ -160,6 +160,7 @@ expect:
       - ProbeFailure
       - NotReady
       - NoReadyReplicas
+      - RolloutIncomplete
       - Unavailable
     min_severity: warning
 # The same two exemptions as the other half, and for the same reasons: the
