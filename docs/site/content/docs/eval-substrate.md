@@ -494,6 +494,25 @@ Adapters:
   reads it from — a side channel would give the deterministic subject something
   no agent subject gets, and the comparison between those two rows is the point
   of running it.
+* **`sre-agent:`** ✅ — run `core-sre-agent`'s one-shot assessment and read the
+  report out of the transcript it writes. Not an `exec:` subject for a
+  mechanical reason rather than a conceptual one: the agent's
+  `schema.HealthReport` is already the graded triple field-for-field, including
+  the severity vocabulary, so no translation is needed at all — but it prints
+  prose on stdout and puts the machine-readable answer in the file named by
+  `-out`, which `exec:` would never find. The adapter names that file, runs the
+  agent, and reads the one assessment back. It also refuses a spec that sets
+  `-namespace`, `-out` or `-repeat`, each of which breaks the measurement
+  quietly rather than loudly.
+
+  Alone among the subjects, one investigation spends real model tokens against
+  a real cluster, so the agent's transcript — its tool trajectory, its
+  delegations, its token usage — is kept in `--out` as
+  `transcript-<namespace>.json`. The scorecard records what a subject answered
+  and never why; for the detector that is the whole story, because the answer
+  is a function of the cluster, and for an agent it is not. The interesting
+  question about a `0.00` is which tools it called and what they returned, and
+  that evidence exists exactly once.
 * **`noop:`** ✅ — the null subject: reports nothing, ever. The zero-score floor
   a scorecard is read against, and the cheapest way to find out whether a pack
   actually manifests before an agent is pointed at it.

@@ -46,13 +46,25 @@ type Options struct {
 	// Env is extra environment for exec: subjects, in KEY=VALUE form,
 	// appended to the parent's.
 	Env []string
+
+	// ArtifactDir is where a subject may leave its own evidence, alongside the
+	// audit log and the run file. Empty means keep nothing.
+	//
+	// Only adapters whose subject produces a transcript use it, which today is
+	// the agent. A scorecard records what a subject answered and never why,
+	// and for a detector that is the whole story — the answer is a function of
+	// the cluster. For an agent it is not: the interesting question about a
+	// 0.00 is which tools it called and what it saw, and that evidence exists
+	// exactly once, in a subprocess, for as long as nobody deletes it.
+	ArtifactDir string
 }
 
 // Parse turns a --subject spec into a Subject.
 //
-//	exec:<command line>     run a binary and read a JSON report on its stdout
-//	lookout:<command line>  run k8s-lookout's health scan and translate it
-//	noop:                   report nothing at all
+//	exec:<command line>       run a binary and read a JSON report on its stdout
+//	lookout:<command line>    run k8s-lookout's health scan and translate it
+//	sre-agent:<command line>  run core-sre-agent's assessment and read its transcript
+//	noop:                     report nothing at all
 //
 // The scheme is required rather than inferred. `http:` and `mcp:` subjects are
 // coming, and a bare path that silently means one of them today would mean
@@ -87,6 +99,20 @@ func Parse(spec string, opts Options) (eval.Subject, error) {
 		}
 		return &Lookout{Argv: argv, Timeout: opts.Timeout, Dir: opts.Dir, Env: opts.Env}, nil
 
+	case "sre-agent":
+		argv, err := splitArgs(rest)
+		if err != nil {
+			return nil, fmt.Errorf("subject %q: %w", spec, err)
+		}
+		if len(argv) == 0 {
+			// Same argument as lookout, and it bites harder here: an agent's
+			// score is a property of a build, a model and a prompt set, and
+			// none of those is recoverable from a scorecard that names a
+			// binary somebody happened to have on PATH.
+			return nil, fmt.Errorf("subject %q names no command; want sre-agent:<path to the sre-agent binary> -kubeconfig … -context …", spec)
+		}
+		return &SREAgent{Argv: argv, Timeout: opts.Timeout, Dir: opts.Dir, Env: opts.Env, ArtifactDir: opts.ArtifactDir}, nil
+
 	case "noop":
 		if rest != "" {
 			return nil, fmt.Errorf("subject %q: noop takes no argument", spec)
@@ -97,7 +123,7 @@ func Parse(spec string, opts Options) (eval.Subject, error) {
 		return nil, fmt.Errorf("subject %q: the %s adapter is not implemented yet; use an exec: subject", spec, scheme)
 
 	default:
-		return nil, fmt.Errorf("subject %q: unknown scheme %q; want an exec:, lookout: or noop: subject", spec, scheme)
+		return nil, fmt.Errorf("subject %q: unknown scheme %q; want an exec:, lookout:, sre-agent: or noop: subject", spec, scheme)
 	}
 }
 

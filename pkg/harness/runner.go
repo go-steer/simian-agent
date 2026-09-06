@@ -189,19 +189,28 @@ func (r *Runner) validate() error {
 }
 
 // Selection resolves --only against the pack.
+func (r *Runner) Selection() ([]scenario.Scenario, error) { return Select(r.Pack, r.Only) }
+
+// Select resolves a set of --only IDs against a pack.
 //
 // An ID that is not in the pack is an error rather than an empty run. A typo
 // in a scenario ID that silently grades nothing is how a suite comes back
 // green having measured nothing at all.
-func (r *Runner) Selection() ([]scenario.Scenario, error) {
-	if len(r.Only) == 0 {
-		return r.Pack.Scenarios, nil
+//
+// Exported and free-standing because the answer is needed before there is a
+// Runner to ask. Anything that validates the run against what it will actually
+// do — rather than against everything the pack happens to contain — has to
+// resolve the selection first, and doing that twice with two implementations
+// is how the two answers drift.
+func Select(pack scenario.Pack, only []string) ([]scenario.Scenario, error) {
+	if len(only) == 0 {
+		return pack.Scenarios, nil
 	}
 
 	want := map[string]bool{}
-	for _, id := range r.Only {
-		if _, ok := r.Pack.ByID(id); !ok {
-			return nil, fmt.Errorf("harness: --only %q is not a scenario in pack %q", id, r.Pack.Name)
+	for _, id := range only {
+		if _, ok := pack.ByID(id); !ok {
+			return nil, fmt.Errorf("harness: --only %q is not a scenario in pack %q", id, pack.Name)
 		}
 		want[id] = true
 	}
@@ -209,7 +218,7 @@ func (r *Runner) Selection() ([]scenario.Scenario, error) {
 	// Pack order, not flag order: a scorecard's rows should not depend on how
 	// the operator typed the flag.
 	var out []scenario.Scenario
-	for _, s := range r.Pack.Scenarios {
+	for _, s := range pack.Scenarios {
 		if want[s.ID] {
 			out = append(out, s)
 		}

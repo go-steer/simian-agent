@@ -148,19 +148,20 @@ normal executor path** — same validation, same safety stages, same leases, sam
 efficacy gates — hand the subject the prompt, collect its report, then clear the
 chaos and put the namespace back. Two files land in `--out`: `audit.log` is
 Simian's side, `run.json` is the subject's, and they join on the scenario ID.
+A subject that keeps its own evidence leaves it there too.
 The scorecard printed at the end comes from reading those two files back, so
 `simian evaluate` reproduces it exactly, with or without the cluster.
 
 | Flag | Default | Notes |
 |---|---|---|
 | `--pack` | (required) | A built-in pack name — `parity` or `lookout`, both embedded in the binary — or a directory. Repeatable or comma-separated; several packs run as one suite. A bare built-in name always means the embedded pack, so spell a local directory of the same name `./parity`. Two packs sharing a scenario ID is a load error, not a merge. |
-| `--subject` | (required) | `exec:<command line>`, `lookout:<path to the lookout binary>`, or `noop:` for the zero-score floor. The `lookout:` adapter runs a namespace-scoped `health` scan and translates the finding stream; the namespace comes from the prompt, as it does for an agent. |
+| `--subject` | (required) | `exec:<command line>`, `lookout:<path to the lookout binary>`, `sre-agent:<path to the sre-agent binary>`, or `noop:` for the zero-score floor. The `lookout:` adapter runs a namespace-scoped `health` scan and translates the finding stream; `sre-agent:` runs one assessment and reads the report out of the transcript it names. Both take the namespace from the prompt, as an agent does. |
 | `--only` | (all) | Scenario IDs to run. An ID that is not in the pack is an error, not an empty run. |
-| `--out` | `runs/<timestamp>` | Where `audit.log` and `run.json` go. |
+| `--out` | `runs/<timestamp>` | Where `audit.log` and `run.json` go, and where a subject that keeps its own evidence leaves it — an `sre-agent:` subject writes one `transcript-<namespace>.json` per scenario. |
 | `--cluster` | `current` | `current` uses the kubeconfig's cluster and leaves it standing; `kind` provisions a throwaway cluster for the run and deletes it afterwards, including on Ctrl-C. |
 | `--concurrency` | 1 | Ceiling, not a target: scenarios sharing a namespace are serialised regardless, and a control takes the cluster to itself. |
 | `--subject-timeout` | 10m | How long one investigation may take before the subject is killed and scored as a failure. |
-| `--subject-dir`, `--subject-env` | — | Working directory and extra `KEY=VALUE` environment for an `exec:` subject. |
+| `--subject-dir`, `--subject-env` | — | Working directory and extra `KEY=VALUE` environment for a subprocess subject. An `sre-agent:` subject takes its provider credentials this way. |
 | `--remediation-poll` | 5s | How often to ask whether the fault is gone while the subject works, for time-to-remediate. `0` disables the watch. |
 | `--eligible-namespace` | (annotation) | Fence the run to a fixed namespace list instead of reading `simian.chaos/eligible`. Reach for this when the cluster has other tenants. |
 | `--terminating-wait` | 2m | How long to wait for a namespace left over from an earlier run to finish deleting. Namespace deletion is asynchronous, so without this, running the same pack twice in a row fails on the first run's teardown. Expiry is an `InjectError`, not a hang — a namespace held by a finalizer is not coming back. |

@@ -67,12 +67,17 @@ func loadPacks(refs []string) (scenario.Pack, error) {
 // records it as time-to-remediate — so a fault that is too short does not fail
 // the run, it hands the subject a remediation it did not perform. Refused up
 // front rather than discovered in a suspiciously good scorecard.
-func checkFaultDurations(pack scenario.Pack, subjectTimeout time.Duration) error {
+//
+// Over the selected scenarios, not the whole pack. A subject slow enough to
+// matter here is exactly the subject an operator reaches for --only with, and
+// a check that refused the run over a scenario nobody asked to run would make
+// the two flags mutually exclusive.
+func checkFaultDurations(selected []scenario.Scenario, subjectTimeout time.Duration) error {
 	if subjectTimeout <= 0 {
 		return nil
 	}
 	var short []string
-	for _, s := range pack.Scenarios {
+	for _, s := range selected {
 		for _, f := range s.Faults {
 			if f.Duration <= 0 {
 				continue // the executor is the authority on an unset duration
