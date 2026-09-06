@@ -1,0 +1,190 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# One half of the matched pair. Read this one alongside 02-stress-real, which
+# is byte-for-byte the same scenario apart from its fault and its root cause.
+#
+# The path to the callee is slow. The callee is not: its pods are Ready, its
+# Deployment agrees, and its CPU is flat at idle. The caller in front of it
+# cannot get an answer inside its read timeout, so the caller goes NotReady and
+# that — a Deployment with no available replicas — is the entire footprint this
+# fault leaves in the API server.
+#
+# A subject that stops there has found a symptom shared with the other half of
+# the pair. The discrimination is what it says about the cause: naming the
+# network is right here and charged there, and naming CPU is charged here and
+# right there. Saying only "it is slow" is true in both and credited in
+# neither, which is deliberate — see genericReasons in pkg/eval/families.go.
+#
+# # Environment validity
+#
+# NetworkChaos applies netem to the target pod's interface through the tc
+# qdisc. On a cluster whose datapath bypasses tc — some eBPF/Cilium versions —
+# the CR applies cleanly and nothing happens. That failure mode is not silent
+# here: the Settle gate below measures the latency it claims, and a fault that
+# did not land is rolled back rather than graded. Verified landing on GKE with
+# Dataplane V2.
+id: dataplane-latency-not-saturation
+name: latency-not-saturation
+source: pack:dataplane
+prompt: >-
+  Assess the health of the "flow-storefront" namespace in this Kubernetes
+  cluster and report what you find.
+# The user-facing tier is serving nothing. Nothing has crashed and nothing has
+# restarted, which is why the symptom-level reading understates it.
+severity: critical
+substrate: edge-upstream
+faults:
+  - engine: chaos-mesh
+    api_version: chaos-mesh.org/v1alpha1
+    resource_kind: NetworkChaos
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      # "delay", never "latency" — latency belongs to IOChaos, and NetworkChaos
+      # silently rejects the wrong spelling at admission time.
+      action: delay
+      # Both replicas. One would leave the caller half-serving, which is a
+      # third scenario — a partial degradation — and not this one.
+      mode: all
+      selector:
+        namespaces: [flow-storefront]
+        labelSelectors:
+          app: upstream
+      delay:
+        # Three seconds against a caller whose proxy read timeout is one. Not a
+        # marginal delay: the pair is about attribution, not about detection
+        # thresholds, and a fault that is only sometimes visible would make the
+        # two scenarios differ in difficulty as well as in cause.
+        latency: "3s"
+        correlation: "0"
+        jitter: "0ms"
+    targets:
+      - namespace: flow-storefront
+        labels:
+          app: upstream
+    # The gate is written out rather than left to the default one, and it is
+    # identical to 02-stress-real's. Two reasons. The default gate measures the
+    # root path, which on this substrate is a static file and tells you nothing
+    # about the CPU-bound one the scenario is actually about; and if the pair
+    # were gated differently, part of the difference between the two scores
+    # would be the gate rather than the cluster. Reusing the catalog's probe
+    # names is also what suppresses the default gate — see catalog.DefaultProbes.
+    probes:
+      - name: simian-fast-before
+        type: http
+        mode: SOT
+        spec:
+          label_selector: app=upstream
+          path: /cgi-bin/work
+          expect_status: 200
+          # Measured baseline on GKE is ~110ms pod-to-pod. Half a second is
+          # four times that and a fifth of the threshold the Settle half has to
+          # clear, so the two cannot both be satisfied by the same cluster.
+          max_latency: 500ms
+          timeout: 60s
+          interval: 2s
+      - name: simian-delayed
+        type: http
+        mode: Settle
+        spec:
+          label_selector: app=upstream
+          path: /cgi-bin/work
+          # Pure min_latency, deliberately: it is what makes a request that
+          # never came back count as evidence of slowness rather than as a
+          # failed probe. See slowCountsAsTimeout in pkg/probe/http.go.
+          min_latency: 1500ms
+          request_timeout: 10s
+          timeout: 90s
+          interval: 3s
+      # The dataplane proof above says the fault landed. This says the scenario
+      # the subject is about to be shown is the one written down here. It is
+      # not redundant: the substrate's first version answered fast with a
+      # truncated body, which kept the caller Ready through a fault that had
+      # landed and would have graded every subject against a symptom that was
+      # not in the cluster.
+      - name: dataplane-caller-serving-before
+        type: k8s
+        mode: SOT
+        spec:
+          resource: deployments
+          label_selector: app=edge
+          jsonpath: "{.items[*].status.readyReplicas}"
+          expect_at_least: 2
+          timeout: 60s
+          interval: 2s
+      - name: dataplane-caller-not-serving
+        type: k8s
+        mode: Settle
+        spec:
+          resource: deployments
+          label_selector: app=edge
+          # readyReplicas is omitempty, so zero renders as nothing at all.
+          expect_empty: true
+          jsonpath: "{.items[*].status.readyReplicas}"
+          # Held, not sampled. The caller's readiness flaps as probes fail and
+          # the Deployment's status catches up, and a single poll that caught
+          # the trough would pass a gate the cluster has not actually settled
+          # into.
+          dwell: 10s
+          timeout: 120s
+          interval: 3s
+expect:
+  # The root, and the only expectation that differs from 02-stress-real.
+  #
+  # Every token resolves to the network-degradation family, which is what makes
+  # a CPU claim here chargeable and a network claim in the other half
+  # chargeable there. "HighLatency" is deliberately not listed: it is generic,
+  # true in both scenarios, and crediting it would collapse the pair into one
+  # fixture measured twice.
+  - kind: Pod
+    name: upstream
+    also_accept_kinds: [Deployment, Service, ReplicaSet]
+    reasons:
+      - NetworkLatency
+      - NetworkDelay
+      - PacketDelay
+      - NetworkDegradation
+    min_severity: warning
+    root: true
+  # The symptom, and identical in both halves of the pair — which is the point
+  # of having it. It is the part of the incident the API server does record, so
+  # a subject that reads object status well finds it in either scenario and
+  # learns nothing about the cause from having done so.
+  #
+  # None of these tokens resolve to a failure family, so this expectation
+  # contributes to recall and nothing to precision. That is correct: "the
+  # caller has no ready replicas" is a state, not a cause.
+  - kind: Deployment
+    name: edge
+    also_accept_kinds: [Pod, ReplicaSet, Container]
+    reasons:
+      - ReadinessProbeFailed
+      - ProbeFailure
+      - NotReady
+      - NoReadyReplicas
+      - Unavailable
+    min_severity: warning
+# True, and not required.
+#
+# The caller's calls to the callee really do time out — that is what the 504 is
+# — and once both caller pods are NotReady the Service in front of them really
+# does have no ready endpoints. A subject that reports either has read the
+# cluster correctly, and charging it would punish looking closely.
+#
+# Nothing CPU-shaped is exempted here, and nothing network-shaped is exempted
+# in 02-stress-real. That asymmetry between the two files is the measurement.
+also_true:
+  - UpstreamTimeout
+  - NoReadyEndpoints

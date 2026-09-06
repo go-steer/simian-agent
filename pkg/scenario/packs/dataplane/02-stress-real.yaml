@@ -1,0 +1,163 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The other half of the matched pair. Read this alongside
+# 01-latency-not-saturation: the prompt, the substrate, the gate and the
+# symptom expectation are the same, and only the fault and the root cause
+# differ.
+#
+# The callee is out of CPU. Its pods are Ready, its Deployment agrees, and its
+# cgroup is pinned at its quota with a work loop that cannot finish. The caller
+# in front of it cannot get an answer inside its read timeout, so the caller
+# goes NotReady — the same footprint, in the same fields, as the fault next
+# door.
+#
+# The reason the pair exists: "it is slow, scale it up" is the right call here
+# and the wrong one there, and no fixture set containing only one of them can
+# tell a subject that knows the difference from one that guesses. Measured on
+# GKE, every field the API server records is identical between the two; the
+# only thing that separates them is utilisation.
+#
+# # Environment validity
+#
+# StressChaos runs stress-ng inside the target's cgroup, so the fault is only
+# as strong as the cgroup's ceiling — with no CPU limit the stressors compete
+# for a whole node and mostly lose. The substrate sets one (200m) for exactly
+# this reason, and the callee is CPU-bound per request so that the ceiling is
+# something a request can be starved against. Both of those were arrived at the
+# hard way; see pkg/sut/edgeupstream/README.md.
+id: dataplane-stress-real
+name: stress-real
+source: pack:dataplane
+prompt: >-
+  Assess the health of the "flow-catalog" namespace in this Kubernetes cluster
+  and report what you find.
+severity: critical
+substrate: edge-upstream
+faults:
+  - engine: chaos-mesh
+    api_version: chaos-mesh.org/v1alpha1
+    resource_kind: StressChaos
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      # No "action" field: StressChaos takes stressors instead, and a spec that
+      # carries one is rejected at admission.
+      mode: all
+      selector:
+        namespaces: [flow-catalog]
+        labelSelectors:
+          app: upstream
+      stressors:
+        cpu:
+          # Four workers against a 200m limit. Deliberately more than the quota
+          # can serve: the fault has to leave the request loop with no slice
+          # left, not merely make the pod busy.
+          workers: 4
+          load: 100
+    targets:
+      - namespace: flow-catalog
+        labels:
+          app: upstream
+    # Identical to 01-latency-not-saturation's gate, deliberately. If the two
+    # halves were gated differently, part of the difference between their
+    # scores would be the gate rather than the cluster. StressChaos has no
+    # default gate of its own — there is no field on any object that says the
+    # cgroup is full — so without this the scenario could be graded on a fault
+    # that never bit.
+    probes:
+      - name: simian-fast-before
+        type: http
+        mode: SOT
+        spec:
+          label_selector: app=upstream
+          path: /cgi-bin/work
+          expect_status: 200
+          max_latency: 500ms
+          timeout: 60s
+          interval: 2s
+      - name: simian-delayed
+        type: http
+        mode: Settle
+        spec:
+          label_selector: app=upstream
+          path: /cgi-bin/work
+          min_latency: 1500ms
+          request_timeout: 10s
+          timeout: 90s
+          interval: 3s
+      - name: dataplane-caller-serving-before
+        type: k8s
+        mode: SOT
+        spec:
+          resource: deployments
+          label_selector: app=edge
+          jsonpath: "{.items[*].status.readyReplicas}"
+          expect_at_least: 2
+          timeout: 60s
+          interval: 2s
+      - name: dataplane-caller-not-serving
+        type: k8s
+        mode: Settle
+        spec:
+          resource: deployments
+          label_selector: app=edge
+          expect_empty: true
+          jsonpath: "{.items[*].status.readyReplicas}"
+          dwell: 10s
+          timeout: 120s
+          interval: 3s
+expect:
+  # The root, and the only expectation that differs from
+  # 01-latency-not-saturation.
+  #
+  # Every token resolves to the cpu-saturation family. A network claim here is
+  # charged as an invention, which is the mirror of what a CPU claim costs in
+  # the other half. "HighLatency" is generic and appears in neither list.
+  - kind: Pod
+    name: upstream
+    also_accept_kinds: [Deployment, Service, ReplicaSet]
+    reasons:
+      - CPUSaturation
+      - CPUThrottling
+      - CPUThrottled
+      - CPUExhaustion
+      - CPUStarvation
+      - HighCPU
+    min_severity: warning
+    root: true
+  # Byte-identical to the symptom expectation in 01-latency-not-saturation, on
+  # purpose. The shared symptom must be scored the same way in both, or a
+  # subject that reads object status could score differently across the pair
+  # for a reason that has nothing to do with the cause.
+  - kind: Deployment
+    name: edge
+    also_accept_kinds: [Pod, ReplicaSet, Container]
+    reasons:
+      - ReadinessProbeFailed
+      - ProbeFailure
+      - NotReady
+      - NoReadyReplicas
+      - Unavailable
+    min_severity: warning
+# The same two exemptions as the other half, and for the same reasons: the
+# caller's calls really do time out, and the Service in front of the caller
+# really does end up with no ready endpoints.
+#
+# Nothing network-shaped is exempted. Under this fault the interface is clean —
+# measured flat on GKE while the cgroup was pinned at its limit — so a subject
+# that reports network latency here has invented it and should be charged.
+also_true:
+  - UpstreamTimeout
+  - NoReadyEndpoints

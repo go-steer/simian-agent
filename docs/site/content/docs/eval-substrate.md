@@ -414,20 +414,37 @@ a watcher than for a triager, whose whole job is deciding that most of what it
 sees is fine. A test asserts every shipped pack has at least one.
 
 Then `pkg/scenario/packs/dataplane/` — the scenarios `internal/faults` cannot
-express. First five, chosen because each has a symptom that appears somewhere
-other than the fault:
+express. Five, chosen because each has a symptom that appears somewhere other
+than the fault:
 
-| Scenario | Fault | Why it is hard |
-| --- | --- | --- |
-| `latency-not-saturation` | Envoy L7 latency on one upstream | Every resource metric is green; the symptom is p99 on a *caller* |
-| `abort-503-not-a-bug` | Envoy synthetic aborts | Looks like an application bug in the wrong service |
-| `partition-one-way` | NetworkChaos/NetworkPolicy asymmetric | Both ends look healthy in isolation |
-| `dns-blackhole-partial` | DNSChaos on one name | Intermittent, and the failing pod is not the misconfigured one |
-| `stress-real` | StressChaos CPU | The matched-pair control for `latency-not-saturation` — same symptom, different cause |
+| Scenario | Fault | Why it is hard | |
+| --- | --- | --- | --- |
+| `latency-not-saturation` | NetworkChaos netem delay on the callee | Every resource metric is green; the symptom is on a *caller* | shipped |
+| `stress-real` | StressChaos CPU | The matched pair for `latency-not-saturation` — same symptom, different cause | shipped |
+| `dataplane-healthy` | `NoOp`, over a healthy substrate | The pack's precision floor: the namespace where "it is slow" is wrong | shipped |
+| `abort-503-not-a-bug` | Envoy synthetic aborts | Looks like an application bug in the wrong service | |
+| `partition-one-way` | NetworkChaos/NetworkPolicy asymmetric | Both ends look healthy in isolation | |
+| `dns-blackhole-partial` | DNSChaos on one name | Intermittent, and the failing pod is not the misconfigured one | |
 
 `stress-real` and `latency-not-saturation` as a matched pair is the point: an
 agent that says "it's slow, scale it up" scores well on one and badly on the
 other, and no fixture set that only contains one of them can tell.
+
+Two things about the pair turned out to be load-bearing and neither was in the
+plan. The first is that the discrimination lives in the *scoring vocabulary*,
+not only in the fixtures: `network-degradation` and `cpu-saturation` are
+separate failure families, so a claim in one is charged as an invention in the
+other's scenario, while `HighLatency` is in neither family and is therefore
+creditable as an observation and never chargeable as a diagnosis. A subject
+that reports only slowness scores the shared symptom in both halves and the
+cause in neither. `pkg/eval/matched_pair_test.go` asserts that rather than
+describing it.
+
+The second is that `latency-not-saturation` is netem rather than the Envoy L7
+delay this table originally proposed. Envoy injection is off for this substrate
+because the sidecar breaks the gRPC kubelet probes; netem also has the better
+property for the pair, which is that it degrades the path without touching the
+callee at all.
 
 ### 6.3 `cmd/simian-eval`
 
@@ -1056,10 +1073,13 @@ leak (`discoverer.go:75-90`), and `err.(*simian.ExecutorError)` where
 1. **Engine name.** `kube-state` is proposed over `workload` because the
    driver also mutates Services, PVCs, and Jobs. Not load-bearing; easy to
    change before Phase 2.
-2. **Where the dataplane packs' SUT comes from.** Online Boutique is heavy for
-   a per-scenario fresh cluster. A smaller purpose-built topology with a known
-   dependency graph may serve Phase 5 better — and a graph we designed is a
-   graph we can write assertions about.
+2. ~~**Where the dataplane packs' SUT comes from.**~~ Settled: a purpose-built
+   topology, `pkg/sut/edgeupstream`, named by a scenario's `substrate:` field.
+   Online Boutique was too heavy, but the deciding argument was not weight — a
+   graph we designed is a graph we can write assertions about, and the callee
+   has to be *expensive to serve* or CPU saturation produces no latency and the
+   matched pair stops discriminating. A borrowed demo app gives no control over
+   that.
 3. **Whether `mutate`-mode reverts are trustworthy enough to run scenarios
    sequentially on one cluster,** or whether fresh-per-scenario (as
    `sre-eval-live` does) stays mandatory. Fresh is correct and slow; this is a

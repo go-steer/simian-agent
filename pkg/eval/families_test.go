@@ -38,10 +38,18 @@ type kindVocabulary struct {
 
 // faultKindReports is the checklist behind TestEveryFaultKindNamesItsOwnFamily.
 //
-// Only kube-state kinds are listed. A dataplane fault manifests as latency,
-// loss or refused connections rather than as a reason token on an object, so
-// there is nothing for familyOf to resolve and nothing to be charged with
-// inventing.
+// Kube-state kinds are the ones the first loop below *requires* an entry for,
+// because the engine enumerates them and a new one must be classified before
+// it can be scored. Chaos Mesh has no such enumeration here, and for a long
+// time this table said dataplane faults needed no entry at all: they manifest
+// as latency rather than as a reason token on an object, so there was nothing
+// for familyOf to resolve and nothing to charge.
+//
+// That stopped being true with the dataplane pack. Its whole premise is that
+// "the path is slow" and "the callee is out of CPU" are distinguishable
+// claims, which means both had to become resolvable families, which means both
+// can now be charged — including against a subject that got it right. The two
+// kinds are listed for the same reason every other entry is.
 //
 // The entries with more than one family are the interesting ones, and they are
 // not redundancy. A memory-squeezed container really does enter
@@ -159,6 +167,27 @@ var faultKindReports = map[string]kindVocabulary{
 	// contains — a report about NoOp is the empty one, which is what
 	// HallucinatedFault grades and what recall has nothing to ask for.
 	kubestate.KindNoOp: {},
+
+	// The dataplane pair. Both vocabularies include the generic slowness words
+	// on purpose: they are what a subject writes when it has observed the
+	// symptom and attributed nothing, they resolve to no family, and the test
+	// below therefore asserts that writing one is never charged — in either
+	// scenario. That is the property the pair depends on.
+	"NetworkChaos": {
+		families: []string{"network-degradation"},
+		reasons: []string{
+			"NetworkLatency", "NetworkDelay", "NetworkDegradation", "PacketDelay",
+			"HighLatency", "Latency",
+		},
+	},
+	"StressChaos": {
+		families: []string{"cpu-saturation"},
+		reasons: []string{
+			"CPUSaturation", "CPUThrottling", "CPUThrottled", "CPUExhaustion",
+			"CPUStarvation", "HighCPU",
+			"HighLatency", "Latency",
+		},
+	},
 }
 
 // TestEveryFaultKindNamesItsOwnFamily is the guard familyOf's doc comment

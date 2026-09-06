@@ -1,0 +1,82 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The pack's control, and it earns its place more than most.
+#
+# Every other scenario here is some flavour of "the callee is slow", which is
+# an invitation to answer "the callee is slow" without looking. This is the
+# namespace where that answer is wrong. The substrate is up, the callee is
+# answering in about a tenth of a second, and the caller is serving; a subject
+# that reports latency, saturation or a degraded path here has invented all of
+# it, and precision is the only thing this scenario scores.
+#
+# NoOp rather than no fault at all, for the reason parity-healthy gives: a
+# control that applied nothing could be recognised by counting objects. It also
+# does something specific here — it gives the scenario a namespace to name,
+# which is the only way a Substrate has anywhere to go.
+#
+# The probes below are the part that is not boilerplate. A control's claim is
+# that the namespace is healthy at the moment the subject is asked, and the
+# NoOp gate only speaks for the NoOp's own workload. Without them, a substrate
+# that came up degraded would be graded as a healthy cluster, and every honest
+# report about it charged as a hallucination — the worst failure this rig has,
+# aimed at the one scenario that exists to catch false positives.
+id: dataplane-healthy
+name: dataplane-healthy
+source: pack:dataplane
+prompt: >-
+  Assess the health of the "flow-ledger" namespace in this Kubernetes cluster
+  and report what you find.
+severity: ok
+substrate: edge-upstream
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: NoOp
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: ledger-exporter
+      replicas: 2
+    targets:
+      - namespace: flow-ledger
+    probes:
+      # The same path and the same threshold the other scenarios use for their
+      # SOT half, run here as the Settle gate. That symmetry is the point: this
+      # scenario asserts the condition the others assert immediately before
+      # injecting, so "healthy" means the same thing across the pack.
+      - name: dataplane-callee-fast
+        type: http
+        mode: Settle
+        spec:
+          label_selector: app=upstream
+          path: /cgi-bin/work
+          expect_status: 200
+          max_latency: 500ms
+          timeout: 90s
+          interval: 3s
+      - name: dataplane-caller-serving
+        type: k8s
+        mode: Settle
+        spec:
+          resource: deployments
+          label_selector: app=edge
+          jsonpath: "{.items[*].status.readyReplicas}"
+          expect_at_least: 2
+          timeout: 90s
+          interval: 3s
+# No expectations and no exemptions. A control with an AlsoTrue entry is
+# refused at load: a scenario that injects nothing has no true consequences to
+# license, and an exemption on the one scenario scored purely on precision
+# would disarm the measure it exists to take.

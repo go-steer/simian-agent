@@ -94,7 +94,10 @@ func defaultOptions() *options {
 func bindFlags(cmd *cobra.Command, o *options) {
 	f := cmd.Flags()
 
-	f.StringSliceVar(&o.packDirs, "pack", nil, "Scenario pack holding the ground truth: a built-in name (parity, lookout) or a directory. Repeatable or comma-separated; several packs run as one suite (required).")
+	// The built-in names are spliced in rather than spelled out, so a new pack
+	// cannot ship with help text that does not mention it.
+	f.StringSliceVar(&o.packDirs, "pack", nil, "Scenario pack holding the ground truth: a built-in name ("+
+		strings.Join(scenario.BuiltinPacks, ", ")+") or a directory. Repeatable or comma-separated; several packs run as one suite (required).")
 	f.StringVar(&o.subject, "subject", "", "What to grade: exec:<command line>, lookout:<path to the lookout binary>, or noop: for the zero-score floor (required)")
 	f.StringSliceVar(&o.only, "only", nil, "Run only these scenario IDs. Repeatable or comma-separated. An ID that is not in the pack is an error, not an empty run.")
 	f.StringVar(&o.out, "out", "", "Directory to write audit.log and run.json into (default: a timestamped directory under ./runs)")
