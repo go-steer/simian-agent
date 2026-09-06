@@ -44,6 +44,30 @@ func names(probes []simian.ProbeSpec) []string {
 	return out
 }
 
+// gateNamed finds one gate on a kind by the probe name it emits. The tests
+// below are about what a particular gate asserts, not about where it sits in
+// the list, and indexing positionally made every one of them fail when a
+// readiness gate was inserted ahead of it. The order that *is* load-bearing has
+// its own test: TestTheBundleKindsAreGatedOnEveryHalfOfTheirFault.
+func gateNamed(t *testing.T, kind, probeName string) kubeStateGate {
+	t.Helper()
+	for _, g := range kubeStateGates[kind] {
+		if g.probeName == probeName {
+			return g
+		}
+	}
+	t.Fatalf("%s has no %q gate, only %v", kind, probeName, gateNames(kind))
+	return kubeStateGate{}
+}
+
+func gateNames(kind string) []string {
+	out := make([]string, 0, len(kubeStateGates[kind]))
+	for _, g := range kubeStateGates[kind] {
+		out = append(out, g.probeName)
+	}
+	return out
+}
+
 // --- network-policy ---
 
 func TestNetworkPolicyPartitionGetsATwoSidedReachabilityGate(t *testing.T) {
@@ -583,10 +607,14 @@ func TestAGateWhoseEvidenceIsAnAbsenceIsNeverFirst(t *testing.T) {
 			if g.expectEmpty && g.expect != "" {
 				t.Errorf("%s: %q sets both expect and expectEmpty", kind, g.probeName)
 			}
-			if g.expectAtLeast > 0 && (g.expect != "" || g.expectEmpty || g.expectFrom != nil) {
+			atLeast := g.expectAtLeast > 0 || g.expectAtLeastFrom != nil
+			if atLeast && (g.expect != "" || g.expectEmpty || g.expectFrom != nil) {
 				t.Errorf("%s: %q sets expectAtLeast alongside another condition", kind, g.probeName)
 			}
-			if !g.expectEmpty && g.expectAtLeast == 0 && g.expect == "" && g.expectFrom == nil {
+			if g.expectAtLeast > 0 && g.expectAtLeastFrom != nil {
+				t.Errorf("%s: %q sets both expectAtLeast and expectAtLeastFrom", kind, g.probeName)
+			}
+			if !g.expectEmpty && !atLeast && g.expect == "" && g.expectFrom == nil {
 				t.Errorf("%s: %q asserts nothing", kind, g.probeName)
 			}
 			if g.expect != "" && g.expectFrom != nil {
@@ -621,15 +649,19 @@ func TestTheBundleKindsAreGatedOnEveryHalfOfTheirFault(t *testing.T) {
 		// only kind with no field to read: the two healthy assertions come off
 		// objects, the fault itself only off the log.
 		{KubeStateDependencyStall,
-			[]string{ProbeWorkloadReady, ProbeEndpointsReady, ProbeDependencyStall},
-			[]string{k8s, k8s, logs}},
-		{KubeStatePDBGridlock, []string{ProbeWorkloadReady, ProbePDBGridlocked}, []string{k8s, k8s}},
+			[]string{ProbeWorkloadReady, ProbeWorkloadRolledOut, ProbeEndpointsReady, ProbeDependencyStall},
+			[]string{k8s, k8s, k8s, logs}},
+		{KubeStatePDBGridlock,
+			[]string{ProbeWorkloadReady, ProbeWorkloadRolledOut, ProbePDBGridlocked},
+			[]string{k8s, k8s, k8s}},
 		// The one pair whose order is chosen rather than forced. Neither half is
 		// an absence gate, so either could run first; the stall is the fault, and
 		// failing on it first makes the failure report say the useful thing.
 		{KubeStateRolloutStuck, []string{ProbeRolloutStuck, ProbeRolloutServing}, []string{k8s, k8s}},
-		{KubeStateCertExpiry, []string{ProbeWorkloadReady, ProbeCertPresent}, []string{k8s, k8s}},
-		{KubeStateNoOp, []string{ProbeWorkloadReady}, []string{k8s}},
+		{KubeStateCertExpiry,
+			[]string{ProbeWorkloadReady, ProbeWorkloadRolledOut, ProbeCertPresent},
+			[]string{k8s, k8s, k8s}},
+		{KubeStateNoOp, []string{ProbeWorkloadReady, ProbeWorkloadRolledOut}, []string{k8s, k8s}},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			got := DefaultProbes(kubeStateManifest(tc.kind, nil))
@@ -692,15 +724,63 @@ func TestEachBundleGateReadsTheRightResource(t *testing.T) {
 // anything, and the subject's correct report of nothing would be scored as a
 // correct answer instead of the vacuous pass it is.
 func TestTheControlIsGatedOnItsWorkloadBeingHealthy(t *testing.T) {
-	got := DefaultProbes(kubeStateManifest(KubeStateNoOp, nil))
-	if len(got) != 1 {
-		t.Fatalf("probes = %v, want one", names(got))
+	got := byName(DefaultProbes(kubeStateManifest(KubeStateNoOp, nil)))
+	if got[ProbeWorkloadReady].Spec["expect_contains"] != "True" {
+		t.Errorf("control gate expects %v, want True", got[ProbeWorkloadReady].Spec["expect_contains"])
 	}
-	if got[0].Spec["expect_contains"] != "True" {
-		t.Errorf("control gate expects %v, want True", got[0].Spec["expect_contains"])
+	// And on both clocks. The pod's Ready condition and the Deployment's
+	// readyReplicas are written by different controllers, and asking the subject
+	// in the gap between them hands the control a namespace where a detector
+	// that reads the workload reports RolloutIncomplete — a fault, in the one
+	// scenario whose whole score is that there is no fault.
+	rolled := got[ProbeWorkloadRolledOut]
+	if rolled.Spec["resource"] != "deployments" {
+		t.Errorf("rollout gate reads %v, want deployments", rolled.Spec["resource"])
+	}
+	if rolled.Spec["expect_at_least"] != KubeStateDefaultReplicas(KubeStateNoOp) {
+		t.Errorf("rollout gate wants %v ready replicas, want the kind's default %d",
+			rolled.Spec["expect_at_least"], KubeStateDefaultReplicas(KubeStateNoOp))
 	}
 	if EfficacyGate(simian.EngineKubeState, KubeStateNoOp) == "" {
 		t.Error("the control advertises no efficacy gate")
+	}
+}
+
+// Every kind whose workload is supposed to be healthy waits for both clocks,
+// and the rollout gate always follows the pod-readiness one. Alone it would be
+// a weaker assertion than the pod condition, not a stronger one: readyReplicas
+// counts pods the deployment controller has already seen go Ready.
+func TestTheHealthyKindsWaitForTheDeploymentToAgree(t *testing.T) {
+	for _, kind := range []string{
+		KubeStateNoOp, KubeStateDependencyStall, KubeStatePDBGridlock, KubeStateCertExpiry,
+	} {
+		t.Run(kind, func(t *testing.T) {
+			gs := gateNames(kind)
+			ready := slices.Index(gs, ProbeWorkloadReady)
+			rolled := slices.Index(gs, ProbeWorkloadRolledOut)
+			if ready < 0 || rolled < 0 {
+				t.Fatalf("gates = %v, want both readiness assertions", gs)
+			}
+			if rolled != ready+1 {
+				t.Errorf("gates = %v, want %q immediately after %q", gs, ProbeWorkloadRolledOut, ProbeWorkloadReady)
+			}
+		})
+	}
+}
+
+// The rollout gate and the driver have to agree on how many replicas there are,
+// the same way the RolloutStuck gate does — a gate that waits for a count the
+// Deployment was never created with times out against a fault that landed.
+func TestTheRolloutGateCountsTheReplicasTheManifestAskedFor(t *testing.T) {
+	m := kubeStateManifest(KubeStateNoOp, map[string]any{"replicas": 3})
+	got := byName(DefaultProbes(m))[ProbeWorkloadRolledOut]
+	if got.Spec["expect_at_least"] != 3 {
+		t.Errorf("expect_at_least = %v, want the 3 replicas the manifest chose", got.Spec["expect_at_least"])
+	}
+	// expect_at_least, not expect_contains: "3" is a substring of "13", and the
+	// prober's whole-number comparison is what makes a partial rollout fail.
+	if got.Spec["expect_contains"] != nil || got.Spec["expect_empty"] != nil {
+		t.Errorf("rollout gate spec = %v, want only the counter assertion", got.Spec)
 	}
 }
 
@@ -750,15 +830,13 @@ func TestDependencyStallLeavesNothingWrongOnAnyObject(t *testing.T) {
 		}},
 	}
 
-	gs := kubeStateGates[KubeStateDependencyStall]
-	if len(gs) != 3 {
-		t.Fatalf("gates = %d, want the two healthy assertions plus the log", len(gs))
+	ready := gateNamed(t, KubeStateDependencyStall, ProbeWorkloadReady)
+	if got := render(t, ready.jsonPath, stalledPod); !strings.Contains(got, ready.expect) {
+		t.Errorf("readiness gate renders %q, want %q: the workload must be Ready while stalling", got, ready.expect)
 	}
-	if got := render(t, gs[0].jsonPath, stalledPod); !strings.Contains(got, gs[0].expect) {
-		t.Errorf("readiness gate renders %q, want %q: the workload must be Ready while stalling", got, gs[0].expect)
-	}
-	if got := render(t, gs[1].jsonPath, readySlice); !strings.Contains(got, gs[1].expect) {
-		t.Errorf("endpoint gate renders %q, want %q: the Service must be serving while stalling", got, gs[1].expect)
+	endpoints := gateNamed(t, KubeStateDependencyStall, ProbeEndpointsReady)
+	if got := render(t, endpoints.jsonPath, readySlice); !strings.Contains(got, endpoints.expect) {
+		t.Errorf("endpoint gate renders %q, want %q: the Service must be serving while stalling", got, endpoints.expect)
 	}
 
 	// The checks a subject would reach for first, and what they say. Every one
@@ -778,7 +856,7 @@ func TestDependencyStallLeavesNothingWrongOnAnyObject(t *testing.T) {
 	// looks for the line the driver writes, and it is last because the two
 	// above it are what make "only the log is wrong" a claim rather than an
 	// assumption.
-	log := gs[2]
+	log := gateNamed(t, KubeStateDependencyStall, ProbeDependencyStall)
 	if log.probeType != simian.ProbeTypeLogs {
 		t.Errorf("the evidence gate is a %q probe, want logs", log.probeType)
 	}
@@ -822,11 +900,7 @@ func renderPath(t *testing.T, expr string, items ...any) string {
 // 20 as well. The filter moves the comparison into the jsonpath and renders the
 // name instead, so the value is either exactly zero or the gate sees nothing.
 func TestThePDBGateOnlyMatchesExactlyZeroDisruptions(t *testing.T) {
-	gs := kubeStateGates[KubeStatePDBGridlock]
-	if len(gs) != 2 {
-		t.Fatalf("gates = %d, want the readiness assertion plus the budget", len(gs))
-	}
-	g := gs[1]
+	g := gateNamed(t, KubeStatePDBGridlock, ProbePDBGridlocked)
 	budget := func(name string, allowed int64) any {
 		return map[string]any{
 			"metadata": map[string]any{"name": name},
@@ -903,11 +977,7 @@ func TestTheRolloutGateExpectsThePreviousRevisionIntact(t *testing.T) {
 // because no probe type here can decode a certificate. That limit is stated in
 // the gate's comment and the arithmetic is tested in the driver.
 func TestTheCertGateMatchesAPEMHeaderThroughBase64(t *testing.T) {
-	gs := kubeStateGates[KubeStateCertExpiry]
-	if len(gs) != 2 {
-		t.Fatalf("gates = %d, want the readiness assertion plus the Secret", len(gs))
-	}
-	g := gs[1]
+	g := gateNamed(t, KubeStateCertExpiry, ProbeCertPresent)
 	if g.expect != KubeStateCertPEMPrefix {
 		t.Errorf("gate expects %q, want the computed PEM prefix %q", g.expect, KubeStateCertPEMPrefix)
 	}

@@ -108,6 +108,17 @@ passes about two seconds after apply — the pod really is Pending and really is
 asked while it is still, by its own definition, looking at a slow scheduler.
 Same shape as the crash-loop bug this pack already caught, in a different kind.
 
+The control has its own version of it, and it took a slow machine to see. On a
+two-core GitHub runner `healthy` scored severity **0.33**, against 1.00 twice on
+this kind cluster and 1.00 on GKE: the detector reported
+`Deployment/… RolloutIncomplete`, because the pod's `Ready` condition and the
+Deployment's `status.readyReplicas` are written by different controllers and the
+subject was asked in the gap. Every kind whose workload is supposed to be
+healthy now waits for both — see `simian-workload-rolled-out` in
+[efficacy-probes](../../../../docs/site/content/docs/efficacy-probes.md). The
+table above predates that fix; nothing in it moved, because none of the machines
+it was measured on was slow enough to show the window.
+
 `crash-loop`, `image-pull` and `healthy` are the three the `e2e-kind` workflow
 runs on every push to `main` — a fault that lands in seconds, one that takes
 four minutes to become steady, and the case where reporting nothing is the

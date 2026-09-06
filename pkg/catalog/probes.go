@@ -39,6 +39,7 @@ const (
 	ProbeUnschedulable     = "simian-unschedulable"
 	ProbeJobFailed         = "simian-job-failed"
 	ProbeWorkloadReady     = "simian-workload-ready"
+	ProbeWorkloadRolledOut = "simian-workload-rolled-out"
 	ProbeNoEndpoints       = "simian-no-endpoints"
 	ProbeClaimPending      = "simian-claim-pending"
 	ProbeEndpointsReady    = "simian-endpoints-ready"
@@ -130,11 +131,11 @@ var gates = map[gateKey]gate{
 		build:    kubeStateProbes,
 	},
 	{simian.EngineKubeState, KubeStateDependencyStall}: {
-		describe: "the synthesized workload's pods must be Ready and its Service endpoints ready, and its log must carry the upstream-failure line — healthy everywhere but in what the application says",
+		describe: "the synthesized workload's pods must be Ready, its Deployment must agree they are, its Service endpoints must be ready, and its log must carry the upstream-failure line — healthy everywhere but in what the application says",
 		build:    kubeStateProbes,
 	},
 	{simian.EngineKubeState, KubeStatePDBGridlock}: {
-		describe: "the synthesized workload's pods must be Ready and its PodDisruptionBudget must report disruptionsAllowed of exactly 0",
+		describe: "the synthesized workload's pods must be Ready, its Deployment must agree they are, and its PodDisruptionBudget must report disruptionsAllowed of exactly 0",
 		build:    kubeStateProbes,
 	},
 	{simian.EngineKubeState, KubeStateRolloutStuck}: {
@@ -142,11 +143,11 @@ var gates = map[gateKey]gate{
 		build:    kubeStateProbes,
 	},
 	{simian.EngineKubeState, KubeStateCertExpiry}: {
-		describe: "the synthesized workload's pods must be Ready — which is only possible once the TLS Secret mounted — and the Secret must hold a PEM certificate",
+		describe: "the synthesized workload's pods must be Ready — which is only possible once the TLS Secret mounted — its Deployment must agree they are, and the Secret must hold a PEM certificate",
 		build:    kubeStateProbes,
 	},
 	{simian.EngineKubeState, KubeStateNoOp}: {
-		describe: "the control workload's pods must be Ready — the gate a control passes is the one every other kind fails",
+		describe: "the control workload's pods must be Ready and its Deployment must report them ready too — the gate a control passes is the one every other kind fails",
 		build:    kubeStateProbes,
 	},
 }
@@ -340,6 +341,11 @@ type kubeStateGate struct {
 	// failing over and over cannot be written as a string match.
 	expectAtLeast int
 
+	// expectAtLeastFrom computes that floor from the manifest, for a gate whose
+	// counter is a count of objects the manifest asked for rather than a fixed
+	// threshold. Wins over expectAtLeast when set.
+	expectAtLeastFrom func(simian.FaultManifest) int
+
 	timeout string
 }
 
@@ -376,6 +382,48 @@ var crashLoopVisibleGate = kubeStateGate{
 	// stronger claim — every replica is looping — is the gate above, and this
 	// one is about what is on screen rather than about what landed.
 	timeout: "3m",
+}
+
+// workloadRolledOutGate follows the pod-Ready gate on every kind whose workload
+// is supposed to be healthy: the Deployment agrees.
+//
+// Two clocks write that agreement, and the second one trails. The kubelet flips
+// the pod's Ready condition; the deployment controller then observes the pod and
+// writes status.readyReplicas. Between those two writes the pods are Ready and
+// the Deployment says zero of one is — a window that is invisible on a fast
+// machine and samplable on a slow one.
+//
+// That is not a hypothetical. It is what turned the lookout-healthy control from
+// severity 1.00 locally into 0.33 on a two-core GitHub runner, where the subject
+// was asked in the gap and reported `Deployment/... RolloutIncomplete`. A
+// detector that reads the workload rather than the pod sees the trailing clock,
+// and a control that flakes with machine speed makes every hallucinated_fault
+// number in the pack untrustworthy — the one measurement whose whole job is to
+// be zero.
+//
+// readyReplicas alone is enough, and updatedReplicas is deliberately not
+// asserted: these workloads are synthesized at a single revision, so nothing can
+// be ready without being updated. Absence is safe too — the field is omitempty,
+// so a Deployment whose status has not been written renders nothing, and
+// expect_at_least over an empty render fails rather than passes.
+var workloadRolledOutGate = kubeStateGate{
+	probeName:         ProbeWorkloadRolledOut,
+	resource:          "deployments",
+	jsonPath:          "{.items[*].status.readyReplicas}",
+	expectAtLeastFrom: kubeStateReplicas,
+	// Short. The gate before it has already waited out everything slow — image
+	// pull, container start, readiness. What is left is one controller noticing
+	// what another one wrote.
+	timeout: "60s",
+}
+
+// kubeStateReplicas is how many replicas this manifest's workload will have,
+// computed the same way the driver computes it before Apply creates anything.
+func kubeStateReplicas(m simian.FaultManifest) int {
+	if n, ok := intField(m.Spec, "replicas"); ok {
+		return n
+	}
+	return KubeStateDefaultReplicas(m.ResourceKind)
 }
 
 // kubeStateGates are run in order and stop at the first failure, which is what
@@ -579,6 +627,7 @@ var kubeStateGates = map[string][]kubeStateGate{
 			expect:    "True",
 			timeout:   "120s",
 		},
+		workloadRolledOutGate,
 		{
 			probeName:   ProbeEndpointsReady,
 			resource:    "endpointslices",
@@ -617,6 +666,7 @@ var kubeStateGates = map[string][]kubeStateGate{
 			expect:    "True",
 			timeout:   "120s",
 		},
+		workloadRolledOutGate,
 		{
 			probeName: ProbePDBGridlocked,
 			resource:  "poddisruptionbudgets",
@@ -669,11 +719,7 @@ var kubeStateGates = map[string][]kubeStateGate{
 			// evidence is the rollout itself.
 			jsonPath: "{.items[*].status.availableReplicas}",
 			expectFrom: func(m simian.FaultManifest) string {
-				n, ok := intField(m.Spec, "replicas")
-				if !ok {
-					n = KubeStateDefaultReplicas(m.ResourceKind)
-				}
-				return strconv.Itoa(n)
+				return strconv.Itoa(kubeStateReplicas(m))
 			},
 			// Short: by the time the deadline above has expired the old replicas
 			// have been available for minutes. This is a read, not a wait.
@@ -692,6 +738,7 @@ var kubeStateGates = map[string][]kubeStateGate{
 			expect:    "True",
 			timeout:   "120s",
 		},
+		workloadRolledOutGate,
 		{
 			probeName: ProbeCertPresent,
 			resource:  "secrets",
@@ -711,18 +758,24 @@ var kubeStateGates = map[string][]kubeStateGate{
 			timeout: "30s",
 		},
 	},
-	KubeStateNoOp: {{
-		// The control gets a gate like everything else, and it asserts the
-		// opposite of one: the workload came up and is serving. Without it a
-		// control would "inject" successfully against a cluster that was too
-		// broken to run anything, and the subject's correct finding of nothing
-		// would be scored as a correct finding rather than as the vacuous pass
-		// it is.
-		probeName: ProbeWorkloadReady,
-		jsonPath:  podReadyJSONPath,
-		expect:    "True",
-		timeout:   "120s",
-	}},
+	KubeStateNoOp: {
+		{
+			// The control gets a gate like everything else, and it asserts the
+			// opposite of one: the workload came up and is serving. Without it a
+			// control would "inject" successfully against a cluster that was too
+			// broken to run anything, and the subject's correct finding of nothing
+			// would be scored as a correct finding rather than as the vacuous pass
+			// it is.
+			probeName: ProbeWorkloadReady,
+			jsonPath:  podReadyJSONPath,
+			expect:    "True",
+			timeout:   "120s",
+		},
+		// And the control needs the second clock more than anything else here:
+		// it is the only kind whose score is a claim that a subject found
+		// nothing, so any signal at all in the namespace scores against it.
+		workloadRolledOutGate,
+	},
 }
 
 // podReadyJSONPath renders the status of each pod's Ready condition. The
@@ -796,6 +849,8 @@ func kubeStateProbes(m simian.FaultManifest) []simian.ProbeSpec {
 			switch {
 			case g.expectEmpty:
 				spec["expect_empty"] = true
+			case g.expectAtLeastFrom != nil:
+				spec["expect_at_least"] = g.expectAtLeastFrom(m)
 			case g.expectAtLeast > 0:
 				spec["expect_at_least"] = g.expectAtLeast
 			default:
