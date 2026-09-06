@@ -27,6 +27,7 @@ import (
 
 	"github.com/go-steer/simian-agent/pkg/arena"
 	"github.com/go-steer/simian-agent/pkg/sut"
+	"github.com/go-steer/simian-agent/pkg/sut/edgeupstream"
 	"github.com/go-steer/simian-agent/pkg/sut/onlineboutique"
 )
 
@@ -34,6 +35,7 @@ func init() {
 	// Register built-in SUTs at process start so 'simian sut list' and the
 	// MCP get_baseline tool see them regardless of subcommand.
 	onlineboutique.Register()
+	edgeupstream.Register()
 }
 
 func newSutCmd() *cobra.Command {
