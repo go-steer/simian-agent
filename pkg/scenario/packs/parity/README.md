@@ -62,6 +62,83 @@ Recall stays comparable. The read-path claim — "this is the only scenario no
 status field can answer" — does not, and closing it needs a stall kind that
 produces the failure rather than describing it.
 
+## What the pack scores, and what the other rig scored
+
+This is the measurement the pack exists to make: run the agent against Simian's
+reproduction of its own fixtures, and see whether the numbers its own harness
+produces come back.
+
+`core-sre-agent` @ `bin/sre-agent`, Sonnet 5 orchestrator with a Haiku 4.5
+specialist roster, GKE (Kubernetes v1.36.3-gke.1537000), whole pack, every
+fault landed — `efficacy rate 1.00`:
+
+| Scenario | recall | root_cause | severity | hallucinated_fault | time_to_detect |
+| --- | --- | --- | --- | --- | --- |
+| `image-pull` | 1.00 | — | 1.00 | 1.00 | 42.4s |
+| `crash-loop` | 1.00 | — | 1.00 | 1.00 | 32.4s |
+| `oom-kill` | 1.00 | — | 1.00 | 1.00 | 45.3s |
+| `unschedulable` | 1.00 | — | 1.00 | 1.00 | 36.2s |
+| `failed-job` | 1.00 | — | 1.00 | 1.00 | 39.1s |
+| `bad-selector` | 1.00 | — | 0.67 | 1.00 | 27.1s |
+| `healthy` (control) | — | — | 0.67 | 1.00 | 38.5s |
+| `multi-fault` | 1.00 | — | 1.00 | 1.00 | 96.8s |
+| `cascade` | 1.00 | 1.00 | 1.00 | 1.00 | 48.0s |
+| `unbound-volume` | 1.00 | — | 1.00 | 1.00 | 37.3s |
+| `silent-failure` | **0.00** | — | 0.67 | 1.00 | 73.1s |
+| **pack mean** | **0.90** | **1.00** | **0.91** | **1.00** | **46.9s** |
+
+2.5M input tokens (1.7M cached), 38k output, 78 tool calls. Delegation on 3 of
+11 fixtures, four specialists — `job-inspector` twice, `reliability-auditor`,
+`config-auditor`, `pod-inspector`.
+
+Unlike the lookout pack's row, **this one is a sample and not a property.** The
+subject is an LLM: two runs that disagree are variance, not a bug, which is
+exactly why the detector's row next to it is worth keeping.
+
+### Against the agent's own harness
+
+The comparison, against the tier-2 baseline in the agent repo's `AGENTS.md`
+(2026-08-15, `sre-eval-live`, Sonnet 5, 11/11 scored, on kind):
+
+| Measure | `sre-eval-live` | this pack | Δ |
+| --- | --- | --- | --- |
+| fault_recall | 1.000 | 0.90 | −0.10 |
+| hallucinated_fault | 1.000 | 1.00 | 0.00 |
+| fault_severity | 0.909 | 0.91 | +0.00 |
+| root_cause | 1.000 | 1.00 | 0.00 |
+
+Three of the four land inside ±0.01 — and each is the mean of eleven
+independently written scenarios, injected by a different engine, on a different
+cluster, scored by a different implementation of the same four measures. That
+is the claim the pack was built to test, and it holds.
+
+Two details are worth more than the aggregate:
+
+**`bad-selector` severity is 0.67, and upstream's is too.** Their note reads
+"`fault-badselector` severity is 0.67 for the seventh consecutive run, still
+the only cell that has never moved." Eighth, on another rig. A cell that stable
+across two harnesses is a property of the agent's severity judgment on that
+fault, not of anyone's fixture.
+
+**The whole recall gap is `silent-failure`, and it is the fixture both projects
+already distrust.** Upstream scored `fault-invoicing` 1.00 and wrote that "the
+score is not worth much" — the agent coined `UpstreamDependencyMissing`, which
+their reason list accepts by substring, on a fixture that leaked its diagnosis
+into `containers[0].command`. Simian's version leaks it too, through the
+container's environment (see the deviation above), so it is the *easier* of the
+two. The agent scored 0.00 anyway: eighteen tool calls, three of them
+`k8s_resource_spec`, and not one log tool among them. It filed four hygiene
+advisories about the right Deployment — `MissingLivenessProbe`, `MissingPDB`,
+`ColocatedReplicas`, `MissingResourceRequests` — and never named the stall.
+
+None of those four is charged as an invention, correctly: they are true
+statements about the workload, and no token among them asserts a cause. So this
+is recall failing on its own, which is the shape a real miss has.
+
+The reading is not "one rig is right". It is that a fixture whose 1.00 came
+from a coined token matched by substring will also produce a 0.00, and the two
+runs together say more about the fixture than either says alone.
+
 ## Running it
 
 Every scenario carries a `namespace`-tier fault with a default efficacy gate,
