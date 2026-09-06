@@ -21,10 +21,14 @@
 # apart. Read the two rows together or neither means much.
 #
 #   dev/tools/eval-sre-agent --only lookout-crash-loop
-#   dev/tools/eval-sre-agent --pack parity
+#   SIMIAN_EVAL_PACK=parity dev/tools/eval-sre-agent --subject-timeout 4m
 #
 # Extra arguments are passed through to simian-eval, and a repeated flag takes
-# its last value, so every default below can be overridden.
+# its last value, so every default below can be overridden on the command line
+# — with one exception. `--pack` is genuinely repeatable: passing it a second
+# time runs both packs as one suite, which for these two packs is a load error
+# about duplicate scenario names rather than anything useful. Set SIMIAN_EVAL_PACK
+# to choose a different one.
 #
 # # This one costs money
 #
@@ -108,7 +112,7 @@ echo "▸ core-sre-agent → $out (agent: $agent, its lookout: $lookout)" >&2
 #   agent's own numbers are measurements and are never gated — a score that
 #   moved is the whole output.
 exec go run ./cmd/simian-eval \
-  --pack lookout \
+  --pack "${SIMIAN_EVAL_PACK:-lookout}" \
   --subject "sre-agent:$agent -kubeconfig $kubeconfig -context $kubecontext" \
   --kubeconfig "$kubeconfig" \
   --subject-env "KUBECONFIG=$kubeconfig" \

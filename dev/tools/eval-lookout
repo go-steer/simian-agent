@@ -27,7 +27,11 @@
 #   dev/tools/eval-lookout --only lookout-image-pull,lookout-healthy
 #
 # Extra arguments are passed through to simian-eval, and a repeated flag takes
-# its last value, so every default below can be overridden on the command line.
+# its last value, so every default below can be overridden on the command line
+# — with one exception. `--pack` is genuinely repeatable: passing it a second
+# time runs both packs as one suite, which for these two packs is a load error
+# about duplicate scenario names rather than anything useful. Set SIMIAN_EVAL_PACK
+# to choose a different one.
 #
 # Kept out of dev/tools/ci, like test-e2e: the unit suite must stay runnable
 # with no cluster, no Docker and no network.
@@ -93,7 +97,7 @@ echo "▸ lookout pack → $out (detector: $lookout)" >&2
 #   of the detector, and a detector that gets worse is k8s-lookout's bug to
 #   fix, not a reason to fail Simian's build.
 exec go run ./cmd/simian-eval \
-  --pack lookout \
+  --pack "${SIMIAN_EVAL_PACK:-lookout}" \
   --subject "lookout:$lookout" \
   --kubeconfig "$kubeconfig" \
   --subject-env "KUBECONFIG=$kubeconfig" \
