@@ -293,8 +293,8 @@ unrelated. The names are reserved and prefixed: `simian-reachable-before`,
 `simian-partitioned`, `simian-fast-before`, `simian-delayed`,
 `simian-envoy-runtime`, `simian-image-pull-failed`, `simian-crash-looping`,
 `simian-oom-killed`, `simian-unschedulable`, `simian-job-failed`,
-`simian-workload-ready`, `simian-no-endpoints`, `simian-claim-pending`,
-`simian-endpoints-ready`, `simian-dependency-stalled`,
+`simian-workload-ready`, `simian-workload-rolled-out`, `simian-no-endpoints`,
+`simian-claim-pending`, `simian-endpoints-ready`, `simian-dependency-stalled`,
 `simian-restarts-climbing`, `simian-crash-loop-visible`.
 
 ### A synthesized fault has no SOT half, and that is not an oversight
@@ -450,8 +450,8 @@ first. The cause before the symptom.
 — it is the *opposite* problem. A gate that only grepped the log would pass
 just as happily against a crash-looping workload that happened to print the
 line once on its way down, which is the wrong fault entirely.
-`simian-workload-ready` and `simian-endpoints-ready` run first, and what they
-buy is the word **only**: with both green, the log gate means "and only the log
+`simian-workload-ready`, `simian-workload-rolled-out` and
+`simian-endpoints-ready` run first, and what they buy is the word **only**: with both green, the log gate means "and only the log
 is wrong", which is the whole claim this kind makes. They are also the cheapest
 possible check that the fault is the one advertised, since a stall that
 accidentally broke readiness would fail its own gate rather than land as a
@@ -488,6 +488,35 @@ a gate as much as a fault does: without one it would "inject" successfully
 against a cluster too broken to run anything, and the subject's correct report
 of nothing wrong would be scored as a correct answer rather than as the vacuous
 pass it is.
+
+### Healthy is two clocks, and the second one trails
+
+Every kind whose workload is supposed to be healthy — `NoOp`, `DependencyStall`,
+`PDBGridlock`, `CertExpiry` — waits twice: `simian-workload-ready` on the pod's
+`Ready` condition, then `simian-workload-rolled-out` on the Deployment's
+`status.readyReplicas`. Those two fields are written by different controllers.
+The kubelet flips the pod condition; the deployment controller then observes the
+pod and updates the workload's status. In between, the pods are Ready and the
+Deployment says zero of one is.
+
+The window is invisible on a fast machine, which is how it survived. It showed
+up on a two-core GitHub runner, where `lookout-healthy` — the control, the one
+scenario whose entire score is that there is nothing to find — dropped from
+severity 1.00 to 0.33 because the subject was asked inside the gap and reported
+`Deployment/… RolloutIncomplete`. Locally the same scenario scored 1.00 twice in
+a row. A control that flakes with machine speed makes every `hallucinated_fault`
+number in the pack untrustworthy.
+
+The gate reads `readyReplicas` and not `updatedReplicas`, because these
+workloads are synthesized at a single revision and nothing can be ready without
+being updated. The count comes from the manifest, computed the same way the
+driver computes it before Apply creates anything — the field is `omitempty`, so
+a Deployment whose status has not been written yet renders nothing, and
+`expect_at_least` over an empty render fails rather than passes.
+
+It always runs *after* the pod gate, never instead of it. Alone it is the weaker
+assertion: `readyReplicas` counts pods some other controller has already decided
+are Ready, so it says nothing the pod condition did not say first, later.
 
 Defaults are on unless the operator turns them off:
 
