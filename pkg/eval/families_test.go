@@ -336,3 +336,48 @@ func TestNormReasonAgreesWithTheExpectationMatcher(t *testing.T) {
 		}
 	}
 }
+
+// --- AlsoTrue ---
+
+// TestBuiltinPacksExemptOnlyRealFailureFamilies is the reason LintAlsoTrue is
+// exported. An entry that resolves to nothing fails silently — the author
+// wrote it to license a claim, and the claim is charged anyway — so the only
+// place it can be caught is a test that reads the packs that ship.
+func TestBuiltinPacksExemptOnlyRealFailureFamilies(t *testing.T) {
+	for _, name := range scenario.BuiltinPacks {
+		for _, s := range scenario.MustBuiltin(name).Scenarios {
+			if err := LintAlsoTrue(s); err != nil {
+				t.Errorf("%s: %v", name, err)
+			}
+		}
+	}
+}
+
+func TestLintAlsoTrueRejectsAnExemptionThatWouldDoNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		token string
+		want  string
+	}{
+		{"unknown token", "TotallyMadeUp", "not in any failure family"},
+		{"generic token", "Pending", "generic reason"},
+		{"generic, differently spelled", "failed_scheduling", "generic reason"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := LintAlsoTrue(scenario.Scenario{ID: "x", AlsoTrue: []string{tc.token}})
+			if err == nil {
+				t.Fatalf("LintAlsoTrue(%q) = nil, want an error", tc.token)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("LintAlsoTrue(%q) = %v, want it to mention %q", tc.token, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestLintAlsoTrueAcceptsAFamilyMemberInAnySpelling(t *testing.T) {
+	s := scenario.Scenario{ID: "x", AlsoTrue: []string{"CrashLoopBackOff", "crash-loop-backoff", "OOMKilled"}}
+	if err := LintAlsoTrue(s); err != nil {
+		t.Errorf("LintAlsoTrue() = %v, want nil", err)
+	}
+}

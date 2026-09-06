@@ -85,22 +85,27 @@ The reference measurement, and the reason it is worth writing down: the subject
 is a detector, so these numbers are a property of the pack rather than of a
 model's mood. Two consecutive runs that disagree are a bug in Simian.
 
-k8s-lookout v0.9.0, kind (3 nodes, Kubernetes v1.36.1), whole pack, every fault
-landed — `efficacy rate 1.00`:
+k8s-lookout v0.9.0, GKE (Kubernetes v1.36.3-gke.1537000), whole pack, every
+fault landed — `efficacy rate 1.00`:
 
-| Scenario | recall | severity |
-| --- | --- | --- |
-| `bad-rollout` | 1.00 | 1.00 |
-| `cert-expiry` | 1.00 | 1.00 |
-| `crash-loop` | 1.00 | 1.00 |
-| `endpoints-empty` | **0.00** | 0.33 |
-| `healthy` (control) | — | 1.00 |
-| `image-pull` | 1.00 | 1.00 |
-| `oom` | 1.00 | 0.67 |
-| `pdb-gridlock` | **0.00** | 0.33 |
-| `pending` | **0.00** | 1.00 |
+| Scenario | recall | severity | hallucinated_fault |
+| --- | --- | --- | --- |
+| `bad-rollout` | 1.00 | 1.00 | 1.00 |
+| `cert-expiry` | 1.00 | 1.00 | 1.00 |
+| `crash-loop` | 1.00 | 1.00 | 1.00 |
+| `endpoints-empty` | **0.00** | 0.33 | 1.00 |
+| `healthy` (control) | — | 1.00 | 1.00 |
+| `image-pull` | 1.00 | 1.00 | 1.00 |
+| `oom` | 1.00 | 0.67 | 1.00 |
+| `pdb-gridlock` | **0.00** | 0.33 | 1.00 |
+| `pending` | 1.00 | 1.00 | 1.00 |
 
-The three zeroes were all filed as Simian's under #110. One of them was.
+Every scenario Simian is responsible for scores 1.00. The two zeroes are the
+upstream coverage gaps below, and they are recorded here rather than filed
+against this pack.
+
+Three of these once read `recall 0.00`, all filed as Simian's under #110. One of
+them was.
 
 **`pending` was ours.** The observer's pod-level check has a five-minute dwell
 before it will call a Pending pod a fault, and Simian's efficacy gate passed
@@ -127,16 +132,38 @@ one-shot verb reports an empty-endpoints Service at all;
 coverage gaps in the verb, not fault-timing bugs here, and are filed as such with
 the scenarios attached.
 
-The control has its own version of it, and it took a slow machine to see. On a
+## The measure that was wrong, and it was the precision one
+
+`bad-rollout` also scored `hallucinated_fault` **0.50** for a while, which is the
+harder bug of the two because it charged the subject for being right.
+
+The wedge container exits non-zero, so the new revision's pod really is in
+`CrashLoopBackOff`, and the detector reported it alongside the
+`ProgressDeadlineExceeded` the scenario asks for. The scorer read the injected
+failure modes out of the expectations alone, saw no crash-loop family there, and
+called a true statement an invention. Promoting the pod to an expectation would
+have traded that for a recall bug: the subject that reports only the Deployment
+gives the *better* answer, and would have scored 0.50 for it.
+
+Scenarios now carry `also_true` — reason tokens the fault mechanically produces,
+which suppress the hallucination charge and count for nothing in recall. Only
+`bad-rollout` uses it. `oom` declines the identical exemption on purpose, and
+says why in its own comments.
+
+## Two clocks, on the control
+
+The control has its own version of the timing bug, and it took a slow machine to
+see. On a
 two-core GitHub runner `healthy` scored severity **0.33**, against 1.00 twice on
 this kind cluster and 1.00 on GKE: the detector reported
 `Deployment/… RolloutIncomplete`, because the pod's `Ready` condition and the
 Deployment's `status.readyReplicas` are written by different controllers and the
 subject was asked in the gap. Every kind whose workload is supposed to be
 healthy now waits for both — see `simian-workload-rolled-out` in
-[efficacy-probes](../../../../docs/site/content/docs/efficacy-probes.md). The
-table above predates that fix; nothing in it moved, because none of the machines
-it was measured on was slow enough to show the window.
+[efficacy-probes](../../../../docs/site/content/docs/efficacy-probes.md).
+Nothing in the table above moved when that landed, because no machine it has
+ever been measured on is slow enough to show the window — which is the point.
+The number that proves the fix is the one from the two-core runner.
 
 `crash-loop`, `image-pull` and `healthy` are the three the `e2e-kind` workflow
 runs on every push to `main` — a fault that lands in seconds, one that takes

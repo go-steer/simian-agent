@@ -552,6 +552,41 @@ what the Deployment controller writes on a stalled rollout. Matching is on the
 exact normalized token in consequence — a bare family member must not annex
 every longer token containing it.
 
+The set of injected failure modes is read out of each scenario's own ground
+truth rather than a table in the scorer, so a new scenario cannot forget to
+register itself. That read was originally over the expectations alone, and it
+conflated two different things: what a correct report **must** contain, and what
+it **may** contain without being wrong. A stuck rollout is diagnosed at
+Deployment altitude, and that is the only finding worth demanding — but the
+reason the new revision is not ready is that its container exits non-zero, so
+there is also a pod in `CrashLoopBackOff`. `bad-rollout` scored
+`hallucinated_fault` 0.50 against a detector that was right twice.
+
+Promoting the pod to an expectation would have fixed precision by breaking
+recall: the subject that reports only the Deployment gives the better answer and
+would have scored 0.50 for it. So a scenario carries a second, weaker list,
+`also_true` — reason tokens the fault mechanically produces, which suppress the
+hallucination charge and contribute nothing to recall. It is reason tokens
+rather than objects, because the claim being licensed is "this namespace
+contains a crash loop"; *which* pod is the subject's business.
+
+Every entry is a claim the subject can no longer be charged for, so the list has
+to stay short, and two rules keep it honest. A control may not have one at all —
+a scenario that injects nothing has no consequences, and an exemption on the one
+scenario that exists to measure precision would disarm the measure. And an entry
+that names no failure family is rejected rather than ignored, because the
+failure mode is otherwise invisible: the author wrote it to license a claim, the
+lookup misses, and the claim is charged anyway.
+
+The exemption is unconditional, which means it is a judgement about the
+scenario. `oom` declines the identical one deliberately: a container killed for
+exceeding its limit is also technically backing off restarts, but there the
+crash-loop token is offered *instead of* the diagnosis, and a report that says
+`CrashLoopBackOff` has named the wrong fix. In `bad-rollout` it is offered
+alongside one. A subject that reports only the crash loop there is charged by
+recall and not by precision, which is the correct number of times to charge one
+mistake.
+
 Time-to-remediate falls out for free and is worth saying plainly: the lease
 reaper, built to stop Simian leaking faults, becomes a measuring instrument
 the moment the subject is allowed to write.

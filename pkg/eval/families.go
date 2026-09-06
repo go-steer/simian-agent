@@ -15,8 +15,11 @@
 package eval
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/go-steer/simian-agent/pkg/scenario"
 )
 
 // failureFamilies groups the reason tokens that name the same concrete
@@ -228,4 +231,36 @@ func invertFamilies(families map[string][]string) map[string]string {
 // let one into the table, so the lookup misses and the answer is "".
 func familyOf(reason string) string {
 	return familyByReason[normReason(reason)]
+}
+
+// LintAlsoTrue reports whether every token in a scenario's AlsoTrue names a
+// concrete failure family.
+//
+// A token that resolves to nothing is not harmless, it is a silent no-op: the
+// author wrote it to license a claim, the lookup misses, and the claim is
+// still charged as an invention. So is a generic token — "Pending" attributes
+// no cause, can never be hallucinated, and needs no exemption. Both are
+// almost always a typo or a misunderstanding of what the list is for, and
+// both are invisible at runtime because the failure mode is a score that is
+// wrong rather than an error.
+//
+// It lives here rather than in scenario.Lint because the family table lives
+// here, and pkg/scenario cannot import pkg/eval — the dependency runs the
+// other way. TestBuiltinPacksExemptOnlyRealFailureFamilies is what makes sure
+// it actually runs over the packs that ship.
+func LintAlsoTrue(s scenario.Scenario) error {
+	var errs []error
+	for _, r := range s.AlsoTrue {
+		if familyOf(r) != "" {
+			continue
+		}
+		if genericReasons[normReason(r)] {
+			errs = append(errs, fmt.Errorf(
+				"scenario %q: AlsoTrue %q is a generic reason; it names no cause, so it can never be charged as an invention and exempting it does nothing", s.ID, r))
+			continue
+		}
+		errs = append(errs, fmt.Errorf(
+			"scenario %q: AlsoTrue %q is not in any failure family; the exemption would be silently ignored and the claim still charged", s.ID, r))
+	}
+	return errors.Join(errs...)
 }
