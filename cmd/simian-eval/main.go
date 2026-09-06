@@ -73,10 +73,10 @@ score and never charged to the subject: a cluster that was never broken has
 nothing in it to find, and a zero there would read as a miss.
 
 Examples:
-  simian-eval --pack packs/parity --subject exec:./bin/lookout --out runs/
-  simian-eval --pack packs/parity,packs/lookout --subject exec:./bin/agent --concurrency 4
-  simian-eval --pack packs/parity --subject noop: --cluster kind --out runs/floor
-  simian-eval --pack packs/parity --subject exec:./bin/agent --only parity-0003`,
+  simian-eval --pack parity --subject exec:./bin/lookout --out runs/
+  simian-eval --pack parity,lookout --subject exec:./bin/agent --concurrency 4
+  simian-eval --pack ./packs/custom --subject noop: --cluster kind --out runs/floor
+  simian-eval --pack parity --subject exec:./bin/agent --only parity-crash-loop`,
 		Version:       version,
 		SilenceErrors: true,
 		SilenceUsage:  true,

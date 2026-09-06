@@ -1,0 +1,37 @@
+# Mirrors examples/scenarios/oom in k8s-lookout.
+#
+# The fast, reactive cousin of the memory-leak forecast drill: the container
+# crosses its own limit in seconds, is killed, restarts and does it again. At
+# the event altitude an OOM kill looks exactly like a crash — the kubelet writes
+# BackOff either way — so the discrimination is whether the report reaches the
+# last termination reason rather than stopping at the restarts.
+id: lookout-oom
+name: oom
+source: pack:lookout
+prompt: >-
+  Assess the health of the "lookout-cache" namespace in this Kubernetes cluster
+  and report what you find.
+severity: critical
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: MemoryLimitSqueeze
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: leaker
+      limit_memory: 64Mi
+      allocate_mb: 256
+    targets:
+      - namespace: lookout-cache
+expect:
+  # Crash-loop tokens are deliberately absent. They are what the event stream
+  # says and they are the wrong answer: the container is not exiting on a
+  # startup error, it is being killed for exceeding its limit, and the fix is a
+  # different one. A subject that reports CrashLoopBackOff here is charged with
+  # inventing a crash loop, because this scenario injects no crash-loop family.
+  - kind: Pod
+    name: leaker
+    also_accept_kinds: [Deployment, ReplicaSet]
+    reasons: [OOMKilled, OutOfMemory, MemoryLimitExceeded]
+    min_severity: warning

@@ -1,0 +1,44 @@
+# Mirrors examples/scenarios/pending in k8s-lookout.
+#
+# A pod no node can ever schedule. The observer's point is the *aging*: a pod
+# Pending for two seconds is a slow scheduler and a pod Pending for ninety is a
+# fault, and only the second is worth waking anyone for.
+#
+# request_cpu is left at the engine default rather than lookout's 64. Sixty-four
+# cores is unschedulable on kind and is a provisioning signal on a managed
+# cluster: an autoscaler would add a node and heal the fault mid-run. The
+# default is far beyond any machine shape for exactly that reason.
+id: lookout-pending
+name: pending
+source: pack:lookout
+prompt: >-
+  Assess the health of the "lookout-analytics" namespace in this Kubernetes
+  cluster and report what you find.
+severity: critical
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: Unschedulable
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: hog
+    targets:
+      - namespace: lookout-analytics
+expect:
+  # Unschedulable and FailedScheduling are both accepted here and are both
+  # generic in pkg/eval — the scheduler writes them for taints, selectors,
+  # unbound volumes and genuine shortage alike. Accepting them costs nothing:
+  # a token that names no cause can be credited for recall and can never be
+  # charged as an invention.
+  - kind: Pod
+    name: hog
+    also_accept_kinds: [Deployment, ReplicaSet]
+    reasons:
+      - Unschedulable
+      - FailedScheduling
+      - InsufficientCPU
+      - InsufficientResources
+      - Pending
+      - capacity.pending-aged
+    min_severity: warning

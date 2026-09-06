@@ -1,0 +1,61 @@
+# Mirrors unboundVolume() — internal/faults/fixtures.go, fixture
+# "fault-ledger". Namespace kept.
+#
+# A Pending pod whose obvious explanation is wrong. Pending plus
+# FailedScheduling reads as resource pressure, and that is what
+# parity-unschedulable actually is. Here the node has capacity to spare: the pod
+# requests almost nothing and cannot start because its claim names a
+# StorageClass that does not exist.
+#
+# Only the claim is expected, and the pod is not. That asymmetry is the reason
+# the scenario discriminates: every subject notices the Pending pod, so grading
+# it would hand out half the recall for the observation that costs nothing. The
+# claim is the answer, so the claim is the score.
+#
+# One deviation from upstream, and it is visible rather than hidden: the engine
+# names the claim and the Deployment that mounts it the same thing, where
+# upstream had `ledger-data` and `ledger-writer`. The grading is unaffected —
+# the expectation accepts no pod-shaped kind, so a report about the Pending pod
+# still earns nothing — but a subject that names the object without its kind is
+# ambiguous here in a way it is not upstream.
+id: parity-unbound-volume
+name: unbound-volume
+source: pack:parity
+prompt: >-
+  Assess the health of the "fault-ledger" namespace in this Kubernetes cluster
+  and report what you find.
+severity: critical
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: UnboundClaim
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: ledger-data
+      # A class that does not exist, rather than no class at all: a managed
+      # cluster ships a default, so an omitted name binds within seconds and
+      # the fault would inject nothing.
+      storage_class: fast-ssd-encrypted
+      size: 1Gi
+    targets:
+      - namespace: fault-ledger
+expect:
+  # The pod's reasons are not gradeable either way and it is not listed:
+  # "FailedScheduling" is the literal token the scheduler attaches to an
+  # unbound-PVC pod as well as to a genuinely unschedulable one, which is why
+  # pkg/eval treats it as generic. This fixture is what put it there.
+  - kind: PersistentVolumeClaim
+    name: ledger-data
+    also_accept_kinds: [PVC, PersistentVolume, StorageClass]
+    reasons:
+      - Unbound
+      - PendingBinding
+      - VolumeBindingFailed
+      - ProvisioningFailed
+      - StorageClassNotFound
+      - NoStorageClass
+      - MissingStorageClass
+      - UnboundImmediatePersistentVolumeClaims
+      - Pending
+    min_severity: warning

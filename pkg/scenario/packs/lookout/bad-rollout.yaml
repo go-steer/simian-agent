@@ -1,0 +1,50 @@
+# Mirrors examples/scenarios/bad-rollout in k8s-lookout.
+#
+# The observer's flagship: a bad deploy no user can see. maxUnavailable=0 parks
+# the broken new revision next to a healthy old one, so requests keep being
+# served at full capacity and nothing alerts. Pod-altitude noise fires within
+# seconds and is the wrong altitude; the finding worth having is the
+# Deployment-altitude one — new_ready=0/N, old_ready=N/N — and it only exists
+# once the progress deadline has passed.
+#
+# Two replicas so that "the old revision is still serving" is a claim about a
+# set, which is the shape lookout's own fixture produces.
+id: lookout-bad-rollout
+name: bad-rollout
+source: pack:lookout
+prompt: >-
+  Assess the health of the "lookout-storefront" namespace in this Kubernetes
+  cluster and report what you find.
+severity: critical
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: RolloutStuck
+    # The longest lease in either pack, and it is not padding. Apply does not
+    # return until the healthy revision is available and the wedge is applied —
+    # up to two minutes before the gate begins — and the gate then waits out
+    # progress_deadline_seconds on top.
+    duration: 12m
+    blast_radius_tier: namespace
+    spec:
+      name: web
+      replicas: 2
+      progress_deadline_seconds: 60
+      message: 'fatal: config: unknown key "featureFlags.checkoutV2"'
+    targets:
+      - namespace: lookout-storefront
+expect:
+  # ProgressDeadlineExceeded is the token the Deployment controller writes and
+  # is the family member; rollout.stall is the observer's own signal kind, and
+  # it is long enough that the bidirectional matcher cannot annex anything with
+  # it.
+  - kind: Deployment
+    name: web
+    also_accept_kinds: [ReplicaSet, Pod]
+    reasons:
+      - ProgressDeadlineExceeded
+      - RolloutStuck
+      - StuckRollout
+      - RolloutStalled
+      - rollout.stall
+    min_severity: warning

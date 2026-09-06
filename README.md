@@ -193,7 +193,7 @@ The `simian provision` command is deprecated; use `simian arena` and `simian sut
 Simian breaks things; `pkg/eval` grades what an agent made of it.
 
 ```bash
-simian evaluate --pack packs/parity --audit run.log --report agent.json
+simian evaluate --pack parity --audit run.log --report agent.json
 ```
 
 - **Two artifacts, joined on the scenario ID** the audit sink stamps onto every event. The audit log is Simian's record of breaking things — which faults landed, and when. The report is the subject's side — what it found, and when. Neither half can be taken from the other.
@@ -209,8 +209,8 @@ subject processes and scoring have no business linking into the operator
 binary that runs in-cluster with chaos RBAC.
 
 ```bash
-simian-eval --pack packs/parity --subject exec:./bin/lookout --out runs/
-simian-eval --pack packs/parity --subject noop: --concurrency 4       # the zero-score floor
+simian-eval --pack parity --subject exec:./bin/lookout --out runs/
+simian-eval --pack parity --subject noop: --concurrency 4       # the zero-score floor
 ```
 
 Per scenario: provision an arena namespace, inject the faults **through the

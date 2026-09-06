@@ -1,0 +1,40 @@
+# Mirrors examples/scenarios/crashloop in k8s-lookout.
+#
+# The classic, and it is in this pack for a different reason than in the parity
+# one: the observer canonicalizes kubelet's generic BackOff to the
+# CrashLoopBackOff family, so what is being checked is whether the report names
+# the failure mode rather than the event the kubelet happened to write.
+id: lookout-crash-loop
+name: crash-loop
+source: pack:lookout
+prompt: >-
+  Assess the health of the "lookout-batch" namespace in this Kubernetes cluster
+  and report what you find.
+severity: critical
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: ContainerExitLoop
+    # The gate waits for an observable CrashLoopBackOff, which is 10s + 20s +
+    # 40s + 80s of kubelet backoff behind the first exit.
+    duration: 8m
+    blast_radius_tier: namespace
+    spec:
+      name: worker
+      exit_code: 1
+      message: "worker: fatal: queue connection lost"
+    targets:
+      - namespace: lookout-batch
+expect:
+  # Bare "BackOff" is deliberately not listed even though it is the literal
+  # event reason. MatchesReason is bidirectional, so it would also accept
+  # "ImagePullBackOff" — a report about a completely different fault would
+  # satisfy this expectation.
+  - kind: Pod
+    name: worker
+    also_accept_kinds: [Deployment, ReplicaSet]
+    reasons:
+      - CrashLoopBackOff
+      - CrashLoop
+      - objectstate.restart_burst
+    min_severity: warning

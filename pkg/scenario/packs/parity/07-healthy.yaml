@@ -1,0 +1,29 @@
+# Mirrors healthy() — internal/faults/fixtures.go, fixture "fault-none".
+# Namespace kept.
+#
+# The control. Expect is empty and severity is ok, so this scenario scores
+# precision only: every warning-or-worse finding here is a false positive. It
+# is the floor that stops "report everything" from being a strategy.
+#
+# NoOp rather than no fault at all, deliberately. A control that applied
+# nothing could be scored correctly by counting objects; this one has to be
+# reached by diagnosis, because the namespace looks like every other scenario
+# in the pack.
+id: parity-healthy
+name: healthy
+source: pack:parity
+prompt: >-
+  Assess the health of the "fault-none" namespace in this Kubernetes cluster
+  and report what you find.
+severity: ok
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: NoOp
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: docs-site
+      replicas: 2
+    targets:
+      - namespace: fault-none

@@ -1,0 +1,205 @@
+# What the agent-side live eval fixtures said when the parity pack was
+# transcribed from them.
+#
+# This file is not the pack and is not loaded at runtime. It is the record that
+# lets two different kinds of drift be told apart:
+#
+#   - the pack changed and the record did not — caught on every run, by
+#     TestParityPackMatchesTheUpstreamRecord;
+#   - upstream changed and the record did not — caught only when someone points
+#     TestUpstreamRecordStillMatchesTheSource at a checkout, because CI has no
+#     access to that repository and a test that skipped silently in CI while
+#     being the only check would be worse than none.
+#
+# Neither repository imports the other. That independence is the point of the
+# parity measurement: a shared library could be wrong the same way twice and
+# neither score would notice. The cost of the independence is this file, and
+# keeping it honest is what the two tests above are for.
+#
+# Source:  github.com/go-steer/k8s-sre-agent, internal/faults/fixtures.go
+# Recorded at: 77c876aed2d3b639ea3f695dfa682d8f34ebbe5a (2026-09-06)
+# Fixture file last changed: aec2c9df6c6c725989926b7d678a00439f19902e
+
+fixtures:
+  - fixture: fault-imagepull
+    scenario: parity-image-pull
+    # LintPrompt refuses a prompt that quotes a namespace naming its own fault.
+    # See the pack README.
+    renamed_to: fault-checkout
+    workloads: [checkout-api]
+    want_severity: critical
+    wants:
+      - kind: Pod
+        name: checkout-api
+        also_accept_kinds: [Deployment, ReplicaSet]
+        reasons: [ImagePullBackOff, ErrImagePull, ImagePullError]
+        min_severity: warning
+
+  - fixture: fault-crashloop
+    scenario: parity-crash-loop
+    renamed_to: fault-payments
+    workloads: [payments-worker]
+    want_severity: critical
+    wants:
+      - kind: Pod
+        name: payments-worker
+        also_accept_kinds: [Deployment, ReplicaSet]
+        reasons: [CrashLoopBackOff, CrashLoop]
+        min_severity: warning
+
+  - fixture: fault-oomkill
+    scenario: parity-oom-kill
+    renamed_to: fault-caching
+    workloads: [cache-warmer]
+    want_severity: critical
+    wants:
+      - kind: Pod
+        name: cache-warmer
+        also_accept_kinds: [Deployment, ReplicaSet]
+        reasons: [OOMKilled, OutOfMemory, MemoryLimitExceeded]
+        min_severity: warning
+
+  - fixture: fault-unschedulable
+    scenario: parity-unschedulable
+    renamed_to: fault-analytics
+    workloads: [analytics-etl]
+    want_severity: critical
+    wants:
+      - kind: Pod
+        name: analytics-etl
+        also_accept_kinds: [Deployment, ReplicaSet]
+        reasons:
+          - Unschedulable
+          - FailedScheduling
+          - InsufficientCPU
+          - InsufficientResources
+          - Pending
+        min_severity: warning
+
+  - fixture: fault-failedjob
+    scenario: parity-failed-job
+    workloads: [nightly-report]
+    want_severity: warning
+    wants:
+      - kind: Job
+        name: nightly-report
+        also_accept_kinds: [Pod, CronJob]
+        reasons:
+          - BackoffLimitExceeded
+          - JobFailed
+          - Failed
+          - DeadlineExceeded
+          - Error
+
+  - fixture: fault-badselector
+    scenario: parity-bad-selector
+    workloads: [frontend]
+    want_severity: warning
+    wants:
+      - kind: Service
+        name: frontend
+        also_accept_kinds: [Endpoints, EndpointSlice, Deployment]
+        reasons:
+          - SelectorMismatch
+          - NoEndpoints
+          - NoMatchingPods
+          - EmptyEndpoints
+          - ServiceHasNoEndpoints
+          - LabelMismatch
+
+  # The control. No wants at all, which is what makes precision cost something.
+  - fixture: fault-none
+    scenario: parity-healthy
+    workloads: [docs-site]
+    want_severity: ok
+
+  - fixture: fault-storefront
+    scenario: parity-multi-fault
+    workloads: [orders-api, recommendation-etl, inventory-sync]
+    want_severity: critical
+    wants:
+      - kind: Pod
+        name: orders-api
+        also_accept_kinds: [Deployment, ReplicaSet]
+        reasons: [ImagePullBackOff, ErrImagePull, ImagePullError]
+        min_severity: warning
+      - kind: Pod
+        name: recommendation-etl
+        also_accept_kinds: [Deployment, ReplicaSet]
+        reasons:
+          - Unschedulable
+          - FailedScheduling
+          - InsufficientCPU
+          - InsufficientResources
+          - Pending
+        min_severity: warning
+      - kind: Job
+        name: inventory-sync
+        also_accept_kinds: [Pod, CronJob]
+        reasons:
+          - BackoffLimitExceeded
+          - JobFailed
+          - Failed
+          - DeadlineExceeded
+          - Error
+
+  - fixture: fault-sessions
+    scenario: parity-cascade
+    workloads: [session-store]
+    want_severity: critical
+    wants:
+      - kind: Pod
+        name: session-store
+        also_accept_kinds: [Deployment, ReplicaSet]
+        reasons: [CrashLoopBackOff, CrashLoop]
+        min_severity: warning
+        root: true
+      - kind: Service
+        name: session-store
+        also_accept_kinds: [Endpoints, EndpointSlice]
+        reasons:
+          - NoEndpoints
+          - NoReadyEndpoints
+          - EmptyEndpoints
+          - ServiceHasNoEndpoints
+          - NoHealthyBackends
+          - Unavailable
+
+  # The Pending pod is deliberately not a want: every subject notices it, so
+  # grading it would hand out half the recall for the observation that costs
+  # nothing.
+  - fixture: fault-ledger
+    scenario: parity-unbound-volume
+    workloads: [ledger-data, ledger-writer]
+    want_severity: critical
+    wants:
+      - kind: PersistentVolumeClaim
+        name: ledger-data
+        also_accept_kinds: [PVC, PersistentVolume, StorageClass]
+        reasons:
+          - Unbound
+          - PendingBinding
+          - VolumeBindingFailed
+          - ProvisioningFailed
+          - StorageClassNotFound
+          - NoStorageClass
+          - MissingStorageClass
+          - UnboundImmediatePersistentVolumeClaims
+          - Pending
+        min_severity: warning
+
+  - fixture: fault-invoicing
+    scenario: parity-silent-failure
+    workloads: [invoice-reconciler]
+    want_severity: critical
+    wants:
+      - kind: Pod
+        name: invoice-reconciler
+        also_accept_kinds: [Deployment, ReplicaSet, Container]
+        reasons:
+          - ConnectionRefused
+          - ConnectionFailure
+          - Unreachable
+          - DependencyFailure
+          - DependencyMissing
+        min_severity: warning

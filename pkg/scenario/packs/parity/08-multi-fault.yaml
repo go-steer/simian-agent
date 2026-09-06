@@ -1,0 +1,77 @@
+# Mirrors multipleFaults() — internal/faults/fixtures.go, fixture
+# "fault-storefront". Namespace kept.
+#
+# Three unrelated faults in one namespace. Every other faulty scenario in this
+# pack has exactly one thing wrong with it, which means a subject is finished
+# the moment it finds anything. Here it is not: recall is a third for each, and
+# the three are from different failure classes so no single check answers all
+# of them.
+#
+# Three manifests rather than one, which is the shape Simian's execution unit
+# forces and is also the honest one: they are three independent faults that
+# happen to share a namespace, and each carries its own efficacy gate. A
+# subject is graded on a namespace where all three are known to have landed.
+id: parity-multi-fault
+name: multi-fault
+source: pack:parity
+prompt: >-
+  Assess the health of the "fault-storefront" namespace in this Kubernetes
+  cluster and report what you find.
+severity: critical
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: ImageUnresolvable
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: orders-api
+      replicas: 2
+    targets:
+      - namespace: fault-storefront
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: Unschedulable
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: recommendation-etl
+    targets:
+      - namespace: fault-storefront
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: JobFailure
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: inventory-sync
+      exit_code: 2
+      backoff_limit: 1
+      message: "ERROR: upstream feed unavailable"
+    targets:
+      - namespace: fault-storefront
+expect:
+  - kind: Pod
+    name: orders-api
+    also_accept_kinds: [Deployment, ReplicaSet]
+    reasons: [ImagePullBackOff, ErrImagePull, ImagePullError]
+    min_severity: warning
+  - kind: Pod
+    name: recommendation-etl
+    also_accept_kinds: [Deployment, ReplicaSet]
+    reasons:
+      - Unschedulable
+      - FailedScheduling
+      - InsufficientCPU
+      - InsufficientResources
+      - Pending
+    min_severity: warning
+  - kind: Job
+    name: inventory-sync
+    also_accept_kinds: [Pod, CronJob]
+    reasons:
+      - BackoffLimitExceeded
+      - JobFailed
+      - Failed
+      - DeadlineExceeded
+      - Error

@@ -1,0 +1,49 @@
+# Mirrors examples/scenarios/pdb-gridlock in k8s-lookout.
+#
+# Nothing is broken today. Every pod is Ready, the Deployment is Available, and
+# the budget permits exactly zero disruptions — so the next node drain, upgrade
+# or eviction hangs. A pre-maintenance landmine, and the only scenario in either
+# pack whose finding is about something that has not happened yet and is not a
+# clock.
+#
+# lookout gets there by scaling a 2-replica Deployment to 1 under a
+# minAvailable:1 budget; this reaches the same disruptionsAllowed=0 by writing
+# the budget with no headroom in the first place. The observable state is
+# identical and the injected object is one rather than two.
+#
+# Be aware of what this does to a shared cluster: the budget is namespaced and
+# covers only the fault's own pods, but for as long as the fault lasts, the node
+# hosting those pods cannot be drained.
+id: lookout-pdb-gridlock
+name: pdb-gridlock
+source: pack:lookout
+prompt: >-
+  Assess the health of the "lookout-ledger" namespace in this Kubernetes cluster
+  and report what you find.
+severity: warning
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: PDBGridlock
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: api
+      replicas: 2
+      min_available: 2
+    targets:
+      - namespace: lookout-ledger
+expect:
+  # "Blocked" and "Stuck" on their own are not accepted, for the reason the
+  # disruption-budget family states: they name a state and no cause. Every token
+  # here names the budget as the thing in the way.
+  - kind: PodDisruptionBudget
+    name: api
+    also_accept_kinds: [PDB, Deployment]
+    reasons:
+      - PDBGridlock
+      - PDBBlocked
+      - DisruptionsNotAllowed
+      - DisruptionBudgetBlocked
+      - DrainBlocked
+      - objectstate.pdb_gridlocked

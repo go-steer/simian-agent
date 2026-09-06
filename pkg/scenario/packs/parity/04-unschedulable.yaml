@@ -1,0 +1,37 @@
+# Mirrors unschedulable() — internal/faults/fixtures.go, fixture
+# "fault-unschedulable".
+#
+# Namespace renamed: "unschedulable" is a failure mode LintPrompt refuses.
+id: parity-unschedulable
+name: unschedulable
+source: pack:parity
+prompt: >-
+  Assess the health of the "fault-analytics" namespace in this Kubernetes
+  cluster and report what you find.
+severity: critical
+faults:
+  - engine: kube-state
+    api_version: apps/v1
+    resource_kind: Unschedulable
+    duration: 6m
+    blast_radius_tier: namespace
+    spec:
+      name: analytics-etl
+      # request_cpu deliberately left at the engine default rather than set to
+      # the upstream fixture's 64. Sixty-four cores is unsatisfiable on a
+      # single-node kind cluster and is a provisioning signal on a managed one:
+      # a cluster autoscaler would add a node and heal the fault mid-run. The
+      # default is far beyond any real machine shape for exactly that reason.
+    targets:
+      - namespace: fault-analytics
+expect:
+  - kind: Pod
+    name: analytics-etl
+    also_accept_kinds: [Deployment, ReplicaSet]
+    reasons:
+      - Unschedulable
+      - FailedScheduling
+      - InsufficientCPU
+      - InsufficientResources
+      - Pending
+    min_severity: warning

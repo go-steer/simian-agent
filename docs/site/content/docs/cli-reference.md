@@ -102,9 +102,12 @@ simian chaos --clear f-<UID>   # clear before lease expiry
 
 ### Scoring a run
 
+`--pack` takes a built-in pack name (`parity`, `lookout`) or a directory of
+scenario files.
+
 ```bash
-simian evaluate --pack packs/parity --audit run.log --report agent.json
-simian evaluate --pack packs/parity --audit - --report agent.json --format json
+simian evaluate --pack parity --audit run.log --report agent.json
+simian evaluate --pack ./packs/custom --audit - --report agent.json --format json
 ```
 
 Two artifacts, joined on the scenario ID the audit sink stamps onto every
@@ -134,10 +137,10 @@ A second binary. Cluster lifecycle, subject processes and scoring have no
 business linking into the operator binary that runs in-cluster with chaos RBAC.
 
 ```bash
-simian-eval --pack packs/parity --subject exec:./bin/lookout --out runs/
-simian-eval --pack packs/parity,packs/lookout --subject exec:./bin/agent --concurrency 4
-simian-eval --pack packs/parity --subject noop: --cluster kind --out runs/floor
-simian-eval --pack packs/parity --subject exec:./bin/agent --only parity-0003
+simian-eval --pack parity --subject exec:./bin/lookout --out runs/
+simian-eval --pack parity,lookout --subject exec:./bin/agent --concurrency 4
+simian-eval --pack ./packs/custom --subject noop: --cluster kind --out runs/floor
+simian-eval --pack parity --subject exec:./bin/agent --only parity-crash-loop
 ```
 
 Per scenario: provision an arena namespace, inject the faults **through the
@@ -150,7 +153,7 @@ The scorecard printed at the end comes from reading those two files back, so
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--pack` | (required) | Pack directory. Repeatable or comma-separated; several packs run as one suite. Two packs sharing a scenario ID is a load error, not a merge. |
+| `--pack` | (required) | A built-in pack name — `parity` or `lookout`, both embedded in the binary — or a directory. Repeatable or comma-separated; several packs run as one suite. A bare built-in name always means the embedded pack, so spell a local directory of the same name `./parity`. Two packs sharing a scenario ID is a load error, not a merge. |
 | `--subject` | (required) | `exec:<command line>`, or `noop:` for the zero-score floor. |
 | `--only` | (all) | Scenario IDs to run. An ID that is not in the pack is an error, not an empty run. |
 | `--out` | `runs/<timestamp>` | Where `audit.log` and `run.json` go. |
