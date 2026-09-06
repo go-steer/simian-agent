@@ -12,11 +12,14 @@ faults:
   - engine: kube-state
     api_version: apps/v1
     resource_kind: ContainerExitLoop
-    # Longer than the six-minute default elsewhere in this pack. The upstream
-    # note on crashLoopSettle measures CrashLoopBackOff as observable roughly
-    # 170s after the pod first starts — 10s + 20s + 40s + 80s of kubelet
-    # backoff — and the settle wait comes out of the fault's own lease.
-    duration: 8m
+    # Twice the six-minute default elsewhere in this pack. The gate waits for
+    # the fifth restart, which is where the kubelet's backoff schedule (10s,
+    # 20s, 40s, 80s, 160s) first makes CrashLoopBackOff the state the pod lives
+    # in rather than one it passes through — about 150s in, matching the 170s
+    # the upstream note on crashLoopSettle measures — and then for the backoff
+    # to actually be on screen. The settle wait comes out of this lease, so the
+    # lease has to cover it and still leave the subject time to answer.
+    duration: 12m
     blast_radius_tier: namespace
     spec:
       name: payments-worker

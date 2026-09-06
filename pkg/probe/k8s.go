@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,24 +57,59 @@ type k8sSpec struct {
 	jsonPath      string
 	expectContain string
 	expectEmpty   bool
+	expectAtLeast int
 	timeout       time.Duration
 	interval      time.Duration
 }
 
 // describe renders the success condition for a timeout message.
 func (s k8sSpec) describe() string {
-	if s.expectEmpty {
+	switch {
+	case s.expectEmpty:
 		return "empty output"
+	case s.expectAtLeast > 0:
+		return fmt.Sprintf("every value at least %d", s.expectAtLeast)
+	default:
+		return fmt.Sprintf("%q in output", s.expectContain)
 	}
-	return fmt.Sprintf("%q in output", s.expectContain)
 }
 
 // satisfied reports whether one poll's output meets the condition.
 func (s k8sSpec) satisfied(out string) bool {
-	if s.expectEmpty {
+	switch {
+	case s.expectEmpty:
 		return strings.TrimSpace(out) == ""
+	case s.expectAtLeast > 0:
+		return allAtLeast(out, s.expectAtLeast)
+	default:
+		return strings.Contains(out, s.expectContain)
 	}
-	return strings.Contains(out, s.expectContain)
+}
+
+// allAtLeast reports whether the rendered jsonpath is a non-empty run of whole
+// numbers, every one of them at least n.
+//
+// Every, not any. The expression yields one value per matching container, and a
+// workload where one replica of two has reached the threshold is a fault that
+// half landed — which is the state a gate exists to refuse to call "landed".
+//
+// An empty render is not satisfied either. It is what a pod that does not exist
+// yet produces, and an emptiness that passes is the vacuous gate this package
+// exists to prevent. Same for a value that is not a number: a jsonpath pointing
+// at the wrong field renders something, and reading "<none>" as a large count
+// would pass a gate that proves nothing.
+func allAtLeast(out string, n int) bool {
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return false
+	}
+	for _, f := range fields {
+		v, err := strconv.Atoi(f)
+		if err != nil || v < n {
+			return false
+		}
+	}
+	return true
 }
 
 // Run implements Prober.
@@ -213,6 +249,18 @@ func parseK8sSpec(raw map[string]any, target Target) (k8sSpec, error) {
 	if s.expectEmpty, err = optBool(raw, "expect_empty"); err != nil {
 		return s, err
 	}
+	if _, ok := raw["expect_at_least"]; ok {
+		if s.expectAtLeast, err = optInt(raw, "expect_at_least"); err != nil {
+			return s, err
+		}
+		if s.expectAtLeast < 1 {
+			// Every counter Kubernetes writes is at least zero, so "at least
+			// zero" is a gate that reads like a check and passes before the
+			// object exists.
+			return s, fmt.Errorf("k8s probe: %q must be at least 1, got %d: a lower bound of zero passes unconditionally",
+				"expect_at_least", s.expectAtLeast)
+		}
+	}
 	if s.timeout, err = optDuration(raw, "timeout", s.timeout); err != nil {
 		return s, err
 	}
@@ -241,16 +289,23 @@ func parseK8sSpec(raw map[string]any, target Target) (k8sSpec, error) {
 		s.labelSelector = target.Selector()
 	}
 
-	// A probe must state a condition, and "expect_contains": "" is not one:
-	// strings.Contains(anything, "") is always true, so it would read like a
-	// check while passing unconditionally. That is the exact failure this
-	// package exists to catch, so it is rejected rather than tolerated.
+	// A probe must state exactly one condition, and "expect_contains": "" is
+	// not one: strings.Contains(anything, "") is always true, so it would read
+	// like a check while passing unconditionally. That is the exact failure
+	// this package exists to catch, so it is rejected rather than tolerated.
+	stated := 0
+	for _, set := range []bool{s.expectEmpty, s.expectContain != "", s.expectAtLeast > 0} {
+		if set {
+			stated++
+		}
+	}
 	switch {
-	case s.expectEmpty && s.expectContain != "":
-		return s, fmt.Errorf("k8s probe: %q and %q are mutually exclusive", "expect_empty", "expect_contains")
-	case !s.expectEmpty && s.expectContain == "":
-		return s, fmt.Errorf("k8s probe: needs %q (non-empty) or %q: a probe with neither passes unconditionally",
-			"expect_contains", "expect_empty")
+	case stated > 1:
+		return s, fmt.Errorf("k8s probe: %q, %q and %q are mutually exclusive",
+			"expect_contains", "expect_empty", "expect_at_least")
+	case stated == 0:
+		return s, fmt.Errorf("k8s probe: needs %q (non-empty), %q or %q: a probe with none of them passes unconditionally",
+			"expect_contains", "expect_empty", "expect_at_least")
 	}
 	if s.timeout <= 0 {
 		return s, fmt.Errorf("k8s probe: %q must be positive, got %s", "timeout", s.timeout)

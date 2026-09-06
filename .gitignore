@@ -37,6 +37,12 @@ go.work.sum
 bin/
 dist/
 
+# simian-eval's default --out, which is relative to wherever it was run from —
+# so a run started at the repo root leaves scorecards and audit logs staged.
+# A result worth keeping belongs in a doc with the cluster and the date on it,
+# not as an undated directory somebody has to guess the provenance of.
+runs/
+
 # Local e2e cluster credentials (`make cluster` writes .kube/e2e.yaml here
 # rather than ~/.kube/config so the file naming the throwaway cluster can
 # never also name a real one — see internal/kindcluster).

@@ -208,6 +208,107 @@ func TestK8sProbeHandlesAFaultWhoseSignatureIsAnAbsence(t *testing.T) {
 	}
 }
 
+// restartingPod is a pod whose single container has restarted n times. This is
+// the shape a crash-loop gate reads, and the reason it has to: the pod's
+// *state* looks the same at the first restart and the tenth, and only the
+// counter tells a container that broke apart from one that is breaking over and
+// over.
+func restartingPod(ns, name string, n int) *unstructured.Unstructured {
+	u := pod(ns, name, "")
+	cs, _, _ := unstructured.NestedSlice(u.Object, "status", "containerStatuses")
+	cs[0].(map[string]any)["restartCount"] = int64(n)
+	_ = unstructured.SetNestedSlice(u.Object, cs, "status", "containerStatuses")
+	return u
+}
+
+// A settle condition that is a repetition rather than a state.
+func TestK8sProbeWaitsForACounterToReachItsBound(t *testing.T) {
+	spec := func() map[string]any {
+		return map[string]any{
+			"resource":        "pods",
+			"jsonpath":        "{.items[*].status.containerStatuses[*].restartCount}",
+			"expect_at_least": 5,
+			"timeout":         "1s",
+			"interval":        "10ms",
+		}
+	}
+	tests := []struct {
+		name string
+		pods []runtime.Object
+		want bool
+	}{
+		{"at the bound", []runtime.Object{restartingPod("boutique", "worker-1", 5)}, true},
+		{"past it", []runtime.Object{restartingPod("boutique", "worker-1", 12)}, true},
+		{
+			// The moment the current gate passes on: the container has died,
+			// once. Nothing is looping, and a subject asked here would be asked
+			// to see a crash loop that has not happened.
+			name: "one restart short",
+			pods: []runtime.Object{restartingPod("boutique", "worker-1", 4)},
+			want: false,
+		},
+		{
+			// Every value, not any. One replica of two at the bound is a fault
+			// that half landed, and a Service-level diagnosis drawn from it
+			// would be a different diagnosis.
+			name: "one replica of two still climbing",
+			pods: []runtime.Object{
+				restartingPod("boutique", "worker-1", 9),
+				restartingPod("boutique", "worker-2", 2),
+			},
+			want: false,
+		},
+		{
+			name: "both replicas there",
+			pods: []runtime.Object{
+				restartingPod("boutique", "worker-1", 9),
+				restartingPod("boutique", "worker-2", 5),
+			},
+			want: true,
+		},
+		{
+			// No pods at all renders nothing, and an emptiness that satisfies a
+			// lower bound is the vacuous pass the gates exist to refuse.
+			name: "no pods yet",
+			pods: nil,
+			want: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := NewK8sProber(newFakeDyn(tc.pods...), testMapper())
+			res := p.Run(context.Background(), k8sProbe(spec()), Target{Namespace: "boutique"})
+			if res.Err != nil {
+				t.Fatalf("Err: %v", res.Err)
+			}
+			if res.Passed != tc.want {
+				t.Errorf("Passed = %v, want %v; observed %q", res.Passed, tc.want, res.Observed)
+			}
+			if !res.Passed && !strings.Contains(res.Expected, "at least 5") {
+				t.Errorf("Expected = %q, does not say what the gate wanted", res.Expected)
+			}
+		})
+	}
+}
+
+// A jsonpath aimed at the wrong field still renders something. Reading a word
+// as a count large enough to satisfy the bound would pass a gate that proves
+// nothing at all, so anything unparseable is simply not a pass.
+func TestK8sProbeDoesNotReadAWordAsACount(t *testing.T) {
+	spec := map[string]any{
+		"resource":        "pods",
+		"jsonpath":        "{.items[*].status.phase}",
+		"expect_at_least": 1,
+		"timeout":         "100ms",
+		"interval":        "10ms",
+	}
+	p := NewK8sProber(newFakeDyn(restartingPod("boutique", "worker-1", 9)), testMapper())
+	res := p.Run(context.Background(), k8sProbe(spec), Target{Namespace: "boutique"})
+	if res.Passed {
+		t.Fatalf("a lower bound was satisfied by %q", res.Observed)
+	}
+}
+
 func TestK8sProbeRejectsSpecsThatWouldPassUnconditionally(t *testing.T) {
 	base := func() map[string]any {
 		return map[string]any{"resource": "pods", "jsonpath": "{.items[*].status.phase}"}
@@ -236,6 +337,36 @@ func TestK8sProbeRejectsSpecsThatWouldPassUnconditionally(t *testing.T) {
 				s["expect_empty"] = true
 			},
 			wantSub: "mutually exclusive",
+		},
+		{
+			name: "a lower bound alongside a string match",
+			mutate: func(s map[string]any) {
+				s["expect_contains"] = "Running"
+				s["expect_at_least"] = 5
+			},
+			wantSub: "mutually exclusive",
+		},
+		{
+			// restartCount is at least zero on every container that exists, so
+			// this is a gate that passes the moment the pod is scheduled.
+			name:    "a lower bound of zero",
+			mutate:  func(s map[string]any) { s["expect_at_least"] = 0 },
+			wantSub: "passes unconditionally",
+		},
+		{
+			name:    "a negative lower bound",
+			mutate:  func(s map[string]any) { s["expect_at_least"] = -1 },
+			wantSub: "must be at least 1",
+		},
+		{
+			name:    "a fractional lower bound",
+			mutate:  func(s map[string]any) { s["expect_at_least"] = 2.5 },
+			wantSub: "whole number",
+		},
+		{
+			name:    "a lower bound that is not a number",
+			mutate:  func(s map[string]any) { s["expect_at_least"] = "five" },
+			wantSub: "must be a number",
 		},
 		{
 			name:    "no resource",

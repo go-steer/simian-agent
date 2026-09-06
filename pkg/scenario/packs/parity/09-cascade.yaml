@@ -24,10 +24,12 @@ faults:
   - engine: kube-state
     api_version: apps/v1
     resource_kind: BackendCrashLoop
-    # The crash half of the gate waits for a terminated reason of Error, which
-    # is observable much sooner than CrashLoopBackOff, but two replicas still
-    # have to get there.
-    duration: 8m
+    # Four gates deep, and the second waits for both replicas to reach their
+    # fifth restart — about 150s of kubelet backoff apiece, and they do not
+    # restart in step. Longest lease in the pack for that reason, and close
+    # enough to the executor's 15-minute ceiling that the gates' own timeouts
+    # were tightened rather than the lease raised again.
+    duration: 12m
     blast_radius_tier: namespace
     spec:
       name: session-store

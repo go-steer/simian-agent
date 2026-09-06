@@ -15,9 +15,12 @@ faults:
   - engine: kube-state
     api_version: apps/v1
     resource_kind: ContainerExitLoop
-    # The gate waits for an observable CrashLoopBackOff, which is 10s + 20s +
-    # 40s + 80s of kubelet backoff behind the first exit.
-    duration: 8m
+    # The gate waits for the fifth restart, which is 10s + 20s + 40s + 80s of
+    # kubelet backoff behind the first exit and the point at which the loop
+    # becomes continuously observable rather than a state you have to sample
+    # luckily, and then for the backoff to be on screen. The settle wait comes
+    # out of this lease.
+    duration: 12m
     blast_radius_tier: namespace
     spec:
       name: worker
@@ -30,11 +33,22 @@ expect:
   # event reason. MatchesReason is bidirectional, so it would also accept
   # "ImagePullBackOff" — a report about a completely different fault would
   # satisfy this expectation.
+  #
+  # ExcessiveRestarts is listed because a subject that names the restart count
+  # has found this fault. It has named it less sharply than one that says
+  # CrashLoopBackOff, and that difference is real — but it is a severity
+  # difference, and the severity measure is where it gets charged. Recall asks
+  # whether the subject found the fault, not how well it phrased it.
+  #
+  # The gates make sure the choice is the subject's rather than the clock's: by
+  # the time it is asked, the pod is sitting in CrashLoopBackOff and has been
+  # for as long as anyone cares to look.
   - kind: Pod
     name: worker
     also_accept_kinds: [Deployment, ReplicaSet]
     reasons:
       - CrashLoopBackOff
       - CrashLoop
+      - ExcessiveRestarts
       - objectstate.restart_burst
     min_severity: warning

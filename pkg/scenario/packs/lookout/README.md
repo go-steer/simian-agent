@@ -64,3 +64,17 @@ bidirectional substring match, so a short token would annex anything containing
 it. Bare `BackOff` is deliberately absent from `crash-loop` for exactly that
 reason: it would also accept `ImagePullBackOff`, and a report about the wrong
 fault would score full recall.
+
+Where one fault has two correct spellings, both are listed. `crash-loop` accepts
+`ExcessiveRestarts` alongside `CrashLoopBackOff`, because a subject that names
+the restart count has found the fault. It has named it less sharply, and that is
+a real difference — but it is a *severity* difference, and the severity measure
+is where it gets charged. Recall asks whether the subject found the fault, not
+how well it phrased it.
+
+Timing is deliberately not part of that choice. The efficacy gates hold until
+the pod is sitting in `CrashLoopBackOff` and has been for as long as anyone
+cares to look, so which spelling a subject reaches for is its own judgement
+rather than an accident of when the scan landed. Getting that wrong cost a run:
+before the gates were fixed, three identical runs scored severity 0.67, 1.00,
+1.00.

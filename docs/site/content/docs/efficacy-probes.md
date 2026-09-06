@@ -92,6 +92,7 @@ port over without translation.
 | `jsonpath` | yes | Evaluated exactly as `kubectl -o jsonpath` would, missing keys included |
 | `expect_contains` | one of | Substring that must appear in the output |
 | `expect_empty` | one of | Require *blank* output instead |
+| `expect_at_least` | one of | Read the output as counters; every one must be at least this |
 | `namespace` | no | Defaults to the fault's own target namespace |
 | `name` | no | Read one named object instead of listing |
 | `label_selector` | no | Narrow the list; mutually exclusive with `name` |
@@ -104,7 +105,23 @@ object — so `{.items[*]...}` works just as it does with `kubectl`.
 `expect_empty` exists because some faults have no string to match on. A Service
 with no ready endpoints is an *absence*, and `"expect_contains": ""` would look
 like a check while passing unconditionally. Simian rejects a probe that
-declares neither condition rather than accepting one that cannot fail.
+declares no condition rather than accepting one that cannot fail.
+
+`expect_at_least` exists because some faults are a *repetition*, and no string
+match can tell one apart from a single failure. A container's
+`lastState.terminated.reason` reads `Error` from its first restart onwards, so a
+gate built on it passes about two seconds after apply — with nothing looping
+yet. `"expect_at_least": 5` over `{...restartCount}` says what the ground truth
+actually claims.
+
+Three rules follow from what the gates are for, and all three are enforced:
+
+- **Every value, not any.** The expression yields one number per container, and
+  a workload where one replica of two has got there is a fault that half landed.
+- **An empty render is not a pass.** It is what a pod that does not exist yet
+  produces.
+- **A bound of zero is rejected.** Every counter Kubernetes writes is at least
+  zero, so it is a check that passes before the object exists.
 
 ### The `http` probe type
 
@@ -248,12 +265,12 @@ a vote on.
 | `envoy-fault` | `EnvoyHttpDelay` | Admin API reports the delay runtime key at the requested percentage |
 | `envoy-fault` | `EnvoyHttpAbort` | Admin API reports the abort runtime key at the requested percentage |
 | `kube-state` | `ImageUnresolvable` | Pods reach `ImagePullBackOff` |
-| `kube-state` | `ContainerExitLoop` | A container's `lastState.terminated.reason` is `Error` (non-zero exit) |
+| `kube-state` | `ContainerExitLoop` | A container's `lastState.terminated.reason` is `Error` (non-zero exit) **and** every container has restarted at least 5 times **and** the backoff is visible in `state.waiting.reason` |
 | `kube-state` | `MemoryLimitSqueeze` | A container's `lastState.terminated.reason` is `OOMKilled` |
 | `kube-state` | `Unschedulable` | A pod condition carries reason `Unschedulable` |
 | `kube-state` | `JobFailure` | The Job carries a condition of reason `BackoffLimitExceeded` |
 | `kube-state` | `SelectorDrift` | Pods are Ready **and** the Service's EndpointSlices carry no addresses |
-| `kube-state` | `BackendCrashLoop` | A container's `lastState.terminated.reason` is `Error` **and** the Service's EndpointSlices report every endpoint **not** ready |
+| `kube-state` | `BackendCrashLoop` | A container's `lastState.terminated.reason` is `Error` **and** every container has restarted at least 5 times **and** the backoff is visible **and** the Service's EndpointSlices report every endpoint **not** ready |
 | `kube-state` | `UnboundClaim` | The claim is `Pending` **and** the pod mounting it reports `Unschedulable` |
 | `kube-state` | `DependencyStall` | Pods are Ready **and** the Service's EndpointSlices report ready endpoints **and** the workload's log carries the failing-call line |
 | `kube-state` | `PDBGridlock` | Pods are Ready **and** the PodDisruptionBudget reports exactly `0` disruptions allowed |
@@ -277,7 +294,8 @@ unrelated. The names are reserved and prefixed: `simian-reachable-before`,
 `simian-envoy-runtime`, `simian-image-pull-failed`, `simian-crash-looping`,
 `simian-oom-killed`, `simian-unschedulable`, `simian-job-failed`,
 `simian-workload-ready`, `simian-no-endpoints`, `simian-claim-pending`,
-`simian-endpoints-ready`, `simian-dependency-stalled`.
+`simian-endpoints-ready`, `simian-dependency-stalled`,
+`simian-restarts-climbing`, `simian-crash-loop-visible`.
 
 ### A synthesized fault has no SOT half, and that is not an oversight
 
@@ -308,9 +326,67 @@ had visibly landed. Both crash-loop kinds now read
 `lastState.terminated.reason`, which is stable from the first restart on:
 `Error` for a non-zero exit, `OOMKilled` for a memory kill.
 
-`ImageUnresolvable` is the exception that may read `state.waiting.reason`: its
-container never starts, so there is no restart cycle to race against and the
-pod stays in `ImagePullBackOff`. `Unschedulable` reads the `PodScheduled`
+### Stable is not the same as landed
+
+That fix bought a second bug, and the deterministic subject found it. Stable
+from the first restart on means the gate passes *at* the first restart — 2.3
+seconds after apply on GKE 1.36, with the container having died exactly once.
+The harness then handed the scenario to `k8s-lookout` and scored it on whether
+it could see a crash loop, which at that point had not happened. Recall 0.00 on
+a fault reported as landed. Nothing was wrong with the detector.
+
+So both crash-loop kinds carry a second gate, `simian-restarts-climbing`, which
+waits for every container to reach `restartCount >= 5`. The number is the
+kubelet's backoff schedule read off: 10s, 20s, 40s, 80s, 160s puts the fifth
+restart about 150 seconds in, and from there the pod spends 160 seconds of every
+160 in `waiting: CrashLoopBackOff`. Before then the backoff windows are shorter
+than the gaps between them, which is the real reason polling for the waiting
+reason earlier was a coin flip — the state is not yet where the pod lives.
+
+That threshold is where a crash loop becomes continuously observable *by
+anything*. It is not tuned to any subject's thresholds, and it should not be: a
+gate calibrated against one detector's rules would score that detector on
+Simian's timing rather than on its judgement.
+
+The cost is real and is paid on purpose. A crash-loop scenario cannot settle in
+under two and a half minutes, its lease has to cover that twice over, and the
+parity pack's crash-loop and cascade scenarios grew to `10m` and `12m`. A gate
+that passes early is not faster; it is wrong sooner.
+
+### Landed is not the same as steady
+
+Even then the harness asked its question about a second after the restart
+counter ticked, which is the one moment a loop looks least like one. Three
+consecutive live runs of the same scenario against the same cluster scored
+severity **0.67, 1.00, 1.00** — full recall every time, and a namespace verdict
+that turned on which side of a restart the scan happened to land. Two runs of
+one scenario that disagree are a harness bug by definition: with a deterministic
+subject there is nothing else left to vary. That is the property `k8s-lookout`
+is in the suite to provide, and no agent subject could have shown it.
+
+So both kinds end on a third gate, `simian-crash-loop-visible`, which is
+`state.waiting.reason` contains `CrashLoopBackOff` — the criterion the first two
+were written to avoid. It is safe *here* and nowhere earlier, and the difference
+is the gate before it: below five restarts the backoff window is 10s to 80s and
+sampling inside one that short caught the state one poll in six, while from the
+fifth restart the window is 160s and the pod both enters CrashLoopBackOff and
+stays there.
+
+It is not instant. Measured across three consecutive runs, the gate passed in
+**65.6s, 78.4s and 82.4s** — 32 to 40 polls, each well inside one 160s window
+and nowhere near its start. Its timeout is set above the slowest of those with
+room to spare rather than trimmed to them.
+
+It is not there to prove the fault landed; the two gates before it did that. It
+is there to hand the subject a steady state instead of a transient. A test in
+`pkg/catalog` enforces the ordering for every kind: nothing may read
+`state.waiting.reason` unless a restart-count gate has already run, with
+`ImageUnresolvable` the one exception — its container never starts, so there is
+no restart cycle to race.
+
+`ImageUnresolvable` is the one kind that may read `state.waiting.reason`
+outright: its container never starts, so there is no restart cycle to race
+against and the pod stays in `ImagePullBackOff`. `Unschedulable` reads the `PodScheduled`
 condition's reason rather than `phase == Pending`, which would also pass while
 an image is still pulling.
 
