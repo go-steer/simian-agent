@@ -935,7 +935,7 @@ within a group is independent of its siblings.
 | #62 ✅ | `pkg/eval`: `Report`, `Subject`, and the seven measures | M | #60 |
 | #63 ✅ | `cmd/simian-eval` + `exec:`/`noop:` adapters + arena lifecycle, namespace fencing, and the artifacts scored back through #66 | M | #53, #62 |
 | #64 ✅ | **Lookout subject + the scored e2e in CI** — §6.7. The `lookout:` adapter, then the crash-loop gate bug it found on its first live run (#108), then `make eval-lookout` in the `e2e-kind` workflow: smoke on push, whole pack weekly | M | #61, #63 |
-| #65 | `core-sre-agent` subject; reproduce its existing baseline through this rig | M | #64 |
+| #65 ✅ | **`core-sre-agent` subject; its own baseline reproduced through this rig** — the `sre-agent:` adapter, the transcript kept in `--out`, and the label leak the agent found on its first live run (§6.4.1). On the parity pack: `hallucinated_fault`, `fault_severity` and `root_cause` land within ±0.01 of the agent's own `sre-eval-live` baseline; recall differs by exactly one fixture, and it is the one both projects already distrust. See `pkg/scenario/packs/parity/README.md` | M | #64 |
 | #66 ✅ | `simian evaluate`: audit + report artifacts joined on `ScenarioID`, `NOT SCORED` rows, `--min-efficacy` refusal | S | #62 |
 | **Phase 5 — the product** |
 | #67 | Dataplane pack (5 scenarios), starting with the `stress-real` / `latency-not-saturation` matched pair | L | #55, #61 |
