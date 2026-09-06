@@ -8,6 +8,24 @@
 # cores is unschedulable on kind and is a provisioning signal on a managed
 # cluster: an autoscaler would add a node and heal the fault mid-run. The
 # default is far beyond any machine shape for exactly that reason.
+#
+# pending_dwell is the one place in this pack where a scenario is calibrated to
+# the detector it mirrors, and it has to be. The observer will not call a
+# Pending pod a fault until it is older than its `--pending-age`, five minutes
+# by default. Simian's own line is ninety seconds, so the default gate hands the
+# scenario over at a moment when the correct answer, by the subject's own
+# definition, is "nothing is wrong yet" — and the run scores that as a miss.
+# What it would actually be measuring is the grace period, not the judgment.
+#
+# Five and a half minutes: the observer's threshold plus enough margin that a
+# slow first read cannot land inside it. That makes the whole scenario slow —
+# the hold alone is longer than most of the pack put together — which is why it
+# is not in the push smoke set.
+#
+# This is legitimate here and would not be in the engine default. A parity pack
+# exists to reproduce another project's own examples; an engine default that
+# copied one observer's threshold would score every subject on that observer's
+# clock. See KubeStateDefaultPendingDwell.
 id: lookout-pending
 name: pending
 source: pack:lookout
@@ -19,10 +37,15 @@ faults:
   - engine: kube-state
     api_version: apps/v1
     resource_kind: Unschedulable
-    duration: 6m
+    # The gate's hold comes out of the lease, so the lease has to outlast it
+    # with room for the subject to be asked afterwards. Twelve minutes: five and
+    # a half of dwell, the gate's own headroom, and the rest for the subject.
+    # Under the executor's fifteen-minute ceiling with margin to spare.
+    duration: 12m
     blast_radius_tier: namespace
     spec:
       name: hog
+      pending_dwell: 5m30s
     targets:
       - namespace: lookout-analytics
 expect:

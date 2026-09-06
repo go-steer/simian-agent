@@ -58,20 +58,26 @@ type k8sSpec struct {
 	expectContain string
 	expectEmpty   bool
 	expectAtLeast int
+	dwell         time.Duration
 	timeout       time.Duration
 	interval      time.Duration
 }
 
 // describe renders the success condition for a timeout message.
 func (s k8sSpec) describe() string {
+	var cond string
 	switch {
 	case s.expectEmpty:
-		return "empty output"
+		cond = "empty output"
 	case s.expectAtLeast > 0:
-		return fmt.Sprintf("every value at least %d", s.expectAtLeast)
+		cond = fmt.Sprintf("every value at least %d", s.expectAtLeast)
 	default:
-		return fmt.Sprintf("%q in output", s.expectContain)
+		cond = fmt.Sprintf("%q in output", s.expectContain)
 	}
+	if s.dwell > 0 {
+		cond += fmt.Sprintf(", held for %s", s.dwell)
+	}
+	return cond
 }
 
 // satisfied reports whether one poll's output meets the condition.
@@ -142,6 +148,10 @@ func (k *K8sProber) Run(ctx context.Context, p simian.ProbeSpec, target Target) 
 	start := time.Now()
 	deadline := start.Add(spec.timeout)
 	var lastErr error
+	// heldSince is when the condition most recently started holding, zero when
+	// it is not holding now. With no dwell the first satisfied poll passes and
+	// this is only ever set once.
+	var heldSince time.Time
 	for {
 		res.Attempts++
 		out, err := k.poll(ctx, gvr, spec, jp)
@@ -151,13 +161,29 @@ func (k *K8sProber) Run(ctx context.Context, p simian.ProbeSpec, target Target) 
 			// ever errored reports the error rather than a bare "not seen".
 			lastErr = err
 			res.Observed = ""
+			// A read that failed is not evidence the condition still holds.
+			// Restarting the hold is the conservative reading, and the one that
+			// matches what dwell is for: the claim is that the state was
+			// continuously observable, and this poll observed nothing.
+			heldSince = time.Time{}
 		} else {
 			lastErr = nil
 			res.Observed = out
 			if spec.satisfied(out) {
-				res.Passed = true
-				res.Elapsed = time.Since(start)
-				return res
+				now := time.Now()
+				if heldSince.IsZero() {
+					heldSince = now
+				}
+				if now.Sub(heldSince) >= spec.dwell {
+					res.Passed = true
+					res.Elapsed = time.Since(start)
+					return res
+				}
+			} else {
+				// Flickered. The clock restarts rather than accumulating,
+				// because "steady" is what the dwell is asserting and a state
+				// that came back is not one that stayed.
+				heldSince = time.Time{}
 			}
 		}
 
@@ -261,6 +287,9 @@ func parseK8sSpec(raw map[string]any, target Target) (k8sSpec, error) {
 				"expect_at_least", s.expectAtLeast)
 		}
 	}
+	if s.dwell, err = optDuration(raw, "dwell", s.dwell); err != nil {
+		return s, err
+	}
 	if s.timeout, err = optDuration(raw, "timeout", s.timeout); err != nil {
 		return s, err
 	}
@@ -312,6 +341,17 @@ func parseK8sSpec(raw map[string]any, target Target) (k8sSpec, error) {
 	}
 	if s.interval <= 0 {
 		return s, fmt.Errorf("k8s probe: %q must be positive, got %s", "interval", s.interval)
+	}
+	if s.dwell < 0 {
+		return s, fmt.Errorf("k8s probe: %q cannot be negative, got %s", "dwell", s.dwell)
+	}
+	if s.dwell >= s.timeout {
+		// The dwell starts when the condition first holds, so a probe whose
+		// dwell is its whole budget can only pass if the condition was already
+		// true on the first poll. It would read as a strict gate and behave as
+		// a race.
+		return s, fmt.Errorf("k8s probe: %q (%s) must be shorter than %q (%s): the hold starts after the condition first holds, so there has to be room for both",
+			"dwell", s.dwell, "timeout", s.timeout)
 	}
 	return s, nil
 }

@@ -346,6 +346,18 @@ type kubeStateGate struct {
 	// threshold. Wins over expectAtLeast when set.
 	expectAtLeastFrom func(simian.FaultManifest) int
 
+	// dwellFrom computes how long the condition has to keep holding before the
+	// gate lets go, for a kind whose fault is an age rather than a state. Only
+	// one kind needs it, and the comment on that gate is where the reasoning
+	// lives. Zero means the first true reading is enough, which is what every
+	// other gate here wants.
+	dwellFrom func(simian.FaultManifest) time.Duration
+
+	// timeoutFrom computes the budget, for a gate whose dwell the manifest can
+	// lengthen: the prober rejects a dwell that fills its whole timeout, so the
+	// two have to move together. Wins over timeout when set.
+	timeoutFrom func(simian.FaultManifest) time.Duration
+
 	timeout string
 }
 
@@ -415,6 +427,20 @@ var workloadRolledOutGate = kubeStateGate{
 	// pull, container start, readiness. What is left is one controller noticing
 	// what another one wrote.
 	timeout: "60s",
+}
+
+// kubeStatePendingTimeout is the budget the Unschedulable gate gets: its dwell
+// plus room to reach it. The prober rejects a dwell that fills its whole
+// timeout — the hold only starts once the condition holds — so a manifest that
+// lengthens the dwell has to lengthen the budget with it, and computing the
+// second from the first is what keeps them from drifting apart.
+//
+// Two minutes of headroom. Reaching the condition at all is fast: the scheduler
+// writes Unschedulable on its first failed pass, measured in single-digit
+// seconds. The headroom is for the pod existing at all — image pull, node
+// pressure, a slow apiserver on a two-core runner.
+func kubeStatePendingTimeout(m simian.FaultManifest) time.Duration {
+	return KubeStatePendingDwell(m) + 2*time.Minute
 }
 
 // kubeStateReplicas is how many replicas this manifest's workload will have,
@@ -502,7 +528,16 @@ var kubeStateGates = map[string][]kubeStateGate{
 		// while an image is still being pulled.
 		jsonPath: "{.items[*].status.conditions[*].reason}",
 		expect:   "Unschedulable",
-		timeout:  "60s",
+		// The only gate in this table that waits on a clock rather than on a
+		// state, because this is the only kind whose fault *is* a duration.
+		// Every other kind here has a moment where the thing became true;
+		// "nothing can schedule this pod" is true two seconds after Apply and
+		// is not yet worth anyone's attention, which is precisely what a
+		// scheduler that is merely busy also looks like.
+		//
+		// So the gate holds. See KubeStatePendingDwell for the number.
+		dwellFrom:   KubeStatePendingDwell,
+		timeoutFrom: kubeStatePendingTimeout,
 	}},
 	KubeStateJobFailure: {{
 		probeName: ProbeJobFailed,
@@ -824,10 +859,19 @@ func kubeStateProbes(m simian.FaultManifest) []simian.ProbeSpec {
 		if g.expectFrom != nil {
 			want = g.expectFrom(m)
 		}
+		timeout := g.timeout
+		if g.timeoutFrom != nil {
+			timeout = g.timeoutFrom(m).String()
+		}
 		spec := map[string]any{
 			"label_selector": key + "=" + name,
-			"timeout":        g.timeout,
+			"timeout":        timeout,
 			"interval":       "2s",
+		}
+		if g.dwellFrom != nil {
+			if d := g.dwellFrom(m); d > 0 {
+				spec["dwell"] = d.String()
+			}
 		}
 		typ := g.probeType
 		if typ == "" {
@@ -989,6 +1033,22 @@ func stringField(spec map[string]any, field string) string {
 	}
 	s, _ := spec[field].(string)
 	return s
+}
+
+// durationField reads a Go duration string off a spec. A value that does not
+// parse is treated as absent rather than as an error, matching every other
+// reader here: these run while building a probe, with no way to report, and the
+// driver is the layer that rejects a malformed spec.
+func durationField(spec map[string]any, field string) (time.Duration, bool) {
+	raw := stringField(spec, field)
+	if raw == "" {
+		return 0, false
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, false
+	}
+	return d, true
 }
 
 // intField accepts the shapes a decoded JSON spec can carry a number in.
