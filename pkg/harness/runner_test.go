@@ -507,6 +507,10 @@ func TestRemediationIsNotInferredFromSilence(t *testing.T) {
 				Arena:           newFakeArena(),
 				Injector:        inj,
 				RemediationPoll: 5 * time.Millisecond,
+				// Both cases here are cases where teardown's wait-for-cleared
+				// never succeeds — that is what they are testing on the way in
+				// — so without this the test pays the whole grace period.
+				ClearedGracePeriod: 10 * time.Millisecond,
 			}
 			runs, err := r.Run(t.Context())
 			if err != nil {
@@ -516,6 +520,69 @@ func TestRemediationIsNotInferredFromSilence(t *testing.T) {
 				t.Errorf("ClearedAt = %s, want zero", runs[0].ClearedAt)
 			}
 		})
+	}
+}
+
+// Deleted is not the same as gone, which is the same lesson this codebase
+// keeps relearning one layer at a time.
+//
+// Clear issues a delete against a CR with a finalizer. The chaos controller
+// then has to undo what it did — take the iptables rules out, stop the
+// stressors — before the object leaves the API server. The arena refuses to be
+// destroyed while chaos is live in it, and rightly so, so a teardown that runs
+// in that window fails and leaves the namespace standing. Observed on GKE with
+// a NetworkChaos partition over two pods, which is slow enough to lose the
+// race and quiet enough that the only trace is a warning.
+func TestTheArenaIsNotTornDownUntilTheChaosHasActuallyGone(t *testing.T) {
+	inj := newFakeInjector()
+	inj.clearDelay = 30 * time.Millisecond
+
+	var liveAtTeardown int
+	arena := newFakeArena()
+	arena.onTeardown = func(ns string) {
+		active, err := inj.ListActive(t.Context(), ns)
+		if err != nil {
+			t.Errorf("ListActive: %v", err)
+		}
+		liveAtTeardown = len(active)
+	}
+
+	r := &Runner{
+		Pack:     packOf(scenarioIn("s-1", "ns-a", 1)),
+		Subject:  &fakeSubject{},
+		Arena:    arena,
+		Injector: inj,
+	}
+	if _, err := r.Run(t.Context()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if liveAtTeardown != 0 {
+		t.Errorf("%d fault(s) still leased when the arena was torn down; the real arena would have refused", liveAtTeardown)
+	}
+}
+
+// And it does not wait forever for one that is never going to go. Spending the
+// whole teardown budget on a wedged finalizer would leave every *later*
+// namespace standing too, which is a worse outcome than the one warning.
+func TestTeardownGivesUpOnAFaultThatWillNotClear(t *testing.T) {
+	inj := newFakeInjector()
+	inj.clearIsNoop = true
+
+	arena := newFakeArena()
+	r := &Runner{
+		Pack:               packOf(scenarioIn("s-1", "ns-a", 1)),
+		Subject:            &fakeSubject{},
+		Arena:              arena,
+		Injector:           inj,
+		ClearedGracePeriod: 20 * time.Millisecond,
+	}
+	if _, err := r.Run(t.Context()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if got := arena.tornDown(); len(got) != 1 || got[0] != "ns-a" {
+		t.Errorf("torn down = %v, want [ns-a] attempted anyway", got)
 	}
 }
 

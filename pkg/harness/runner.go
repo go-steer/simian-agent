@@ -97,6 +97,15 @@ const (
 	DefaultTeardownTimeout = 2 * time.Minute
 )
 
+// How long teardown waits for a cleared fault to actually leave the cluster,
+// and how often it asks. Not flags: this is a property of how long a chaos
+// controller takes to run its finalizer, not a thing an operator tunes. The
+// grace period is a Runner field only so tests do not have to spend it.
+const (
+	DefaultClearedGracePeriod = 30 * time.Second
+	clearedPoll               = 500 * time.Millisecond
+)
+
 // Runner executes a pack against a subject.
 type Runner struct {
 	Pack     scenario.Pack
@@ -131,6 +140,11 @@ type Runner struct {
 	// cancellation. Without a bound, a Ctrl-C into a wedged API server would
 	// hang the harness on the way out.
 	TeardownTimeout time.Duration
+
+	// ClearedGracePeriod is how long teardown waits, after deleting the chaos,
+	// for the controller to finish its finalizer and the objects to go. Zero
+	// means DefaultClearedGracePeriod.
+	ClearedGracePeriod time.Duration
 
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
@@ -465,6 +479,36 @@ func (r *Runner) allCleared(ctx context.Context, namespaces, uids []string) bool
 	return true
 }
 
+// waitCleared blocks until none of uids is leased any more, or the grace
+// period runs out. It reports whether they went.
+//
+// Bounded rather than patient: this runs inside the teardown budget, and a
+// controller that has not finished recovering a fault in half a minute is not
+// going to finish in the next two. Better to try the teardown, let the arena's
+// own safety check refuse it, and leave a namespace and a warning behind than
+// to spend the whole budget here and leave every later namespace behind too.
+func (r *Runner) waitCleared(ctx context.Context, namespaces, uids []string) bool {
+	grace := r.ClearedGracePeriod
+	if grace <= 0 {
+		grace = DefaultClearedGracePeriod
+	}
+	ctx, cancel := context.WithTimeout(ctx, grace)
+	defer cancel()
+
+	ticker := time.NewTicker(clearedPoll)
+	defer ticker.Stop()
+	for {
+		if r.allCleared(ctx, namespaces, uids) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
 // teardown clears whatever is still leased and destroys the arenas it made.
 //
 // It runs on a context that ignores cancellation, with its own deadline. A
@@ -488,6 +532,20 @@ func (r *Runner) teardown(ctx context.Context, log *slog.Logger, namespaces, sub
 	for _, uid := range faultUIDs {
 		if err := r.Injector.Clear(ctx, uid); err != nil {
 			log.Warn("harness: clearing fault failed", slog.String("fault_uid", uid), slog.String("error", err.Error()))
+		}
+	}
+	// And then wait for them to actually be gone, which is not the same thing.
+	//
+	// Clear issues a delete. A chaos CR has a finalizer, and the controller has
+	// to undo what it did — take the iptables rules out, stop the stressors,
+	// put resolv.conf back — before the object goes away. Tearing the arena
+	// down in that window fails the safety check, and the namespace is left
+	// standing with a warning nobody reads until the next run collides with it.
+	// Observed on GKE with a NetworkChaos partition over two pods.
+	if len(faultUIDs) > 0 && len(namespaces) > 0 {
+		if !r.waitCleared(ctx, namespaces, faultUIDs) {
+			log.Warn("harness: faults still leased after the grace period; arena teardown may refuse",
+				slog.String("namespaces", strings.Join(namespaces, ",")))
 		}
 	}
 	// Then the substrate, before the namespace that holds it. Destroying it
