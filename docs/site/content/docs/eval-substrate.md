@@ -662,10 +662,24 @@ tools, which is a completely different bug with a completely different fix.
 Without the lookout row you cannot tell those apart. This is the single most
 actionable number the rig can produce, and it costs one subprocess adapter.
 
-The e2e runs in CI as `simian-eval --pack lookout --subject exec:lookout`,
+The e2e runs in CI as `simian-eval --pack lookout --subject lookout:<binary>`,
 on kind, on a schedule — deliberately mirroring lookout's own
 `.github/workflows/e2e-kind.yml` (push-to-main smoke, weekly full) so the two
-repos' cluster jobs stay recognisably the same shape.
+repos' cluster jobs stay recognisably the same shape. Shipped in `e2e-kind`'s
+`Lookout eval` step, driven by `dev/tools/eval-lookout` (`make eval-lookout`).
+
+The scheme is `lookout:` rather than `exec:` because the detector emits the
+finding stream Simian grades — object kind, name, canonical reason, severity,
+one JSON record per line — but not a report envelope with a `findings` key, and
+it should not grow one. A detector with a Simian-shaped output mode is the
+coupling this whole section refuses. The shape translation lives on our side of
+the process boundary, in `pkg/harness/subject/lookout.go`.
+
+What CI gates on is the efficacy rate, not the score. Every fault must land;
+recall is a measurement of the detector, and a detector that gets worse is a
+coverage gap to file against lookout rather than a reason to fail Simian's
+build. The whole pack takes about six minutes on kind, of which four are
+`lookout-crash-loop` waiting for the loop to become continuously observable.
 
 ## 7. Deliverable D — the intelligence
 
@@ -833,7 +847,7 @@ within a group is independent of its siblings.
 | **Phase 4 — the rig** |
 | #62 ✅ | `pkg/eval`: `Report`, `Subject`, and the seven measures | M | #60 |
 | #63 ✅ | `cmd/simian-eval` + `exec:`/`noop:` adapters + arena lifecycle, namespace fencing, and the artifacts scored back through #66 | M | #53, #62 |
-| #64 | **Lookout subject + the scored e2e in CI** — §6.7 | M | #61, #63 |
+| #64 ✅ | **Lookout subject + the scored e2e in CI** — §6.7. The `lookout:` adapter, then the crash-loop gate bug it found on its first live run (#108), then `make eval-lookout` in the `e2e-kind` workflow: smoke on push, whole pack weekly | M | #61, #63 |
 | #65 | `core-sre-agent` subject; reproduce its existing baseline through this rig | M | #64 |
 | #66 ✅ | `simian evaluate`: audit + report artifacts joined on `ScenarioID`, `NOT SCORED` rows, `--min-efficacy` refusal | S | #62 |
 | **Phase 5 — the product** |

@@ -27,7 +27,7 @@ VERSION        ?= dev
 IMAGE          := $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(VERSION)
 
 .PHONY: all build test vet tidy clean run-serve fmt ci image image-push \
-        cluster cluster-down e2e
+        cluster cluster-down e2e eval-lookout
 
 all: vet test build
 
@@ -77,6 +77,15 @@ cluster-down:
 # hermetic.
 e2e:
 	dev/tools/test-e2e
+
+# Score the lookout pack against `make cluster`, with k8s-lookout as the
+# subject. `make e2e` asserts the substrate works; this asserts the whole
+# pipeline does — inject, gate on efficacy, ask, score — against a subject that
+# gives the same answer twice. Pass arguments through with ARGS:
+#
+#   make eval-lookout ARGS="--only lookout-image-pull"
+eval-lookout:
+	dev/tools/eval-lookout $(ARGS)
 
 run-serve: build
 	$(BIN) serve

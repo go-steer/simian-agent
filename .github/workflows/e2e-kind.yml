@@ -14,16 +14,34 @@
 
 name: E2E (kind)
 
-# Stands up the real substrate — kind + Calico + Chaos Mesh — and asserts the
-# rig itself works: three nodes Ready, the Chaos Mesh CRDs registered with
-# chaos-daemon rolled out, and a CNI that actually enforces NetworkPolicy.
+# Stands up the real substrate — kind + Calico + Chaos Mesh — and then runs two
+# things against it, in this order:
 #
-# Those are assertions about the environment, not about Simian, and that is the
-# point. Every fault Simian injects is observed through this cluster. A cluster
-# that accepts a NetworkPolicy and ignores it, or runs a chaos-daemon pointed at
-# the wrong container socket, produces faults that never land — with no error
-# anywhere to say so. Downstream that reads as the subject under test failing to
-# notice an incident that never happened.
+#   1. The rig's own control (`make e2e`): three nodes Ready, the Chaos Mesh
+#      CRDs registered with chaos-daemon rolled out, and a CNI that actually
+#      enforces NetworkPolicy.
+#   2. A scored eval run (`make eval-lookout`): inject the lookout pack, gate
+#      each fault on its efficacy probes, ask k8s-lookout, print the scorecard.
+#
+# Step 1 first, because it is an assertion about the environment rather than
+# about Simian, and every measurement in step 2 is read through that
+# environment. A cluster that accepts a NetworkPolicy and ignores it, or runs a
+# chaos-daemon pointed at the wrong container socket, produces faults that never
+# land — with no error anywhere to say so. Downstream that reads as the subject
+# under test failing to notice an incident that never happened.
+#
+# Two tiers for step 2, mirroring lookout's own e2e-kind.yml so the two repos'
+# cluster jobs stay recognisably the same shape:
+#
+#   - push to main   → smoke: image-pull, crash-loop and the healthy control
+#                      (a fault that lands in seconds, one that takes four
+#                      minutes to become steady, and the case where nothing is
+#                      wrong and saying so is the right answer)
+#   - weekly/manual  → the whole pack
+#
+# What is gated is the efficacy rate, not the score: every fault must land, and
+# a detector that got worse at diagnosing them is k8s-lookout's bug, not a
+# reason to fail Simian's build. See dev/tools/eval-lookout.
 #
 # Deliberately NOT a pull_request job. It builds a three-node cluster and pulls
 # Calico and the Chaos Mesh chart from the network, so its failure modes include
@@ -40,7 +58,14 @@ on:
       - 'LICENSE'
       - '.github/workflows/docs*.yml'
       - '.github/workflows/release*.yml'
+  schedule:
+    - cron: '41 5 * * 1' # Mondays 05:41 UTC — off the :00 stampede
   workflow_dispatch:
+    inputs:
+      scenarios:
+        description: 'comma-separated scenario IDs for the eval (empty = the whole pack)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -59,14 +84,23 @@ env:
   # which the cluster config depends on.
   KIND_VERSION: v0.32.0
   HELM_VERSION: v3.19.0
+  # The push-to-main eval tier. Three scenarios rather than nine, chosen for
+  # coverage rather than speed: a fault that lands in two seconds, one whose
+  # three efficacy gates take about four minutes to agree it is steady, and the
+  # control where the namespace is healthy and reporting nothing is correct.
+  # The weekly run takes the other six.
+  SMOKE_SCENARIOS: lookout-image-pull,lookout-crash-loop,lookout-healthy
 
 jobs:
   e2e:
     name: e2e
     runs-on: ubuntu-latest
-    # Acceptance for #53 is "under ~10 minutes". The ceiling is set well above
-    # that so a slow run reports as slow rather than as a timeout with no logs.
-    timeout-minutes: 30
+    # Acceptance for #53 is "under ~10 minutes" for the cluster and its control.
+    # The eval adds the pack on top — measured at 5m45s for all nine scenarios
+    # on a workstation, and a two-core runner is slower than that. The ceiling
+    # is set well above the sum so a slow run reports as slow rather than as a
+    # timeout with no logs.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -101,13 +135,47 @@ jobs:
       - name: E2E suite
         run: make e2e
 
-      # Runs on success too: tearing the cluster down is part of what this
-      # workflow is here to keep working, and a runner is the only place it gets
-      # exercised on every merge.
-      - name: Cluster down
-        if: always()
-        run: make cluster-down
+      # The scored run. k8s-lookout is a deterministic detector rather than an
+      # agent, which is what makes this a test at all: two runs of one scenario
+      # that disagree have exactly one possible cause, and it is ours.
+      - name: Lookout eval
+        env:
+          # Via env, never interpolated into the script. simian-eval validates
+          # --only against the pack and errors on an unknown ID rather than
+          # running nothing, so a typo here fails loudly.
+          SCENARIOS: ${{ inputs.scenarios }}
+          SIMIAN_EVAL_OUT: runs/ci-${{ github.run_id }}
+        run: |
+          case "${{ github.event_name }}" in
+            push)
+              make eval-lookout ARGS="--only $SMOKE_SCENARIOS"
+              ;;
+            *)
+              if [ -n "$SCENARIOS" ]; then
+                make eval-lookout ARGS="--only $SCENARIOS"
+              else
+                make eval-lookout
+              fi
+              ;;
+          esac
 
+      # Kept on success as well as on failure. run.json is the scorecard's
+      # source, and the interesting question about a detector baseline is how
+      # it moved between two weeks — which needs the passing runs too.
+      - name: Upload eval run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-run-${{ github.run_id }}
+          path: runs/
+          if-no-files-found: warn
+          retention-days: 30
+
+      # Before the teardown, not after it. Every command below reads the live
+      # cluster, and `make cluster-down` deletes the nodes those reads go to —
+      # so with the two the other way round each file collected is a connection
+      # refused, swallowed by the `|| true` that is there to keep one missing
+      # component from hiding the rest.
       - name: Collect forensics
         if: failure()
         env:
@@ -122,6 +190,16 @@ jobs:
           kubectl -n chaos-mesh logs ds/chaos-daemon --tail=-1 --all-containers \
                                                >_forensics/chaos-daemon.log 2>&1 || true
           kubectl get crd -o name | grep chaos >_forensics/chaos-crds.txt 2>&1 || true
+          # Arena namespaces are torn down per scenario, so what survives a
+          # failed eval is whichever one the run died in.
+          kubectl get ns -o wide               >_forensics/namespaces.txt 2>&1 || true
+
+      # Runs on success too: tearing the cluster down is part of what this
+      # workflow is here to keep working, and a runner is the only place it gets
+      # exercised on every merge.
+      - name: Cluster down
+        if: always()
+        run: make cluster-down
 
       - name: Upload forensics
         if: failure()
@@ -153,5 +231,9 @@ jobs:
               --title "kind e2e failed: run ${{ github.run_id }}" \
               --body "The kind e2e run failed on $(date -u +%Y-%m-%d) at $SHA. Run: $RUN_URL
 
-          Cluster state is attached as the e2e-forensics artifact. Start with chaos-daemon.log and calico-node.txt: the two most likely causes are Chaos Mesh pointed at the wrong container socket and Calico failing to converge, and both present as faults that apply cleanly and do nothing. See dev/kind/cluster.yaml for why the CNI choice matters."
+          Cluster state is attached as the e2e-forensics artifact, and the eval's audit log and run.json as eval-run. Which one to read depends on the step that failed.
+
+          E2E suite: start with chaos-daemon.log and calico-node.txt. The two most likely causes are Chaos Mesh pointed at the wrong container socket and Calico failing to converge, and both present as faults that apply cleanly and do nothing. See dev/kind/cluster.yaml for why the CNI choice matters.
+
+          Lookout eval: the run failed the efficacy gate, meaning a fault Simian applied did not become observable before its probes gave up. audit.log names the probe and what it saw. That is a Simian bug by construction — the subject is a deterministic detector, so it cannot be the variable."
           fi
