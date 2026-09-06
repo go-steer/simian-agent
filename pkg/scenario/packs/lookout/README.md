@@ -99,6 +99,10 @@ fault landed — `efficacy rate 1.00`:
 | `oom` | 1.00 | 0.67 | 1.00 |
 | `pdb-gridlock` | **0.00** | 0.33 | 1.00 |
 | `pending` | 1.00 | 1.00 | 1.00 |
+| **pack mean** | **0.75** | **0.81** | **1.00** |
+
+One run, not a best-of: the subject is a detector, so a second run that
+disagreed would be a bug rather than variance.
 
 Every scenario Simian is responsible for scores 1.00. The two zeroes are the
 upstream coverage gaps below, and they are recorded here rather than filed
