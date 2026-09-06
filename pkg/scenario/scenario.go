@@ -43,6 +43,8 @@
 package scenario
 
 import (
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/go-steer/simian-agent/pkg/simian"
@@ -267,6 +269,30 @@ type Scenario struct {
 	// LintPrompt, not by convention.
 	Prompt string `json:"prompt"`
 
+	// Substrate names a registered SUT to stand up in the scenario's
+	// namespace before any fault is applied, and take down after. Empty means
+	// the faults synthesize their own subject matter, which is what every
+	// pack did before this field existed.
+	//
+	// # Why a scenario ever needs one
+	//
+	// A kube-state fault brings its own workload: the fault *is* the
+	// Deployment it creates. That works for everything whose symptom is
+	// visible on a Kubernetes object — a pod that will not pull, a rollout
+	// that will not finish. It stops working the moment the symptom is a
+	// property of traffic. Nothing about "the p99 doubled" is stored in the
+	// API server, and a fault cannot inject latency into a caller that does
+	// not exist.
+	//
+	// The obvious workaround — one fault to synthesize a caller and a callee,
+	// a second to degrade them — does not work, and the reason is worth
+	// recording so nobody spends an afternoon rediscovering it: kube-state
+	// appends a suffix derived from the fault UID to every workload it
+	// creates, so the second fault cannot name, label-select or otherwise
+	// predict what the first one made. Substrate is the deterministic-name
+	// half that the faults then attack.
+	Substrate string `json:"substrate,omitempty"`
+
 	// Faults are the manifests to apply, each carrying its own Settle probes
 	// so that a fault which did not land is never graded as though it had.
 	Faults []simian.FaultManifest `json:"faults"`
@@ -313,6 +339,26 @@ type Scenario struct {
 
 	// Source records where this scenario came from.
 	Source Source `json:"source"`
+}
+
+// Namespaces returns the distinct namespaces this scenario's faults target,
+// sorted.
+//
+// This is the same derivation the scorer uses to decide which findings are in
+// scope, so the namespace the harness provisions is the namespace the ground
+// truth is about — and, for a scenario with a Substrate, the namespace the
+// substrate is deployed into.
+func (s Scenario) Namespaces() []string {
+	var out []string
+	for _, f := range s.Faults {
+		for _, t := range f.Targets {
+			if t.Namespace != "" && !slices.Contains(out, t.Namespace) {
+				out = append(out, t.Namespace)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Roots returns the expectations marked as root causes.

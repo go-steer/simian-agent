@@ -131,6 +131,7 @@ func runEval(ctx context.Context, o *options, out, progress io.Writer) error {
 		Pack:            pack,
 		Subject:         subj,
 		Arena:           newArena(o, p, runID, logger),
+		Substrates:      p.substrates,
 		Injector:        p.executor,
 		Auditor:         auditor,
 		Only:            o.only,

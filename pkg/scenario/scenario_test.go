@@ -14,7 +14,12 @@
 
 package scenario
 
-import "testing"
+import (
+	"slices"
+	"testing"
+
+	"github.com/go-steer/simian-agent/pkg/simian"
+)
 
 // TestExpectedFindingMatchingIsParityWithTheAgentRig is the load-bearing test
 // of this package.
@@ -154,5 +159,46 @@ func TestRootsAndControls(t *testing.T) {
 	}
 	if !(Scenario{}).IsControl() {
 		t.Error("a scenario with no expectations is a control")
+	}
+}
+
+// Namespaces is the derivation the harness provisions from and the scorer
+// scopes findings by. They have to be the same list, so there is one of it.
+func TestNamespacesIsTheScorersDerivation(t *testing.T) {
+	cases := []struct {
+		name string
+		s    Scenario
+		want []string
+	}{
+		{
+			"one fault, one namespace",
+			Scenario{Faults: []simian.FaultManifest{
+				{Targets: []simian.TargetRef{{Namespace: "ns-a"}}},
+			}},
+			[]string{"ns-a"},
+		},
+		{"a control names none", Scenario{}, nil},
+		{
+			"duplicates collapse and the result is sorted",
+			Scenario{Faults: []simian.FaultManifest{
+				{Targets: []simian.TargetRef{{Namespace: "z"}, {Namespace: "a"}}},
+				{Targets: []simian.TargetRef{{Namespace: "a"}, {Namespace: "m"}}},
+			}},
+			[]string{"a", "m", "z"},
+		},
+		{
+			"a target with no namespace contributes nothing",
+			Scenario{Faults: []simian.FaultManifest{
+				{Targets: []simian.TargetRef{{Namespace: ""}, {Namespace: "ns-a"}}},
+			}},
+			[]string{"ns-a"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.s.Namespaces(); !slices.Equal(got, tc.want) {
+				t.Errorf("Namespaces() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

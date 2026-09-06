@@ -268,13 +268,15 @@ manifest:
 
 ```go
 type Scenario struct {
-    ID       string             // stamped into every audit event; the join key
-    Name     string             // "cascade", "latency-not-saturation"
-    Prompt   string             // names the task, never the fault
-    Faults   []FaultManifest    // each carrying Settle probes
-    Expect   []ExpectedFinding
-    Severity string             // scenario-level expected severity
-    Source   string             // "pack:parity" | "generated:topology"
+    ID        string            // stamped into every audit event; the join key
+    Name      string            // "cascade", "latency-not-saturation"
+    Prompt    string            // names the task, never the fault
+    Substrate string            // a registered SUT to stand up first; usually empty
+    Faults    []FaultManifest   // each carrying Settle probes
+    Expect    []ExpectedFinding
+    AlsoTrue  []string          // reason tokens the fault really produces, not required
+    Severity  string            // scenario-level expected severity
+    Source    string            // "pack:parity" | "generated:topology"
 }
 
 type ExpectedFinding struct {
@@ -286,6 +288,24 @@ type ExpectedFinding struct {
     Root            bool     // root cause vs downstream symptom
 }
 ```
+
+**`Substrate` is the odd one out, and it is worth saying why it exists.** Every
+scenario up to the dataplane pack synthesized its own subject matter: a
+`kube-state` fault *is* the Deployment it creates, so there is nothing to
+deploy first. That works for any symptom a Kubernetes object records — a pod
+that will not pull, a rollout that will not finish. It stops working the
+moment the symptom is a property of traffic, because nothing about "the p99
+doubled" is stored in the API server and a fault cannot slow down a caller
+that does not exist.
+
+The obvious workaround does not work, and the reason is worth recording:
+`kube-state` appends a suffix derived from the fault UID to every workload it
+creates, so a second fault in the same scenario cannot name, label-select or
+otherwise predict what the first one made. `Substrate` is the
+deterministic-name half — the same SUT registry, manifests and readiness wait
+that `simian sut deploy` uses — that the faults then attack. The harness
+stands it up after the arena and before the first fault, and takes it down
+before the arena goes.
 
 `ExpectedFinding` is deliberately field-for-field `faults.Want`. Same matching
 semantics, same tolerances, so numbers from the two rigs are comparable

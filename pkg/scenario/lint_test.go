@@ -265,3 +265,27 @@ func TestAnEmptyExemptionIsRejected(t *testing.T) {
 		t.Errorf("Validate() = %v, want a complaint about the empty entry", err)
 	}
 }
+
+// A substrate is deployed into the namespaces the faults name. A scenario
+// whose faults name none has nowhere to put it, and the failure mode is quiet:
+// the SUT lands in whatever namespace the client defaulted to, which is not an
+// arena and is not cleaned up.
+func TestValidateRejectsASubstrateWithNowhereToGo(t *testing.T) {
+	s := promptScenario("Check namespace shop.")
+	s.Substrate = "edge-upstream"
+	// A target with a name but no namespace: enough to pass the "fault has
+	// targets" check, and nowhere for a SUT to go.
+	s.Faults[0].Targets = []simian.TargetRef{{Name: "checkout-api"}}
+	err := s.Validate()
+	if err == nil || !strings.Contains(err.Error(), "nowhere to deploy it") {
+		t.Fatalf("Validate() = %v; want a complaint about the missing namespace", err)
+	}
+}
+
+func TestValidateAcceptsASubstrateWithANamespace(t *testing.T) {
+	s := promptScenario("Check namespace shop.")
+	s.Substrate = "edge-upstream"
+	if err := s.Validate(); err != nil {
+		t.Fatalf("Validate() = %v; want nil", err)
+	}
+}

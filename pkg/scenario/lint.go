@@ -193,6 +193,14 @@ func (s Scenario) Validate() error {
 	if s.Severity != "" && !s.Severity.Valid() {
 		errs = append(errs, fmt.Errorf("scenario %q: Severity %q is not a known severity", s.ID, s.Severity))
 	}
+	// A substrate is deployed into the namespaces the faults name, because
+	// that is the only namespace a scenario has. One that names none has
+	// nowhere to put it, and would stand up a workload in whatever namespace
+	// the client happened to default to.
+	if s.Substrate != "" && len(s.Namespaces()) == 0 {
+		errs = append(errs, fmt.Errorf(
+			"scenario %q: Substrate %q is set but no fault names a namespace; there is nowhere to deploy it", s.ID, s.Substrate))
+	}
 	if err := LintPrompt(s); err != nil {
 		errs = append(errs, err)
 	}
