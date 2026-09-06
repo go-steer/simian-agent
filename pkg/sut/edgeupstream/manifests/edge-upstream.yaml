@@ -1,0 +1,287 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The edge-upstream substrate: two nginx tiers and a Service between them.
+#
+# Document order matters. The Manager applies these in order and deletes them
+# in reverse, so the ConfigMaps and Services exist before the Deployments that
+# mount and resolve them.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: upstream-config
+data:
+  # The callee, and it does real work per request. That is not decoration.
+  #
+  # The first version of this substrate served a static 200 from nginx, and
+  # CPU saturation could not move it: with the cgroup pegged at its limit and
+  # stress-ng taking everything it could, a request still came back in the
+  # same 360ms it took idle, because answering it needs microseconds of CPU
+  # and CFS hands out a slice every period regardless. Measured on GKE — the
+  # cgroup was demonstrably at 100% of quota and the latency did not budge.
+  #
+  # So the saturation fixture had nothing to saturate. A shell loop is a
+  # blunt instrument, but it is the honest one: it makes the callee CPU-bound
+  # per request, which is the property a saturation incident actually has and
+  # the property that makes "scale it up" the right answer.
+  #
+  # The work happens before the headers, which is the difference between a
+  # fixture that works and one that quietly does not. busybox httpd streams
+  # CGI output as the script produces it, so a script that greets the client
+  # first hands nginx a 200 status line in milliseconds and only then goes
+  # slow. nginx forwards the 200, kubelet sees a 200, and the edge stays Ready
+  # while every response through it is truncated — measured exactly that way
+  # before this was moved. Emitting nothing until the work is done is what
+  # makes the caller's read timeout fire, and a 504 is a thing kubelet can
+  # act on.
+  work: |
+    #!/bin/sh
+    i=0
+    while [ $i -lt 20000 ]; do i=$((i + 1)); done
+    echo "Content-type: text/plain"
+    echo
+    echo "upstream ok"
+  # Static, and deliberately not the CGI path. This is what the loopback
+  # readiness probe asks for, so a saturated upstream stays Ready: it is up,
+  # it is serving, it is slow. A fixture where saturation shows as a NotReady
+  # pod is a fixture a subject can solve off `kubectl get pods` without ever
+  # asking about traffic.
+  healthz: |
+    upstream ok
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edge-config
+data:
+  # The caller. Two paths, and the difference between them is the scenario:
+  #
+  #   /healthz  answers locally. It is what liveness uses, so a slow upstream
+  #             never gets the edge killed and restarted — a CrashLoopBackOff
+  #             is a different incident with a different diagnosis, and one
+  #             the fixture did not inject.
+  #   /         goes through to the upstream. It is what readiness uses and
+  #             what the efficacy probe measures, so a slow upstream shows up
+  #             as the edge going NotReady — which is the only part of "the
+  #             p99 doubled" the API server records.
+  #
+  # The proxy timeouts are what turn slow into observable. They are set below
+  # the readiness probe's own timeout so the 504 arrives while kubelet is
+  # still listening, rather than the probe timing out on its own — the two
+  # failures look identical in the Deployment status and are told apart only
+  # by the edge's access log.
+  default.conf: |
+    server {
+        listen 80;
+        access_log off;
+
+        location = /healthz {
+            default_type text/plain;
+            return 200 "edge ok\n";
+        }
+        location / {
+            proxy_pass http://upstream:80/cgi-bin/work;
+            proxy_connect_timeout 1s;
+            proxy_send_timeout 1s;
+            proxy_read_timeout 1s;
+            proxy_next_upstream off;
+        }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: upstream
+  labels:
+    app: upstream
+spec:
+  type: ClusterIP
+  selector:
+    app: upstream
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: edge
+  labels:
+    app: edge
+spec:
+  type: ClusterIP
+  selector:
+    app: edge
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: upstream
+  labels:
+    app: upstream
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: upstream
+  template:
+    metadata:
+      labels:
+        app: upstream
+    spec:
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: httpd
+          image: busybox:1.36
+          command: ["httpd", "-f", "-p", "80", "-h", "/www"]
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: content
+              mountPath: /www/healthz
+              subPath: healthz
+            - name: content
+              mountPath: /www/cgi-bin/work
+              subPath: work
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              # A CPU limit, deliberately. StressChaos joins the target's
+              # cgroup, so without a limit the stressors compete for a whole
+              # node and the callee barely notices. With one, the cgroup is
+              # capped and the CGI loop is starved inside it — which is the
+              # saturation the fixture exists to produce.
+              cpu: 200m
+              memory: 64Mi
+          # An exec probe on loopback, not an httpGet, and against the static
+          # path rather than the CGI one. Two reasons, and they pull in
+          # different directions:
+          #
+          # Loopback, because a kubelet httpGet arrives over the pod's
+          # interface, so a netem delay on that interface delays the probe
+          # too and the upstream goes NotReady — at which point the scenario
+          # is about a NotReady pod, readable straight off `kubectl get
+          # pods`, and the dataplane question is never asked.
+          #
+          # Static, because the CGI path is the one saturation slows down. A
+          # readiness probe that pays the per-request CPU cost would flip the
+          # upstream NotReady under stress, and the saturation fixture would
+          # collapse into the same "a pod is unhealthy" answer.
+          #
+          # What survives both is the truth of the scenario: the upstream is
+          # up and serving, and whatever is wrong is wrong about the traffic.
+          readinessProbe:
+            exec:
+              command: ["wget", "-q", "-O", "-", "http://127.0.0.1/healthz"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["wget", "-q", "-O", "-", "http://127.0.0.1/healthz"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+      volumes:
+        - name: content
+          configMap:
+            name: upstream-config
+            # 0755: busybox httpd runs anything under /www/cgi-bin, and it
+            # can only run it if it is executable.
+            defaultMode: 0755
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edge
+  labels:
+    app: edge
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: edge
+  template:
+    metadata:
+      labels:
+        app: edge
+    spec:
+      terminationGracePeriodSeconds: 5
+      initContainers:
+        # nginx resolves a literal upstream host once, at config load, and
+        # exits if the name is not there yet. The Service is applied first,
+        # but a Service that exists is not yet a Service that resolves, and
+        # the gap is long enough to cost the edge a restart or two. A restart
+        # count nobody injected is a finding a subject will report and be
+        # charged for inventing, so the race is closed here rather than
+        # tolerated.
+        #
+        # wget rather than nslookup, and not for style: busybox's nslookup
+        # walks every search domain in resolv.conf and exits non-zero if any
+        # of them NXDOMAINs, which on GKE they all do except the first. The
+        # loop never terminates and the edge sits in Init forever. Asking for
+        # the health endpoint tests the thing that actually matters anyway —
+        # not that the name resolves, but that the callee is answering.
+        - name: wait-for-upstream
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - "until wget -q -T 2 -O /dev/null http://upstream/healthz; do sleep 1; done"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/conf.d
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          # Readiness goes through the proxy; liveness stays local. See the
+          # edge-config ConfigMap for why the two paths differ.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 80
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+      volumes:
+        - name: config
+          configMap:
+            name: edge-config

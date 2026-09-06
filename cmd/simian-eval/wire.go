@@ -37,6 +37,7 @@ import (
 	"github.com/go-steer/simian-agent/pkg/probe"
 	"github.com/go-steer/simian-agent/pkg/simian"
 	"github.com/go-steer/simian-agent/pkg/sut"
+	"github.com/go-steer/simian-agent/pkg/sut/edgeupstream"
 	"github.com/go-steer/simian-agent/pkg/sut/onlineboutique"
 )
 
@@ -45,6 +46,7 @@ func init() {
 	// MustRegister panics on a duplicate name, and a plane built twice in one
 	// process — which a test does — would take the whole binary down.
 	onlineboutique.Register()
+	edgeupstream.Register()
 }
 
 // plane is everything the run needs on the cluster side, built once.
