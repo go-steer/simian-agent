@@ -106,6 +106,23 @@ var kubeStateDefaultReplicas = map[string]int{
 	KubeStateBackendCrashLoop: 2,
 }
 
+// KubeStateCrashLoopRestarts is how many restarts a crash-loop gate waits for
+// before it will call the fault landed.
+//
+// Five, and the number is not arbitrary. The kubelet's backoff schedule is
+// 10s, 20s, 40s, 80s, 160s, so a container that exits immediately reaches its
+// fifth restart about 150 seconds in — and from there it spends 160 seconds of
+// every 160 in `waiting: CrashLoopBackOff`. Before that the backoff windows are
+// shorter than the gaps between them, which is why polling for the waiting
+// reason earlier is a coin flip: the state is not yet where the pod lives.
+//
+// So this threshold is the point at which a crash loop becomes continuously
+// observable, by anything, rather than a state you have to be lucky to sample.
+// That it also happens to be where k8s-lookout's restart-count check fires is a
+// convenience, not the reason: a gate tuned to one subject's thresholds would
+// score that subject on Simian's timing rather than on its judgement.
+const KubeStateCrashLoopRestarts = 5
+
 // KubeStateDefaultReplicas is how many replicas a kind synthesizes when the
 // manifest does not choose.
 //

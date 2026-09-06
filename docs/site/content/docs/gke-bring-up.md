@@ -114,7 +114,7 @@ What the run above produced:
 | `network-policy` partition | gate passed in 5.2s | SOT saw the target answer, Settle saw the connection time out |
 | `envoy-fault` | not exercised | needs Envoy injection, which Online Boutique's gRPC probes will not tolerate |
 | `kube-state` `ImageUnresolvable` | gate passed in 13.1s | pods reached `ImagePullBackOff` after 7 polls |
-| `kube-state` `ContainerExitLoop` | gate passed 4 runs of 4, 2.2s–4.4s | `lastState.terminated.reason: Error`, exit 1 |
+| `kube-state` `ContainerExitLoop` | 3 runs of 3: 2.2s / 172–180s / 66–82s | `lastState.terminated.reason: Error`, exit 1, *then* `restartCount: 5` on every container, *then* `state.waiting.reason: CrashLoopBackOff` |
 | `kube-state` `MemoryLimitSqueeze` | gate passed in 4.4s | `lastState.terminated.reason: OOMKilled`, exit 137 |
 | `kube-state` `Unschedulable` | gate passed in 2.2s | `PodScheduled=False`, reason `Unschedulable`; node count unchanged, no `TriggeredScaleUp` |
 | `kube-state` `JobFailure` | gate passed in 37.0s over 18 polls | the Job's condition reached `BackoffLimitExceeded` after its retries ran out — the slowest gate in the set, because the backoff is the fault |
@@ -229,6 +229,61 @@ what the gate reads. Four consecutive runs against the same cluster passed in
 2.2s, 4.4s, 2.2s and 2.3s — two or three polls each, no spread worth the name.
 If you write your own probe against a restarting workload, read `lastState`, not
 `state`.
+
+### …and stable from the first restart is too early to ask anybody
+
+Read the poll trace above again, though, and the fix has a hole in it. Stable
+from the first restart on means the gate is satisfied *at* the first restart.
+On this cluster it passed 2.3s after apply, with the container having died
+exactly once — and the harness then handed the namespace to `k8s-lookout` and
+scored it on whether it could see a crash loop. It could not, because there was
+not one yet. Recall 0.00 against a fault the scorecard called landed.
+
+That is a Simian bug of the precise kind the deterministic subject exists to
+surface, and no agent subject would have found it: with an agent you cannot tell
+a harness that asked too early from a subject that answered badly.
+
+Both crash-loop kinds now carry a second gate on `restartCount >= 5`. The number
+is the backoff schedule read off — 10s, 20s, 40s, 80s, 160s — and the poll trace
+above is the evidence for it: the one window that caught `CrashLoopBackOff` was
+at `restarts=4`, which is the 80-second backoff. From the fifth restart the pod
+sits in `waiting: CrashLoopBackOff` for 160 seconds out of every 160, which is
+when a crash loop stops being a state you have to sample luckily.
+
+Measured: the second gate passed in **165.5s over 79 polls**, observing `5`, and
+the same scenario's recall went 0.00 → 1.00. It costs two and a half minutes per
+crash-loop scenario, and the `parity` pack's crash-loop and cascade leases grew
+to `10m` and `12m` to cover it. A gate that passes early is not faster; it is
+wrong sooner.
+
+That left one residual, and the deterministic subject found that too. The
+harness asks its question about a second after the counter ticks, which is the
+moment a loop looks least like one. Three consecutive runs scored severity
+**0.67, 1.00, 1.00**: on the first, `lookout` caught the container between
+restarts and reported `ExcessiveRestarts` at `warning`; on the other two it saw
+`CrashLoopBackOff` and said `critical`. Identical inputs, identical subject,
+different number.
+
+The tempting fix is to move the scenario's ground truth to `warning` so the
+score comes out at 1.00. That would be calibrating a scenario against one
+subject's thresholds, which is the opposite of what the pack is for — and it
+would leave the flapping in place, just below the resolution of this particular
+measure.
+
+The actual fix is a third gate, `state.waiting.reason` contains
+`CrashLoopBackOff`, run *after* the restart count. That is the criterion this
+section spent two pages explaining you cannot poll for, and past the fifth
+restart it stops being one: the backoff window widens to 160s, and inside a
+window that long the pod reliably enters the state and stays. It took 65.6s,
+78.4s and 82.4s across three runs — 32 to 40 polls, not the poll or two the
+first draft of this section predicted, so the timeout is set above the slowest
+with room rather than trimmed to it.
+
+The first two gates prove the fault landed; the third makes sure the subject is
+looking at a steady state rather than a transient. With all three in place,
+three consecutive runs of the lookout pack's three-scenario slice scored
+identically on every measure — recall, severity and hallucination all 1.00 —
+which is the property a deterministic subject is in the suite to establish.
 
 ### What the `MemoryLimitSqueeze` shakedown found
 

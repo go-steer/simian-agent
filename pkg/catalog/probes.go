@@ -48,6 +48,8 @@ const (
 	ProbeRolloutStuck      = "simian-rollout-stuck"
 	ProbeRolloutServing    = "simian-rollout-serving"
 	ProbeCertPresent       = "simian-cert-present"
+	ProbeRestartsClimbing  = "simian-restarts-climbing"
+	ProbeCrashLoopVisible  = "simian-crash-loop-visible"
 )
 
 // Envoy runtime keys, mirrored from pkg/sut/envoy's bootstrap. Duplicated
@@ -100,7 +102,7 @@ var gates = map[gateKey]gate{
 		build:    kubeStateProbes,
 	},
 	{simian.EngineKubeState, KubeStateContainerExitLoop}: {
-		describe: "the synthesized workload's pods must report CrashLoopBackOff",
+		describe: "the synthesized workload's containers must report a last termination of Error, have restarted enough times to be looping rather than merely broken, and be sitting in CrashLoopBackOff when the gate lets go",
 		build:    kubeStateProbes,
 	},
 	{simian.EngineKubeState, KubeStateMemoryLimitSqueeze}: {
@@ -120,7 +122,7 @@ var gates = map[gateKey]gate{
 		build:    kubeStateProbes,
 	},
 	{simian.EngineKubeState, KubeStateBackendCrashLoop}: {
-		describe: "the synthesized workload's containers must report a last termination of Error, and the Service that selects them must report every endpoint not ready",
+		describe: "the synthesized workload's containers must report a last termination of Error, have restarted enough times to be looping, and be sitting in CrashLoopBackOff, and the Service that selects them must report every endpoint not ready",
 		build:    kubeStateProbes,
 	},
 	{simian.EngineKubeState, KubeStateUnboundClaim}: {
@@ -332,7 +334,48 @@ type kubeStateGate struct {
 	// one that proves the objects are there.
 	expectEmpty bool
 
+	// expectAtLeast asserts the jsonpath renders counters, all of them at
+	// least this large. For a gate whose evidence is a repetition rather than
+	// a state: the difference between a container that failed and one that is
+	// failing over and over cannot be written as a string match.
+	expectAtLeast int
+
 	timeout string
+}
+
+// crashLoopVisibleGate is the last gate on both crash-loop kinds: the pod is in
+// `waiting: CrashLoopBackOff` at the moment the harness stops asking.
+//
+// This is the criterion the other two gates were written to avoid, and it is
+// safe here for a reason that is only true here: the gate before it has already
+// waited out the short backoff windows. Below five restarts the kubelet's
+// backoff is 10s to 80s, and sampling for this state inside a window that short
+// caught it one poll in six. From the fifth restart the window is 160s, and the
+// pod both enters CrashLoopBackOff and stays there.
+//
+// It is not instant, and the first draft of this comment claimed it was.
+// Measured across three consecutive runs on GKE 1.36, the gate passed in 65.6s,
+// 78.4s and 82.4s — 32 to 40 polls, each of them comfortably inside one 160s
+// window but nowhere near its start. The timeout is set well above the slowest
+// of those rather than close to it.
+//
+// Without it the harness asks its question about a second after the restart
+// counter ticks, which is the one moment a loop looks least like one. Measured:
+// three consecutive runs of lookout-crash-loop scored severity 0.67, 1.00, 1.00
+// — full recall every time, and a namespace verdict that depended on which side
+// of a restart the scan landed. Two runs of one scenario that disagree are a
+// harness bug by definition, because there is nothing else left to vary.
+//
+// So the gate is not here to prove the fault landed; the two before it did
+// that. It is here to hand the subject a steady state instead of a transient.
+var crashLoopVisibleGate = kubeStateGate{
+	probeName: ProbeCrashLoopVisible,
+	jsonPath:  "{.items[*].status.containerStatuses[*].state.waiting.reason}",
+	expect:    "CrashLoopBackOff",
+	// One replica is enough, and expect_contains can only say that anyway. The
+	// stronger claim — every replica is looping — is the gate above, and this
+	// one is about what is on screen rather than about what landed.
+	timeout: "3m",
 }
 
 // kubeStateGates are run in order and stop at the first failure, which is what
@@ -349,27 +392,46 @@ var kubeStateGates = map[string][]kubeStateGate{
 		expect:  "ImagePullBackOff",
 		timeout: "90s",
 	}},
-	KubeStateContainerExitLoop: {{
-		probeName: ProbeCrashLooping,
-		// Not state.waiting.reason == CrashLoopBackOff, which is the obvious
-		// choice and is a coin flip. A container that exits immediately spends
-		// almost all of its time with the *previous* termination showing in
-		// `state.terminated`; the kubelet only flips to `waiting:
-		// CrashLoopBackOff` in a narrow window around each restart decision.
-		// Measured on GKE 1.36: one poll in six saw CrashLoopBackOff, and a
-		// 90s / 44-poll gate missed it entirely on one run and passed in 6.5s
-		// on another. A gate that flaky reports a fault that landed as inert,
-		// which is the exact failure the gates exist to prevent.
-		//
-		// lastState.terminated.reason is stable from the first restart on.
-		jsonPath: "{.items[*].status.containerStatuses[*].lastState.terminated.reason}",
-		// "Error" is the kubelet's reason for a non-zero exit. It reads
-		// generic, and is specific enough here: the workload is synthesized,
-		// so nothing else could have terminated these pods, and the one other
-		// way this engine kills a container reports OOMKilled instead.
-		expect:  "Error",
-		timeout: "90s",
-	}},
+	KubeStateContainerExitLoop: {
+		{
+			probeName: ProbeCrashLooping,
+			// Not state.waiting.reason == CrashLoopBackOff, which is the obvious
+			// choice and is a coin flip. A container that exits immediately spends
+			// almost all of its time with the *previous* termination showing in
+			// `state.terminated`; the kubelet only flips to `waiting:
+			// CrashLoopBackOff` in a narrow window around each restart decision.
+			// Measured on GKE 1.36: one poll in six saw CrashLoopBackOff, and a
+			// 90s / 44-poll gate missed it entirely on one run and passed in 6.5s
+			// on another. A gate that flaky reports a fault that landed as inert,
+			// which is the exact failure the gates exist to prevent.
+			//
+			// lastState.terminated.reason is stable from the first restart on.
+			jsonPath: "{.items[*].status.containerStatuses[*].lastState.terminated.reason}",
+			// "Error" is the kubelet's reason for a non-zero exit. It reads
+			// generic, and is specific enough here: the workload is synthesized,
+			// so nothing else could have terminated these pods, and the one other
+			// way this engine kills a container reports OOMKilled instead.
+			expect:  "Error",
+			timeout: "90s",
+		},
+		{
+			// And it is still going. The gate above is stable from the first
+			// restart on, which is exactly its problem: it passes 2s after
+			// Apply, when the container has died once and nothing is looping
+			// yet. Handing the scenario to a subject there asks it to see a
+			// crash loop that has not happened.
+			probeName:     ProbeRestartsClimbing,
+			jsonPath:      "{.items[*].status.containerStatuses[*].restartCount}",
+			expectAtLeast: KubeStateCrashLoopRestarts,
+			// Double the ~150s the backoff schedule needs, which leaves room
+			// for a slow image pull and not much more. It is deliberately not
+			// more generous than that: every gate's worst case has to fit
+			// inside the fault's lease, and the lease has to fit inside the
+			// executor's 15-minute ceiling.
+			timeout: "5m",
+		},
+		crashLoopVisibleGate,
+	},
 	KubeStateMemoryLimitSqueeze: {{
 		probeName: ProbeOOMKilled,
 		// lastState, not state, for the reason above, plus one specific to
@@ -452,6 +514,17 @@ var kubeStateGates = map[string][]kubeStateGate{
 			expect:    "Error",
 			timeout:   "90s",
 		},
+		{
+			// Both replicas, and the "every value" reading of expect_at_least
+			// is doing real work here: a Service whose backends are half down
+			// is a different diagnosis from one whose backends are all down,
+			// and this kind is the second.
+			probeName:     ProbeRestartsClimbing,
+			jsonPath:      "{.items[*].status.containerStatuses[*].restartCount}",
+			expectAtLeast: KubeStateCrashLoopRestarts,
+			timeout:       "5m",
+		},
+		crashLoopVisibleGate,
 		{
 			probeName:   ProbeEndpointsNotReady,
 			resource:    "endpointslices",
@@ -720,9 +793,12 @@ func kubeStateProbes(m simian.FaultManifest) []simian.ProbeSpec {
 			}
 			spec["resource"] = resource
 			spec["jsonpath"] = g.jsonPath
-			if g.expectEmpty {
+			switch {
+			case g.expectEmpty:
 				spec["expect_empty"] = true
-			} else {
+			case g.expectAtLeast > 0:
+				spec["expect_at_least"] = g.expectAtLeast
+			default:
 				spec["expect_contains"] = want
 			}
 		}

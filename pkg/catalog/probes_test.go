@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/client-go/util/jsonpath"
 
@@ -415,16 +416,25 @@ func TestEveryKubeStateKindIsGatedOnItsOwnFailureState(t *testing.T) {
 	// The reason each kind proves itself on. A gate that fired on something
 	// broader — Pending, or any crash loop — would pass for a fault other than
 	// the one injected, which is the same lie as not gating at all.
-	want := map[string]struct{ probe, reason string }{
-		KubeStateImageUnresolvable:  {ProbeImagePullFailed, "ImagePullBackOff"},
-		KubeStateContainerExitLoop:  {ProbeCrashLooping, "Error"},
-		KubeStateMemoryLimitSqueeze: {ProbeOOMKilled, "OOMKilled"},
-		KubeStateUnschedulable:      {ProbeUnschedulable, "Unschedulable"},
+	want := map[string]struct {
+		probe, reason string
+		// gates is how many probes the kind carries in total. ContainerExitLoop
+		// is the one that needs three. A last termination of Error proves the
+		// container died the right way and says nothing about whether it is
+		// still dying, which is the whole content of "crash loop"; the restart
+		// count proves that; and the waiting reason makes the loop visible at
+		// the moment the subject is asked rather than a second after a restart.
+		gates int
+	}{
+		KubeStateImageUnresolvable:  {ProbeImagePullFailed, "ImagePullBackOff", 1},
+		KubeStateContainerExitLoop:  {ProbeCrashLooping, "Error", 3},
+		KubeStateMemoryLimitSqueeze: {ProbeOOMKilled, "OOMKilled", 1},
+		KubeStateUnschedulable:      {ProbeUnschedulable, "Unschedulable", 1},
 	}
 	for kind, w := range want {
 		probes := DefaultProbes(kubeStateManifest(kind, nil))
-		if len(probes) != 1 {
-			t.Fatalf("%s: probes = %v, want exactly one", kind, names(probes))
+		if len(probes) != w.gates {
+			t.Fatalf("%s: probes = %v, want %d", kind, names(probes), w.gates)
 		}
 		p := probes[0]
 		if p.Name != w.probe {
@@ -573,7 +583,10 @@ func TestAGateWhoseEvidenceIsAnAbsenceIsNeverFirst(t *testing.T) {
 			if g.expectEmpty && g.expect != "" {
 				t.Errorf("%s: %q sets both expect and expectEmpty", kind, g.probeName)
 			}
-			if !g.expectEmpty && g.expect == "" && g.expectFrom == nil {
+			if g.expectAtLeast > 0 && (g.expect != "" || g.expectEmpty || g.expectFrom != nil) {
+				t.Errorf("%s: %q sets expectAtLeast alongside another condition", kind, g.probeName)
+			}
+			if !g.expectEmpty && g.expectAtLeast == 0 && g.expect == "" && g.expectFrom == nil {
 				t.Errorf("%s: %q asserts nothing", kind, g.probeName)
 			}
 			if g.expect != "" && g.expectFrom != nil {
@@ -600,7 +613,9 @@ func TestTheBundleKindsAreGatedOnEveryHalfOfTheirFault(t *testing.T) {
 		// Root then symptom, and for this kind that ordering is the kind. Both
 		// halves are positive assertions, so neither is forced to go second;
 		// the crash loop is the cause and the endpoints are what it did.
-		{KubeStateBackendCrashLoop, []string{ProbeCrashLooping, ProbeEndpointsNotReady}, []string{k8s, k8s}},
+		{KubeStateBackendCrashLoop,
+			[]string{ProbeCrashLooping, ProbeRestartsClimbing, ProbeCrashLoopVisible, ProbeEndpointsNotReady},
+			[]string{k8s, k8s, k8s, k8s}},
 		{KubeStateUnboundClaim, []string{ProbeClaimPending, ProbeUnschedulable}, []string{k8s, k8s}},
 		// The only kind with a probe that is not a k8s read, because it is the
 		// only kind with no field to read: the two healthy assertions come off
@@ -918,6 +933,103 @@ func TestTheCertGateMatchesAPEMHeaderThroughBase64(t *testing.T) {
 	}
 }
 
+// The bug this gate was rewritten for: `lastState.terminated.reason == "Error"`
+// is true from the first restart on, so on GKE 1.36 it passed 2.3s after Apply
+// — with the container having died exactly once. The harness then handed the
+// scenario to a subject and scored it on whether it could see a crash loop,
+// which at that point had not happened. A deterministic subject scored 0.00
+// recall on a fault Simian reported as landed, and that is a Simian bug.
+//
+// Every kind whose ground truth says "loop" now has to prove the repetition.
+func TestEveryCrashLoopKindWaitsForTheLoopAndNotTheFirstExit(t *testing.T) {
+	for _, kind := range []string{KubeStateContainerExitLoop, KubeStateBackendCrashLoop} {
+		t.Run(kind, func(t *testing.T) {
+			probes := DefaultProbes(kubeStateManifest(kind, nil))
+			i := slices.IndexFunc(probes, func(p simian.ProbeSpec) bool { return p.Name == ProbeRestartsClimbing })
+			if i < 0 {
+				t.Fatalf("probes = %v, none of them counts restarts", names(probes))
+			}
+			p := probes[i]
+			if got := p.Spec["jsonpath"]; got != "{.items[*].status.containerStatuses[*].restartCount}" {
+				t.Errorf("jsonpath = %v, want the restart counter", got)
+			}
+			if got := p.Spec["expect_at_least"]; got != KubeStateCrashLoopRestarts {
+				t.Errorf("expect_at_least = %v, want %d", got, KubeStateCrashLoopRestarts)
+			}
+			if _, ok := p.Spec["expect_contains"]; ok {
+				t.Error("the counter gate also carries a string match")
+			}
+			// The kubelet's backoff schedule puts the fifth restart about 150s
+			// after the first exit. A gate that gives up before then fails
+			// against a fault that is landing exactly as designed.
+			d, err := time.ParseDuration(p.Spec["timeout"].(string))
+			if err != nil {
+				t.Fatalf("timeout: %v", err)
+			}
+			if d < 3*time.Minute {
+				t.Errorf("timeout = %s, too short for %d kubelet backoffs", d, KubeStateCrashLoopRestarts)
+			}
+
+			// And the reason gate is still there. On its own it is too early;
+			// dropped, the kind would pass against any restarting container,
+			// including one this engine OOM-kills.
+			if !slices.Contains(names(probes), ProbeCrashLooping) {
+				t.Errorf("probes = %v, the last-termination gate is gone", names(probes))
+			}
+			if i == 0 {
+				t.Error("the counter runs first; the cheaper reason gate should fail fast ahead of a multi-minute wait")
+			}
+
+			// And last, the loop has to be on screen when the harness stops
+			// asking. Without this the subject is questioned about a second
+			// after the counter ticks — the one moment a loop looks least like
+			// one — and three consecutive live runs scored severity 0.67, 1.00,
+			// 1.00 on identical inputs. It is safe here and nowhere earlier:
+			// past the fifth restart the backoff is 160s against a container
+			// that exits at once, so the state is where the pod lives rather
+			// than something to catch.
+			j := slices.IndexFunc(probes, func(p simian.ProbeSpec) bool { return p.Name == ProbeCrashLoopVisible })
+			if j < 0 {
+				t.Fatalf("probes = %v, none of them waits for the backoff to be visible", names(probes))
+			}
+			if got := probes[j].Spec["expect_contains"]; got != "CrashLoopBackOff" {
+				t.Errorf("expect_contains = %v, want CrashLoopBackOff", got)
+			}
+			if j < i {
+				t.Error("the waiting reason is checked before the restart count, which is where it is a coin flip")
+			}
+		})
+	}
+}
+
+// The rule the crash-loop gates were rewritten around, stated once for every
+// kind: state.waiting.reason is only readable when nothing is racing it.
+func TestNoGateReadsTheWaitingReasonWhileItIsStillACoinFlip(t *testing.T) {
+	for kind, gs := range kubeStateGates {
+		for i, g := range gs {
+			if !strings.Contains(g.jsonPath, "state.waiting") {
+				continue
+			}
+			// ImageUnresolvable's container never starts, so there is no
+			// restart cycle to race and the pod simply stays in
+			// ImagePullBackOff. Every other kind that reads this field is
+			// reading it about a container that restarts, and has to have
+			// established the backoff is long first.
+			if kind == KubeStateImageUnresolvable {
+				continue
+			}
+			var prior []string
+			for _, p := range gs[:i] {
+				prior = append(prior, p.probeName)
+			}
+			if !slices.Contains(prior, ProbeRestartsClimbing) {
+				t.Errorf("%s: %q reads %q with only %v ahead of it; nothing has established that the backoff outlasts the container",
+					kind, g.probeName, g.jsonPath, prior)
+			}
+		}
+	}
+}
+
 // BackendCrashLoop and SelectorDrift both end in "the Service is not serving"
 // and are told apart by what the EndpointSlice says. This is the test that the
 // two gates cannot pass against each other's fault — which is what makes the
@@ -925,10 +1037,10 @@ func TestTheCertGateMatchesAPEMHeaderThroughBase64(t *testing.T) {
 // distinction.
 func TestTheBackendCrashLoopGateReadsUnreadyEndpointsNotMissingOnes(t *testing.T) {
 	gs := kubeStateGates[KubeStateBackendCrashLoop]
-	if len(gs) != 2 {
-		t.Fatalf("gates = %d, want the crash loop plus the endpoints", len(gs))
+	if len(gs) != 4 {
+		t.Fatalf("gates = %d, want the crash loop, the restart count, the visible backoff and the endpoints", len(gs))
 	}
-	crash, endpoints := gs[0], gs[1]
+	crash, endpoints := gs[0], gs[3]
 
 	// The crash-loop half is the same assertion ContainerExitLoop makes, and
 	// deliberately so: the pods are broken the same way, and a second spelling
