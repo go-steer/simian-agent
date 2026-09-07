@@ -199,6 +199,7 @@ expect:
       - ProbeFailure
       - NotReady
       - NoReadyReplicas
+      - RolloutIncomplete
       - Unavailable
     min_severity: warning
 # True, and not required.

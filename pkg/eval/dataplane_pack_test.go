@@ -210,6 +210,35 @@ func TestTheNetworkShapedScenariosDoNotLicenseEachOther(t *testing.T) {
 	}
 }
 
+// What a subject that reads object status and stops actually says, measured
+// rather than imagined.
+//
+// Run against GKE, the reference object-status subject reports the identical
+// finding on all five critical scenarios — `Deployment/edge RolloutIncomplete`,
+// critical — which is the pack's whole premise arriving as data. The score has
+// to say the true thing about that answer: it described the symptom, it named
+// no cause, and it invented nothing.
+//
+// It scored 0.00 recall before this test existed, because RolloutIncomplete was
+// in no expectation's list and in no family — uncreditable and unchargeable at
+// once. Half of that was a gap in the vocabulary and half was a gap in the
+// scenarios, and both are easy to reintroduce by tidying a reason list.
+func TestTheObjectStatusAnswerScoresTheSymptomAndNoCause(t *testing.T) {
+	for _, id := range []string{pairNetwork, pairCPU, abort503, partition, dnsHole} {
+		s := dataplaneScenario(t, id)
+		run := oneFinding(s.Namespaces()[0], "Deployment", "edge", "RolloutIncomplete")
+
+		t.Run(s.Name, func(t *testing.T) {
+			// The symptom, credited. One of two expectations.
+			approx(t, scoreOf(t, s, run, MeasureRecall), 0.5)
+			// The cause, not named.
+			approx(t, scoreOf(t, s, run, MeasureRootCause), 0)
+			// And nothing invented, because the word is an observation.
+			approx(t, scoreOf(t, s, run, MeasureHallucination), 1)
+		})
+	}
+}
+
 func reasonsOf(s scenario.Scenario) []string {
 	var out []string
 	for _, e := range s.Expect {

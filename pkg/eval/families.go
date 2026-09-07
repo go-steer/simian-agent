@@ -265,6 +265,17 @@ var failureFamilies = map[string][]string{
 // observation wherever it is true and charged with a diagnosis nowhere, and
 // the pack's 5xx scenario is graded on whether it named the right object as
 // the root — which is the thing that scenario is actually about.
+//
+// RolloutIncomplete is here and RolloutStalled is not, and the line between
+// them is the line this table is drawing. "Stalled" claims the rollout has
+// stopped making progress, which is a claim about the rollout mechanism.
+// "Incomplete" claims only that it has not finished, which is true of every
+// Deployment short of its replica count for any reason at all — a bad image, a
+// full cgroup, a name that will not resolve. It is the same observation as
+// NoReadyReplicas in a different vocabulary, and it was falling through to no
+// family at all, which made it both uncreditable and unchargeable. Found by
+// running the reference object-status subject against the dataplane pack: it
+// reports exactly this word, identically, on five unrelated causes.
 var genericReasons = map[string]bool{
 	"pending":             true,
 	"failed":              true,
@@ -286,6 +297,7 @@ var genericReasons = map[string]bool{
 	"badgateway":          true,
 	"serviceunavailable":  true,
 	"gatewaytimeout":      true,
+	"rolloutincomplete":   true,
 }
 
 // normReason folds a reason the way scenario.ExpectedFinding.MatchesReason
