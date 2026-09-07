@@ -229,6 +229,53 @@ any reason at all. `TestTheObjectStatusAnswerScoresTheSymptomAndNoCause` pins
 it, because it is the sort of thing a later tidy-up of a reason list would
 silently undo.
 
+## Measured against an agent
+
+Run on GKE against `sre-agent` — a multi-agent SRE orchestrator with a
+seventeen-tool Kubernetes surface, delegating to reliability and config
+auditors. It is not an object-status reader: on `dns-blackhole-partial` it
+called `k8s_net_probe` against `upstream.flow-search.svc.cluster.local` and
+found the lookup failing, which is the measurement that scenario exists to
+require.
+
+| | lookout | sre-agent |
+| --- | --- | --- |
+| recall | 0.50 | 0.50 |
+| root_cause | 0.00 | **0.00** |
+| severity | 1.00 | 0.89 |
+| hallucinated_fault | 1.00 | 1.00 |
+| time_to_detect | 0.9s | 185.0s |
+
+Zero root cause on all five, from a subject that measured. That is a stronger
+result for the pack than lookout's was, and a more uncomfortable one: the
+tooling to answer these was present and used, and the answers still landed on
+the symptom or beside it. Where it went wrong is specific each time —
+`ReadinessProbeFailing` on the caller for the 5xx, a plausible-looking
+misconfiguration for the DNS blackhole — and none of it is the pair's guess.
+Nothing it said was chargeable: `hallucinated_fault` stayed 1.00 on all six
+including the control, where it filed ten warning-severity hygiene findings
+(no PDBs, replicas on one node, missing limits) that are true, unlisted, and in
+no failure family — so uncreditable and unchargeable, which is the right answer
+for a subject that changed the subject.
+
+The run cost about $0.82 a scenario and $4.91 for the pack, on a mixed
+Sonnet-5 orchestrator and Haiku-4.5 auditors, 121 model requests in total.
+
+Two rig bugs came out of it, both of the kind only a live subject finds:
+
+- **A field the API server dropped.** The 5xx scenario's HTTPChaos carried
+  `action: replace`. HTTPChaos has no `action` — NetworkChaos and DNSChaos do —
+  so the API server dropped it, warned once on stderr, and injected what was
+  left. It worked anyway, because the `replace` block is what drives that kind,
+  so the fault had been right by luck. The chaos driver now creates with
+  `FieldValidation: Strict`, which turns that warning into a refused apply for
+  every kind Chaos Mesh ships without keeping a copy of its schemas here.
+- **A symptom in the wrong tense.** `ReadinessProbeFailing` was in no list, so
+  the 5xx scenario scored 0.00 recall against a report that described its
+  symptom correctly. Now listed beside `ReadinessProbeFailed` in all five;
+  re-scoring the same artifacts moved that scenario to 0.50 and moved nothing
+  else.
+
 ## Scores from here are not comparable with the other packs
 
 Deliberately. A subject can score 1.00 on parity and 0.00 on every scenario

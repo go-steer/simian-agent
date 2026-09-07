@@ -102,7 +102,15 @@ func (d *Driver) Apply(ctx context.Context, m simian.FaultManifest) (string, err
 		return "", fmt.Errorf("chaos-mesh apply: set spec: %w", err)
 	}
 
-	created, err := d.dyn.Resource(gvr).Namespace(ns).Create(ctx, obj, metav1.CreateOptions{})
+	// Strict, because a chaos spec is written by hand and the default is to
+	// drop what it does not recognise. An HTTPChaos carrying `action: replace`
+	// — a field that kind does not have — applied cleanly for weeks, warned
+	// once on stderr, and injected whatever was left. That is the pack's own
+	// bug class pointed at the rig: applied is not the same as accepted. A
+	// misspelled or misplaced field is an authoring error, and the run should
+	// stop on it rather than grade a subject against a fault nobody wrote.
+	opts := metav1.CreateOptions{FieldValidation: metav1.FieldValidationStrict}
+	created, err := d.dyn.Resource(gvr).Namespace(ns).Create(ctx, obj, opts)
 	if err != nil {
 		return "", fmt.Errorf("chaos-mesh apply: create %s: %w", gvk.Kind, err)
 	}

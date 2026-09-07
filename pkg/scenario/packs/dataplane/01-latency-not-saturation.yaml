@@ -182,6 +182,11 @@ expect:
     also_accept_kinds: [Pod, ReplicaSet, Container]
     reasons:
       - ReadinessProbeFailed
+      # Same observation, different tense, and a real subject wrote it. There
+      # is no diagnostic difference between a probe that failed and one that is
+      # failing — unlike RolloutStalled vs RolloutIncomplete, where the two
+      # words claim different things — so the list carries both.
+      - ReadinessProbeFailing
       - ProbeFailure
       - NotReady
       - NoReadyReplicas

@@ -239,6 +239,31 @@ func TestTheObjectStatusAnswerScoresTheSymptomAndNoCause(t *testing.T) {
 	}
 }
 
+// The other word a real subject used for the same symptom.
+//
+// The agent run reported `Deployment/edge ReadinessProbeFailing` on the 5xx
+// scenario and scored 0.00 recall, because the lists carried
+// ReadinessProbeFailed and nothing else. That is a tense, not a diagnosis —
+// unlike RolloutStalled against RolloutIncomplete, where the two words claim
+// different things — so both belong, and a subject that describes the caller's
+// readiness failure gets the symptom either way it says it.
+//
+// Two live runs have now each turned up one of these. The failure mode is
+// quiet in exactly the wrong direction: an unlisted synonym reads as a subject
+// that saw nothing, which is the same score as a subject that said nothing.
+func TestTheSymptomIsCreditedInEitherTense(t *testing.T) {
+	for _, id := range []string{pairNetwork, pairCPU, abort503, partition, dnsHole} {
+		s := dataplaneScenario(t, id)
+		t.Run(s.Name, func(t *testing.T) {
+			for _, reason := range []string{"ReadinessProbeFailed", "ReadinessProbeFailing"} {
+				run := oneFinding(s.Namespaces()[0], "Deployment", "edge", reason)
+				approx(t, scoreOf(t, s, run, MeasureRecall), 0.5)
+				approx(t, scoreOf(t, s, run, MeasureHallucination), 1)
+			}
+		})
+	}
+}
+
 func reasonsOf(s scenario.Scenario) []string {
 	var out []string
 	for _, e := range s.Expect {
