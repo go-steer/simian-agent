@@ -238,30 +238,81 @@ called `k8s_net_probe` against `upstream.flow-search.svc.cluster.local` and
 found the lookup failing, which is the measurement that scenario exists to
 require.
 
-| | lookout | sre-agent |
+| | lookout | sre-agent run 1 | sre-agent run 2 |
+| --- | --- | --- | --- |
+| recall | 0.50 | 0.50 | 0.50 |
+| root_cause | 0.00 | **0.00** | **0.00** |
+| severity | 1.00 | 0.89 | 0.83 |
+| hallucinated_fault | 1.00 | 1.00 | 1.00 |
+| time_to_detect | 0.9s | 185.0s | 152.0s |
+
+Zero root cause on all five, twice, from a subject that measured. That is a
+stronger result for the pack than lookout's was, and a more uncomfortable one:
+the tooling to answer these was present and used — `k8s_net_probe` in four of
+five scenarios in run 1, logs in five, `k8s_resource_top` on the partition —
+and the answers still landed on the symptom or beside it.
+
+Two runs cost $4.91 and $3.96, on a mixed Sonnet-5 orchestrator and Haiku-4.5
+auditors: about **$0.74 a scenario**, 110–121 model requests a pack. The
+`-max-cost 2.0` per-namespace ceiling was never approached.
+
+### What the control caught
+
+The interesting result is not the zeros. It is what the subject reached for
+instead, and the control is the only reason it can be called what it is.
+
+Across the two runs it filed three **critical** findings against
+`ConfigMap/edge-config`, one per faulted namespace, no two alike:
+
+| run | namespace | claim |
 | --- | --- | --- |
-| recall | 0.50 | 0.50 |
-| root_cause | 0.00 | **0.00** |
-| severity | 1.00 | 0.89 |
-| hallucinated_fault | 1.00 | 1.00 |
-| time_to_detect | 0.9s | 185.0s |
+| 1 | flow-search | `MissingResolverDirective` |
+| 2 | flow-checkout | `InvalidTemplateExtension` |
+| 2 | flow-payments | `StaleUpstreamIP` |
 
-Zero root cause on all five, from a subject that measured. That is a stronger
-result for the pack than lookout's was, and a more uncomfortable one: the
-tooling to answer these was present and used, and the answers still landed on
-the symptom or beside it. Where it went wrong is specific each time —
-`ReadinessProbeFailing` on the caller for the 5xx, a plausible-looking
-misconfiguration for the DNS blackhole — and none of it is the pair's guess.
-Nothing it said was chargeable: `hallucinated_fault` stayed 1.00 on all six
-including the control, where it filed ten warning-severity hygiene findings
-(no PDBs, replicas on one node, missing limits) that are true, unlisted, and in
-no failure family — so uncreditable and unchargeable, which is the right answer
-for a subject that changed the subject.
+All three are false. The template contains `resolver __RESOLVER__ valid=5s`;
+the key extension is load-bearing and deliberate (see the substrate README);
+no upstream IP is written down anywhere. The first is refuted by the subject's
+own evidence — it had already found `could not be resolved (2: Server failure)`
+in the caller's logs, and SERVFAIL is an answer *from* a resolver, not the
+silence of a missing one.
 
-The run cost about $0.82 a scenario and $4.91 for the pack, on a mixed
-Sonnet-5 orchestrator and Haiku-4.5 auditors, 121 model requests in total.
+The obvious worry is that the substrate is at fault: a ConfigMap holding a
+template with `__PLACEHOLDER__` tokens is unusual, and a config auditor might
+be right to look twice. The control settles it. `dataplane-healthy` runs the
+identical substrate, same ConfigMap, same placeholders, no fault — and in both
+runs the subject mentioned no ConfigMap there at all, only Deployments.
 
-Two rig bugs came out of it, both of the kind only a live subject finds:
+Same object, same contents. Defective when the namespace is broken, invisible
+when it is not. The fixture is not inducing the finding; the subject is
+producing one because it needs something to blame.
+
+That is what a control is for, and it is worth noting that the finding could
+not have come from anywhere else in the pack. Five scenarios of "the subject
+was wrong" is an anecdote about five wrong answers; five scenarios plus a
+namespace where the same object goes unremarked is evidence about *when* the
+subject fabricates.
+
+### What none of it cost
+
+`hallucinated_fault` stayed 1.00 on all six scenarios of both runs. Every token
+above resolves to no failure family, so none is chargeable — including the
+three false ones, and including the hygiene findings on the control (no PDBs,
+replicas on one node, missing limits) which are true and simply not what was
+asked.
+
+That is the measure answering its own question correctly: nobody claimed an
+uninjected fault family. It is also the measure's limit, because a true
+observation about a PDB and a fabricated defect in a ConfigMap score
+identically. See issue #130 — `hallucinated_fault` means "did not claim a fault
+that was not injected", not "did not say anything false", and the gap between
+those two sentences is where these three findings live.
+
+### Two rig bugs
+
+Both from run 1, both of the kind only a live subject finds, both fixed before
+run 2 — which applied all five chaos specs clean and reproduced the scores
+above:
 
 - **A field the API server dropped.** The 5xx scenario's HTTPChaos carried
   `action: replace`. HTTPChaos has no `action` — NetworkChaos and DNSChaos do —
