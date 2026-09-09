@@ -140,15 +140,32 @@ func TestAnInjectionFailureIsNeverScoredAsAMiss(t *testing.T) {
 	}
 }
 
-// A run whose injection succeeded is scored normally even if it produced
-// nothing else, so the skip above is attributable to InjectError alone.
+// A run whose injection succeeded is graded, so the wholesale skip above is
+// attributable to InjectError alone.
+//
+// Individual measures may still decline a scenario that never asked their
+// question — this fixture injects through the kube-state engine, which leaves
+// no chaos object, so there is nothing for oracle_read to have been read. That
+// is a different thing from the blanket skip, and the difference is what is
+// asserted: every measure that can speak here does, and no skip blames the
+// injection.
 func TestAnInjectionFailureIsTheOnlyThingThatSkipsEverything(t *testing.T) {
 	s, run := scoredRun()
 	run.InjectError = ""
 
-	for _, sc := range ScoreRun(s, run) {
-		if sc.Skipped {
-			t.Errorf("%s was skipped on a run that injected cleanly: %s", sc.Name, sc.Comment)
+	scores := ScoreRun(s, run)
+	for _, sc := range scores {
+		if sc.Skipped && strings.Contains(sc.Comment, "injection failed") {
+			t.Errorf("%s was skipped for the injection on a run that injected cleanly", sc.Name)
+		}
+	}
+	for _, name := range []string{
+		MeasureRecall, MeasureRootCause, MeasureSeverity,
+		MeasureHallucination, MeasureTimeToDetect, MeasureTimeToRemediate,
+	} {
+		sc, ok := scoreNamed(scores, name)
+		if !ok || sc.Skipped {
+			t.Errorf("%s did not grade a run that injected cleanly", name)
 		}
 	}
 }
@@ -198,12 +215,13 @@ func TestScoreRunReturnsEveryMeasureOnceInOrder(t *testing.T) {
 
 // Efficacy rate is the seventh measure and is deliberately absent from the
 // per-run set, because it is a property of a suite.
-func TestDefaultMeasuresAreTheSixPerRunOnes(t *testing.T) {
+func TestDefaultMeasuresAreTheSevenPerRunOnes(t *testing.T) {
 	want := []string{
 		MeasureRecall,
 		MeasureRootCause,
 		MeasureSeverity,
 		MeasureHallucination,
+		MeasureOracleRead,
 		MeasureTimeToDetect,
 		MeasureTimeToRemediate,
 	}

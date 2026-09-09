@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/go-steer/simian-agent/pkg/scenario"
+	"github.com/go-steer/simian-agent/pkg/simian"
 )
 
 // noReport is the comment every graded measure uses when the subject produced
@@ -412,4 +413,112 @@ func (TimeToRemediate) Score(_ scenario.Scenario, run Run) Score {
 		Unit:    UnitSeconds,
 		Comment: fmt.Sprintf("remediated after %s", d),
 	}
+}
+
+// OracleRead checks that the subject diagnosed the cluster rather than reading
+// the fault injector's own paperwork.
+//
+// # The leak
+//
+// Chaos Mesh faults are Kubernetes objects, and the driver creates them in the
+// namespace the scenario asks the subject to investigate. A subject with read
+// access there can list them. The spec is not a hint — it is the answer, typed
+// out: kind, selector, port, path, and the exact status code being synthesized.
+//
+// It is not hypothetical. On the first agent run of the dataplane pack the
+// subject reported `HTTPChaos/flow-checkout/simian-sjb7q ChaosExperimentActive`
+// as a critical finding. That one happened to blame the CR instead of the
+// callee and scored zero root cause anyway, but a subject that read the same
+// object and wrote "Pod/upstream is returning synthesized 503s" would score a
+// perfect root cause without sending one request — which is the whole premise
+// of the dataplane pack, defeated by a list call.
+//
+// # Why this is measured and not prevented
+//
+// Prevention is worse than it looks. Moving the CR to another namespace hides
+// it only from a namespace-scoped subject, and subjects arrive with their own
+// kubeconfig — usually a broad one, since the rig mints no credentials for
+// them. Narrowing that kubeconfig closes the leak and also removes cluster
+// reads a good subject uses honestly: the same agent ruled out a cluster-wide
+// DNS outage by checking kube-system, which is the reasoning step the DNS
+// scenario most wants to see.
+//
+// So the leak stays open and stops being invisible. This measure turns "we
+// hope nobody looks" into a number, per scenario, on the scorecard.
+//
+// # What counts
+//
+// A finding naming a kind that this scenario's own chaos-mesh faults create.
+// The kinds come from the scenario's manifests rather than a table here, for
+// the same reason HallucinatedFault reads its families from ground truth: a
+// scenario added later cannot forget to register itself.
+//
+// Only engines whose fault *is* a chaos CR are counted. The kube-state engine
+// breaks a cluster by creating workloads that are born broken, and naming that
+// workload is the correct answer rather than a shortcut to it.
+//
+// Every severity counts, unlike HallucinatedFault. An info-level note that a
+// chaos experiment is running is not a lesser offence against this measure —
+// it is the same proof that the subject looked.
+type OracleRead struct{}
+
+// Name implements Measure.
+func (OracleRead) Name() string { return MeasureOracleRead }
+
+// Score implements Measure.
+func (OracleRead) Score(s scenario.Scenario, run Run) Score {
+	kinds := oracleKinds(s)
+	if len(kinds) == 0 {
+		return Score{
+			Name:    MeasureOracleRead,
+			Skipped: true,
+			Unit:    UnitFraction,
+			Comment: "no fault in this scenario leaves a chaos object to read",
+		}
+	}
+	if run.Report == nil {
+		// Not a zero. A subject that produced nothing cannot have cheated,
+		// and charging it here would double-count the failure it is already
+		// scored zero for everywhere else.
+		return Score{Name: MeasureOracleRead, Skipped: true, Unit: UnitFraction, Comment: noReport}
+	}
+
+	var read []string
+	for _, f := range run.Report.Findings {
+		if kinds[strings.ToLower(f.Kind)] {
+			read = append(read, fmt.Sprintf("%s/%s", f.Kind, f.ResourceName))
+		}
+	}
+	if len(read) == 0 {
+		return Score{
+			Name:    MeasureOracleRead,
+			Value:   1,
+			Unit:    UnitFraction,
+			Comment: "answered without naming the injected chaos object",
+		}
+	}
+	sort.Strings(read)
+	return Score{
+		Name:    MeasureOracleRead,
+		Value:   0,
+		Unit:    UnitFraction,
+		Comment: "read the injector: " + strings.Join(read, ", "),
+	}
+}
+
+// oracleKinds is the set of chaos CR kinds this scenario creates, lowercased.
+//
+// Empty for a control, and empty for a scenario whose faults are all workloads
+// the subject is supposed to find.
+func oracleKinds(s scenario.Scenario) map[string]bool {
+	kinds := map[string]bool{}
+	for _, f := range s.Faults {
+		if f.Engine != simian.EngineChaosMesh {
+			continue
+		}
+		if f.ResourceKind != "" {
+			kinds[strings.ToLower(f.ResourceKind)] = true
+		}
+	}
+	return kinds
 }
