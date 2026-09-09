@@ -160,11 +160,12 @@ const (
 	MeasureRootCause       = "root_cause"
 	MeasureSeverity        = "severity"
 	MeasureHallucination   = "hallucinated_fault"
+	MeasureOracleRead      = "oracle_read"
 	MeasureTimeToDetect    = "time_to_detect"
 	MeasureTimeToRemediate = "time_to_remediate"
 )
 
-// DefaultMeasures returns the six per-run measures in report order.
+// DefaultMeasures returns the seven per-run measures in report order.
 //
 // Efficacy rate is not here: it is a property of a whole suite rather than of
 // one run, and lives on Summary.
@@ -174,6 +175,7 @@ func DefaultMeasures() []Measure {
 		RootCause{},
 		SeverityDistance{},
 		HallucinatedFault{},
+		OracleRead{},
 		TimeToDetect{},
 		TimeToRemediate{},
 	}
