@@ -58,7 +58,7 @@ const waitDelay = 5 * time.Second
 
 // Exec runs a subject as a child process and reads a JSON report off stdout.
 //
-// This is the adapter that matters: it covers k8s-lookout, core-sre-agent,
+// This is the adapter that matters: it covers k8s-lookout, k8s-sre-agent,
 // mast workload bundles, `claude -p`, `gemini-cli`, and a shell script, which
 // is to say every subject anyone has actually asked to benchmark. `http:` and
 // `mcp:` are conveniences on top of a boundary this one already establishes.

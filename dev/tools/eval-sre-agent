@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Score a pack against core-sre-agent on a cluster that is already up.
+# Score a pack against k8s-sre-agent on a cluster that is already up.
 #
 # The counterpart to eval-lookout, and the reason that one exists first. This
 # subject is an LLM agent: its score moves for the fault, for the agent, and
@@ -42,11 +42,23 @@ cd "$(repo_root)"
 # The agent is built from a checkout rather than the module proxy, because it
 # is the thing under test here and the interesting version is usually the one
 # on somebody's disk. Point SIMIAN_SRE_AGENT_BIN at a build to skip this.
-agent_src="${SIMIAN_SRE_AGENT_SRC:-$HOME/projects/core-sre-agent}"
+# The repository is go-steer/k8s-sre-agent. It was called core-sre-agent for
+# one day in August 2026 and renamed on the same day, but checkouts made under
+# the old directory name outlive the rename, so both are tried before giving up.
+agent_src="${SIMIAN_SRE_AGENT_SRC:-}"
+if [[ -z "$agent_src" ]]; then
+  for candidate in "$HOME/projects/k8s-sre-agent" "$HOME/projects/core-sre-agent"; do
+    if [[ -d "$candidate" ]]; then
+      agent_src="$candidate"
+      break
+    fi
+  done
+  agent_src="${agent_src:-$HOME/projects/k8s-sre-agent}"
+fi
 agent="${SIMIAN_SRE_AGENT_BIN:-}"
 if [[ -z "$agent" ]]; then
   if [[ ! -d "$agent_src" ]]; then
-    echo "ERROR: no core-sre-agent checkout at $agent_src" >&2
+    echo "ERROR: no k8s-sre-agent checkout at $agent_src" >&2
     echo "       set SIMIAN_SRE_AGENT_SRC, or SIMIAN_SRE_AGENT_BIN to a build" >&2
     exit 1
   fi
@@ -58,7 +70,7 @@ fi
 
 # The agent's own lookout, which is *not* the one eval-lookout grades.
 #
-# It reaches lookout over MCP as a tool, and core-sre-agent pins a much later
+# It reaches lookout over MCP as a tool, and k8s-sre-agent pins a much later
 # release than Simian's baseline row does. Both pins are deliberate and they
 # are answering different questions: Simian's is "what does the detector score",
 # and must not float; the agent's is "what tools does the agent have", and is
@@ -96,7 +108,7 @@ kubecontext="$(kubectl --kubeconfig "$kubeconfig" config current-context)"
 
 out="${SIMIAN_EVAL_OUT:-runs/sre-agent-$(date -u +%Y%m%d-%H%M%S)}"
 
-echo "▸ core-sre-agent → $out (agent: $agent, its lookout: $lookout)" >&2
+echo "▸ k8s-sre-agent → $out (agent: $agent, its lookout: $lookout)" >&2
 
 # --subject-timeout 12m: the agent's own default is 8 minutes per namespace and
 #   the adapter takes a margin off whatever it is given, so this leaves the

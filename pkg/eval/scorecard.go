@@ -25,7 +25,7 @@ import (
 // DefaultMinEfficacy is the efficacy rate below which a scorecard reports the
 // harness rather than the subject.
 //
-// core-sre-agent's own live tier refuses to publish below a threshold, and the
+// k8s-sre-agent's own live tier refuses to publish below a threshold, and the
 // reasoning is worth repeating here because it is easy to talk yourself out
 // of. Every measure on a scorecard assumes the cluster was broken the way the
 // scenario said. Where it was not, a zero means "there was nothing to find"

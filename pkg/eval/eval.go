@@ -25,7 +25,7 @@
 //
 // # Simian does not import the subject
 //
-// There is no dependency on mast, core-agent or core-sre-agent, in either
+// There is no dependency on mast, core-agent or k8s-sre-agent, in either
 // direction. An adversary that shares a prompt template, a model client or a
 // Kubernetes client version with the subject can fail in a correlated way and
 // produce an eval that passes for the wrong reason. Report is Simian's own
@@ -34,7 +34,7 @@
 // # Four measures are copied, three are new
 //
 // Recall, root cause, severity and hallucination are deliberately the same
-// measures core-sre-agent's own eval tier uses, scored the same way, so the
+// measures k8s-sre-agent's own eval tier uses, scored the same way, so the
 // two rigs produce comparable numbers. Time to detect, time to remediate and
 // efficacy rate are the ones only the adversary can supply, because only the
 // adversary knows when the fault was injected and whether it landed at all.

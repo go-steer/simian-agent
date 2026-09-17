@@ -24,7 +24,7 @@ import (
 
 func renderedSummary() Summary {
 	return Summary{
-		Subject: "core-sre-agent",
+		Subject: "k8s-sre-agent",
 		Pack:    "parity",
 		Results: []ScenarioResult{
 			{
@@ -73,7 +73,7 @@ func TestWriteTextPutsTheHarnessBeforeTheSubject(t *testing.T) {
 	if harness < 0 || means < 0 || harness > means {
 		t.Errorf("harness section must come before the means:\n%s", out)
 	}
-	if !strings.Contains(out, "subject=core-sre-agent") || !strings.Contains(out, "pack=parity") {
+	if !strings.Contains(out, "subject=k8s-sre-agent") || !strings.Contains(out, "pack=parity") {
 		t.Errorf("header does not say what was graded:\n%s", out)
 	}
 	if !strings.Contains(out, "efficacy rate    0.50") {

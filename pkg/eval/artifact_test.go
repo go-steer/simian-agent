@@ -536,7 +536,7 @@ func TestALineWithNoAuditStampFallsBackToTheRecordTime(t *testing.T) {
 // --- run file ---
 
 const goodRunFile = `{
-  "subject": "core-sre-agent",
+  "subject": "k8s-sre-agent",
   "runs": [
     {
       "scenario_id": "s-1",
@@ -556,7 +556,7 @@ func TestReadRunFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadRunFile: %v", err)
 	}
-	if rf.Subject != "core-sre-agent" || len(rf.Runs) != 1 {
+	if rf.Subject != "k8s-sre-agent" || len(rf.Runs) != 1 {
 		t.Fatalf("run file = %+v", rf)
 	}
 	rec := rf.Runs[0]
@@ -651,7 +651,7 @@ func TestJoinPairsTheTwoArtifactsOnScenarioID(t *testing.T) {
 		t.Fatalf("got %d runs, want 1", len(runs))
 	}
 	run := runs[0]
-	if run.Subject != "core-sre-agent" || !run.Manifested || run.InjectError != "" {
+	if run.Subject != "k8s-sre-agent" || !run.Manifested || run.InjectError != "" {
 		t.Errorf("run = %+v", run)
 	}
 	if run.InjectedAt.IsZero() || run.DetectedAt.IsZero() {

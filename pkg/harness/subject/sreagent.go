@@ -50,7 +50,7 @@ const sreAgentFallbackTimeout = 8 * time.Minute
 // the scorer grades one, and the one it grades would be arbitrary.
 var sreAgentOwnedFlags = []string{"-namespace", "-out", "-repeat"}
 
-// SREAgent runs core-sre-agent's one-shot assessment as a subject.
+// SREAgent runs k8s-sre-agent's one-shot assessment as a subject.
 //
 // # Why this is not an exec: subject
 //
