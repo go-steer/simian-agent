@@ -165,6 +165,7 @@ The scorecard printed at the end comes from reading those two files back, so
 | `--remediation-poll` | 5s | How often to ask whether the fault is gone while the subject works, for time-to-remediate. `0` disables the watch. |
 | `--eligible-namespace` | (annotation) | Fence the run to a fixed namespace list instead of reading `simian.chaos/eligible`. Reach for this when the cluster has other tenants. |
 | `--terminating-wait` | 2m | How long to wait for a namespace left over from an earlier run to finish deleting. Namespace deletion is asynchronous, so without this, running the same pack twice in a row fails on the first run's teardown. Expiry is an `InjectError`, not a hang — a namespace held by a finalizer is not coming back. |
+| `--teardown-timeout` | 2m | Bound on cleanup, which runs even after Ctrl-C. Most of it goes on waiting for the chaos controller's finalizers: the arena refuses to be destroyed while chaos is still leased in it, so a teardown attempted before the finalizer finishes is refused and the namespace is left standing. Raise it for faults that are slow to undo — a `NetworkChaos` partition and a `DNSChaos` are the two that have needed it. |
 | `--keep-arenas` | false | Leave arena namespaces standing afterwards, for poking at a scenario that went wrong. Faults are still cleared. |
 | `--allow-short-faults` | false | Permit faults shorter than `--subject-timeout`. Off by default: the lease expires mid-investigation, the reaper clears it, and that disappearance is recorded as the subject having remediated it. |
 | `--score` | true | Off writes the artifacts and stops. |
@@ -174,3 +175,12 @@ Namespaces the run creates are annotated with `simian.chaos/eval-run=<run id>`
 and destroyed at the end. A namespace that already existed is annotated and
 **left standing** — a rig that deletes namespaces it merely found is one bad
 scenario file away from deleting something that mattered.
+
+An arena that could not be destroyed is a suite-level failure: `simian-eval`
+prints the whole scorecard, then exits non-zero naming the scenarios and the
+namespaces. The scores themselves are untouched, because a namespace that would
+not go away says nothing about what the subject answered — but what is left
+behind carries `simian.chaos/eligible`, which is a standing permission to
+inject there, so it is not something to find out about from the next run. The
+fact is written to the audit log as `eval.arena_leaked`, so `simian evaluate`
+re-scoring the artifacts later reports it too.

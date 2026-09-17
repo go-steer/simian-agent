@@ -61,6 +61,9 @@ func (s Summary) WriteText(w io.Writer) error {
 	fmt.Fprintf(&b, "  scenarios        %d\n", s.Scenarios)
 	fmt.Fprintf(&b, "  manifested       %d\n", s.Manifested)
 	fmt.Fprintf(&b, "  inject failures  %d\n", s.InjectFailures)
+	if s.TeardownFailures > 0 {
+		fmt.Fprintf(&b, "  arenas left      %d\n", s.TeardownFailures)
+	}
 	fmt.Fprintf(&b, "  efficacy rate    %s\n", formatFraction(s.EfficacyRate))
 	if s.EfficacyRate < DefaultMinEfficacy {
 		fmt.Fprintf(&b, "  ** the harness did not break the cluster reliably; read the measures below as unmeasured, not as poor **\n")
@@ -98,6 +101,13 @@ func (s Summary) WriteText(w io.Writer) error {
 		for _, r := range s.Results {
 			if r.InjectError != "" {
 				fmt.Fprintf(&b, "\n  %s: NOT SCORED — %s\n", r.ScenarioID, r.InjectError)
+			}
+		}
+		// Separately from the NOT SCORED lines, and worded so nobody reads it
+		// as one: the scores on this row are good. The cluster is not.
+		for _, r := range s.Results {
+			if r.TeardownError != "" {
+				fmt.Fprintf(&b, "\n  %s: SCORED, BUT LEFT BEHIND — %s\n", r.ScenarioID, r.TeardownError)
 			}
 		}
 	}

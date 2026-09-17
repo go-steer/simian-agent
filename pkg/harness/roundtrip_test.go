@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-steer/simian-agent/pkg/audit"
 	"github.com/go-steer/simian-agent/pkg/eval"
@@ -236,5 +237,67 @@ func TestAScenarioThatFailedBeforeAnyFaultStillJoins(t *testing.T) {
 		if run.ScenarioID == "s-2" && !run.Manifested {
 			t.Errorf("s-2 did not manifest: %s", run.InjectError)
 		}
+	}
+}
+
+// A leaked arena has to survive the round trip, because the round trip is
+// where it becomes actionable: `simian evaluate` re-scoring a run months later
+// should still say which namespace was left in the cluster.
+//
+// It travels in the audit log and not in the run file. The run file is the
+// subject's half; what the harness failed to clean up is the harness's own
+// fact, and putting it in the subject's half is the self-certification that
+// RunFile's doc comment refuses.
+func TestALeakedArenaSurvivesTheRoundTrip(t *testing.T) {
+	var auditLog bytes.Buffer
+	auditor := jsonlAuditor(&auditLog)
+
+	arena := newFakeArena()
+	arena.teardownErr = errBoom
+	inj := &auditingInjector{fakeInjector: newFakeInjector(), auditor: auditor}
+
+	pack := packOf(scenarioIn("s-1", "ns-a", 1), scenarioIn("s-2", "ns-b", 1))
+	r := &Runner{
+		Pack:               pack,
+		Subject:            &fakeSubject{name: "agent"},
+		Arena:              arena,
+		Injector:           inj,
+		Auditor:            auditor,
+		TeardownTimeout:    50 * time.Millisecond,
+		ClearedGracePeriod: time.Millisecond,
+		ArenaTeardownPoll:  time.Millisecond,
+	}
+
+	runs, err := r.Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	facts, err := eval.ReadAudit(bytes.NewReader(auditLog.Bytes()))
+	if err != nil {
+		t.Fatalf("ReadAudit: %v", err)
+	}
+	joined, err := eval.Join(pack, facts, RunFile("agent", runs))
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+
+	for _, run := range joined {
+		if run.TeardownError == "" {
+			t.Errorf("%s: TeardownError is empty after the round trip; its arena was never destroyed", run.ScenarioID)
+		}
+		if !run.Manifested {
+			t.Errorf("%s did not manifest: %s — a leaked arena must not cost the scenario its measurement", run.ScenarioID, run.InjectError)
+		}
+	}
+
+	summary, err := eval.Summarize("agent", pack, joined)
+	if err != nil {
+		t.Fatalf("Summarize: %v", err)
+	}
+	if summary.TeardownFailures != 2 {
+		t.Errorf("TeardownFailures = %d, want 2", summary.TeardownFailures)
+	}
+	if summary.EfficacyRate != 1 {
+		t.Errorf("EfficacyRate = %v, want 1: both faults landed", summary.EfficacyRate)
 	}
 }

@@ -562,9 +562,10 @@ func TestTheArenaIsNotTornDownUntilTheChaosHasActuallyGone(t *testing.T) {
 	}
 }
 
-// And it does not wait forever for one that is never going to go. Spending the
-// whole teardown budget on a wedged finalizer would leave every *later*
-// namespace standing too, which is a worse outcome than the one warning.
+// And it does not wait forever for one that is never going to go. The wait is
+// bounded by the teardown budget, and when it runs out the arena teardown is
+// attempted regardless: a namespace that might go away is better than one that
+// definitely will not because nobody asked.
 func TestTeardownGivesUpOnAFaultThatWillNotClear(t *testing.T) {
 	inj := newFakeInjector()
 	inj.clearIsNoop = true
@@ -583,6 +584,133 @@ func TestTeardownGivesUpOnAFaultThatWillNotClear(t *testing.T) {
 
 	if got := arena.tornDown(); len(got) != 1 || got[0] != "ns-a" {
 		t.Errorf("torn down = %v, want [ns-a] attempted anyway", got)
+	}
+}
+
+// The wait for the chaos to go is bounded by the teardown budget, not by a
+// constant. A flat 30 seconds was the constant, and it was shorter than a
+// NetworkChaos partition and a DNSChaos take to finalize on GKE — which is how
+// a run left two chaos-eligible namespaces standing for eleven days.
+func TestTheWaitForClearedChaosSpendsTheTeardownBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		runner  Runner
+		timeout time.Duration
+		want    time.Duration
+	}{
+		{
+			name:    "the budget, less the reserve kept for the destroy",
+			timeout: 2 * time.Minute,
+			want:    2*time.Minute - teardownReserve,
+		},
+		{
+			name:    "an explicit grace period wins, so a test need not spend one",
+			runner:  Runner{ClearedGracePeriod: 20 * time.Millisecond},
+			timeout: 2 * time.Minute,
+			want:    20 * time.Millisecond,
+		},
+		{
+			name: "no deadline to measure against falls back to the constant",
+			want: DefaultClearedGracePeriod,
+		},
+		{
+			// Non-positive, which waitCleared reads as "ask once and move on":
+			// the whole budget is needed for the destroy itself.
+			name:    "a budget smaller than the reserve leaves nothing to wait with",
+			timeout: 10 * time.Second,
+			want:    10*time.Second - teardownReserve,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			if tc.timeout > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tc.timeout)
+				defer cancel()
+			}
+			r := tc.runner
+			got := r.clearedGracePeriod(ctx)
+			// Rounded: the deadline cases measure against a clock that has
+			// moved by the time the assertion runs.
+			if diff := got - tc.want; diff > time.Second || diff < -time.Second {
+				t.Errorf("clearedGracePeriod = %s, want about %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// The arena refuses while chaos is still leased in it, and that refusal is a
+// statement about right now. Asking once turns "not yet" into "never".
+func TestARefusedArenaTeardownIsRetried(t *testing.T) {
+	arena := newFakeArena()
+	arena.teardownErr = errBoom
+	arena.teardownOKAfter = 2 // refuses twice, then the finalizer finishes
+
+	r := &Runner{
+		Pack:              packOf(scenarioIn("s-1", "ns-a", 1)),
+		Subject:           &fakeSubject{},
+		Arena:             arena,
+		Injector:          newFakeInjector(),
+		ArenaTeardownPoll: time.Millisecond,
+	}
+	runs, err := r.Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if got := arena.teardownAttempts("ns-a"); got != 3 {
+		t.Errorf("teardown attempts = %d, want 3 (two refusals and the one that worked)", got)
+	}
+	if got := arena.tornDown(); len(got) != 1 || got[0] != "ns-a" {
+		t.Errorf("torn down = %v, want [ns-a]", got)
+	}
+	if runs[0].TeardownError != "" {
+		t.Errorf("TeardownError = %q, want empty: the arena did eventually go", runs[0].TeardownError)
+	}
+}
+
+// An arena that never goes is a fact about the cluster, not a line on stderr.
+// The namespace left behind is annotated simian.chaos/eligible — a standing
+// permission to inject — and a warning is how two of them survived a run.
+func TestAnArenaThatWillNotGoIsRecordedRatherThanLogged(t *testing.T) {
+	arena := newFakeArena()
+	arena.teardownErr = errBoom
+
+	aud := &recordingAuditor{}
+	r := &Runner{
+		Pack:               packOf(scenarioIn("s-1", "ns-a", 1)),
+		Subject:            &fakeSubject{},
+		Arena:              arena,
+		Injector:           newFakeInjector(),
+		Auditor:            aud,
+		TeardownTimeout:    50 * time.Millisecond,
+		ClearedGracePeriod: time.Millisecond,
+		ArenaTeardownPoll:  time.Millisecond,
+	}
+	runs, err := r.Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if runs[0].TeardownError == "" {
+		t.Error("TeardownError is empty, but the arena refused every attempt")
+	}
+	// The scores are untouched. A namespace that would not go away says
+	// nothing about what the subject answered, and docking it for one would
+	// make the scorecard wrong about the only thing it measures.
+	if runs[0].SubjectError != "" {
+		t.Errorf("SubjectError = %q, want empty", runs[0].SubjectError)
+	}
+
+	leaks := aud.named(audit.EventEvalArenaLeaked)
+	if len(leaks) != 1 {
+		t.Fatalf("%d %s event(s), want 1", len(leaks), audit.EventEvalArenaLeaked)
+	}
+	if leaks[0].ScenarioID != "s-1" {
+		t.Errorf("leak event scenario = %q, want s-1; without it the offline scorer cannot attribute the leak", leaks[0].ScenarioID)
+	}
+	if leaks[0].Reason == "" {
+		t.Error("leak event carries no reason, so the audit log says a namespace leaked and not why")
 	}
 }
 

@@ -64,6 +64,13 @@ const (
 	EventEvalScenarioStarted   = "eval.scenario_started"
 	EventEvalScenarioCompleted = "eval.scenario_completed"
 
+	// EventEvalArenaLeaked is a namespace the harness created and could not
+	// destroy. It is an event rather than a log line because the thing left
+	// behind is a namespace annotated simian.chaos/eligible — the annotation
+	// that makes chaos allowed there — and a warning on stderr is how two of
+	// them survived a run on a shared cluster by eleven days.
+	EventEvalArenaLeaked = "eval.arena_leaked"
+
 	// M3 autonomous-mode cycle events.
 	EventCycleStarted     = "cycle.started"
 	EventCycleSkipped     = "cycle.skipped"

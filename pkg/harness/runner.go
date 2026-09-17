@@ -97,13 +97,32 @@ const (
 	DefaultTeardownTimeout = 2 * time.Minute
 )
 
-// How long teardown waits for a cleared fault to actually leave the cluster,
-// and how often it asks. Not flags: this is a property of how long a chaos
-// controller takes to run its finalizer, not a thing an operator tunes. The
-// grace period is a Runner field only so tests do not have to spend it.
+// How teardown spends its budget waiting for the cluster to catch up.
+//
+// There used to be a flat 30-second grace period here. It was not enough: a
+// NetworkChaos partition and a DNSChaos on GKE both take longer than that to
+// finalize, the arena teardown that followed was refused, and two annotated
+// namespaces were left standing for eleven days behind a log.Warn. The wait is
+// now bounded by TeardownTimeout — which is already a flag, and is the budget
+// this was always supposed to be spending.
 const (
+	// DefaultClearedGracePeriod is the fallback wait when there is no teardown
+	// deadline to measure against, which in practice means a test.
 	DefaultClearedGracePeriod = 30 * time.Second
-	clearedPoll               = 500 * time.Millisecond
+
+	// teardownReserve is the slice of the budget held back from waiting, so
+	// that destroying the arena always gets a turn. Spending every second
+	// watching a finalizer and then having none left to delete the namespace
+	// is the same leak by a different route.
+	teardownReserve = 30 * time.Second
+
+	// clearedPoll is how often the cluster is asked whether the chaos is gone.
+	clearedPoll = 500 * time.Millisecond
+
+	// arenaTeardownPoll is how often a refused arena teardown is retried. The
+	// refusal is the arena's safety check reporting on right now, not on the
+	// next five seconds, so asking again is the whole fix.
+	arenaTeardownPoll = 5 * time.Second
 )
 
 // Runner executes a pack against a subject.
@@ -141,10 +160,18 @@ type Runner struct {
 	// hang the harness on the way out.
 	TeardownTimeout time.Duration
 
-	// ClearedGracePeriod is how long teardown waits, after deleting the chaos,
-	// for the controller to finish its finalizer and the objects to go. Zero
-	// means DefaultClearedGracePeriod.
+	// ClearedGracePeriod caps how long teardown waits, after deleting the
+	// chaos, for the controller to finish its finalizer and the objects to go.
+	// Zero means "whatever is left of TeardownTimeout after teardownReserve",
+	// which is what a real run wants. It is a field so a test does not have to
+	// spend a real budget to exercise the giving-up path.
 	ClearedGracePeriod time.Duration
+
+	// ArenaTeardownPoll is how long to wait before asking a refused arena
+	// teardown again. Zero means arenaTeardownPoll. A field for the same
+	// reason as the one above: a test should not have to spend five real
+	// seconds to watch one retry.
+	ArenaTeardownPoll time.Duration
 
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
@@ -282,7 +309,11 @@ func Select(pack scenario.Pack, only []string) ([]scenario.Scenario, error) {
 
 // runScenario is the whole flow for one scenario: provision, inject, gate, ask,
 // collect, clean up.
-func (r *Runner) runScenario(ctx context.Context, s scenario.Scenario) eval.Run {
+//
+// The return is named because teardown runs in a defer and its outcome is part
+// of the result: a scenario whose arena outlived it is a scenario that left
+// something in the cluster, and the caller decides what that costs.
+func (r *Runner) runScenario(ctx context.Context, s scenario.Scenario) (run eval.Run) {
 	// Stamped once, here. Every audit event the executor, the drivers and the
 	// probes emit below this line carries the scenario ID, which is the key
 	// the offline scorer joins on. Threading it as an argument instead would
@@ -290,7 +321,7 @@ func (r *Runner) runScenario(ctx context.Context, s scenario.Scenario) eval.Run 
 	// invisible until someone tries to score the run.
 	ctx = audit.WithScenarioID(ctx, s.ID)
 
-	run := eval.Run{ScenarioID: s.ID, Subject: r.Subject.Name()}
+	run = eval.Run{ScenarioID: s.ID, Subject: r.Subject.Name()}
 	log := r.logger().With(slog.String("scenario", s.ID))
 
 	namespaces := s.Namespaces()
@@ -314,7 +345,22 @@ func (r *Runner) runScenario(ctx context.Context, s scenario.Scenario) eval.Run 
 
 	var applied, substrated []string
 	provisioned, err := r.setup(ctx, namespaces)
-	defer func() { r.teardown(ctx, log, provisioned, substrated, s.Substrate, applied) }()
+	// Registered after the scenario_completed emit above, so it runs before
+	// it: whatever teardown leaves behind is a fact about this scenario, and
+	// the audit log should carry it under the scenario's own ID.
+	defer func() {
+		err := r.teardown(ctx, log, provisioned, substrated, s.Substrate, applied)
+		if err == nil {
+			return
+		}
+		run.TeardownError = err.Error()
+		r.emit(ctx, simian.AuditEvent{
+			Event:      audit.EventEvalArenaLeaked,
+			ScenarioID: s.ID,
+			Reason:     err.Error(),
+			Payload:    map[string]any{"namespaces": provisioned},
+		})
+	}()
 	if err != nil {
 		run.InjectError = err.Error()
 		log.Error("harness: arena setup failed", slog.String("error", err.Error()))
@@ -479,18 +525,20 @@ func (r *Runner) allCleared(ctx context.Context, namespaces, uids []string) bool
 	return true
 }
 
-// waitCleared blocks until none of uids is leased any more, or the grace
-// period runs out. It reports whether they went.
+// waitCleared blocks until none of uids is leased any more, or the wait budget
+// runs out. It reports whether they went.
 //
-// Bounded rather than patient: this runs inside the teardown budget, and a
-// controller that has not finished recovering a fault in half a minute is not
-// going to finish in the next two. Better to try the teardown, let the arena's
-// own safety check refuse it, and leave a namespace and a warning behind than
-// to spend the whole budget here and leave every later namespace behind too.
+// Patient up to the budget, because the budget is the honest bound: the thing
+// being waited on is a chaos controller undoing what it did, and giving up at
+// an arbitrary half-minute does not make it finish any sooner — it just moves
+// the failure to the arena teardown, which then refuses and leaves the
+// namespace standing with its chaos-eligible annotation still on it.
 func (r *Runner) waitCleared(ctx context.Context, namespaces, uids []string) bool {
-	grace := r.ClearedGracePeriod
+	grace := r.clearedGracePeriod(ctx)
 	if grace <= 0 {
-		grace = DefaultClearedGracePeriod
+		// No budget left to wait with. Ask once anyway: the answer is what
+		// decides whether the teardown below is expected to refuse.
+		return r.allCleared(ctx, namespaces, uids)
 	}
 	ctx, cancel := context.WithTimeout(ctx, grace)
 	defer cancel()
@@ -509,15 +557,30 @@ func (r *Runner) waitCleared(ctx context.Context, namespaces, uids []string) boo
 	}
 }
 
-// teardown clears whatever is still leased and destroys the arenas it made.
+// clearedGracePeriod is how long waitCleared may spend: the caller's override
+// if there is one, otherwise the teardown budget less the reserve kept for
+// destroying the arena.
+func (r *Runner) clearedGracePeriod(ctx context.Context) time.Duration {
+	if r.ClearedGracePeriod > 0 {
+		return r.ClearedGracePeriod
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return DefaultClearedGracePeriod
+	}
+	return time.Until(deadline) - teardownReserve
+}
+
+// teardown clears whatever is still leased and destroys the arenas it made. It
+// returns why the arenas are still there, when they are.
 //
 // It runs on a context that ignores cancellation, with its own deadline. A
 // Ctrl-C in the middle of a suite must still take the chaos out of the
 // cluster: the alternative is a partition left behind in someone's namespace
 // because they changed their mind about the run.
-func (r *Runner) teardown(ctx context.Context, log *slog.Logger, namespaces, substrated []string, substrate string, faultUIDs []string) {
+func (r *Runner) teardown(ctx context.Context, log *slog.Logger, namespaces, substrated []string, substrate string, faultUIDs []string) error {
 	if len(namespaces) == 0 && len(substrated) == 0 && len(faultUIDs) == 0 {
-		return
+		return nil
 	}
 
 	timeout := r.TeardownTimeout
@@ -559,9 +622,39 @@ func (r *Runner) teardown(ctx context.Context, log *slog.Logger, namespaces, sub
 				slog.String("substrate", substrate), slog.String("namespace", ns), slog.String("error", err.Error()))
 		}
 	}
+	var leaked []error
 	for _, ns := range namespaces {
-		if err := r.Arena.Teardown(ctx, ns); err != nil {
-			log.Warn("harness: arena teardown failed", slog.String("namespace", ns), slog.String("error", err.Error()))
+		if err := r.destroyArena(ctx, ns); err != nil {
+			log.Error("harness: arena teardown failed; the namespace is still there and still annotated chaos-eligible",
+				slog.String("namespace", ns), slog.String("error", err.Error()))
+			leaked = append(leaked, fmt.Errorf("namespace %s: %w", ns, err))
+		}
+	}
+	return errors.Join(leaked...)
+}
+
+// destroyArena tears one arena down, retrying until the teardown budget runs
+// out. It returns the last failure.
+//
+// Retried rather than attempted once because the failure being retried through
+// is temporal: the arena refuses while chaos is still leased in the namespace,
+// and the whole reason it is still leased is that a finalizer is mid-flight.
+// One attempt turns "not yet" into "never", which is how a namespace survives
+// a run.
+func (r *Runner) destroyArena(ctx context.Context, namespace string) error {
+	poll := r.ArenaTeardownPoll
+	if poll <= 0 {
+		poll = arenaTeardownPoll
+	}
+	for {
+		err := r.Arena.Teardown(ctx, namespace)
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(poll):
 		}
 	}
 }

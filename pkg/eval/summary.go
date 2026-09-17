@@ -37,6 +37,12 @@ type ScenarioResult struct {
 	// applicable" or "the harness broke".
 	Manifested  bool   `json:"manifested"`
 	InjectError string `json:"inject_error,omitempty"`
+
+	// TeardownError is repeated from the Run for a different reason: it does
+	// not affect a single score, and that is exactly why it needs somewhere to
+	// be seen. A scenario whose arena survived it left a chaos-eligible
+	// namespace in the cluster.
+	TeardownError string `json:"teardown_error,omitempty"`
 }
 
 // Score returns the named score from this result.
@@ -65,6 +71,12 @@ type Summary struct {
 	Scenarios      int `json:"scenarios"`
 	Manifested     int `json:"manifested"`
 	InjectFailures int `json:"inject_failures"`
+
+	// TeardownFailures is how many scenarios left their arena behind. It
+	// changes no score and is reported next to the ones that do, because the
+	// namespaces it counts are annotated chaos-eligible and the next run will
+	// find them.
+	TeardownFailures int `json:"teardown_failures"`
 
 	// EfficacyRate is the fraction of scenarios that actually manifested.
 	//
@@ -100,11 +112,12 @@ func Summarize(subject string, pack scenario.Pack, runs []Run) (Summary, error) 
 		}
 
 		res := ScenarioResult{
-			ScenarioID:   s.ID,
-			ScenarioName: s.Name,
-			Scores:       ScoreRun(s, run),
-			Manifested:   run.Manifested,
-			InjectError:  run.InjectError,
+			ScenarioID:    s.ID,
+			ScenarioName:  s.Name,
+			Scores:        ScoreRun(s, run),
+			Manifested:    run.Manifested,
+			InjectError:   run.InjectError,
+			TeardownError: run.TeardownError,
 		}
 		sum.Results = append(sum.Results, res)
 
@@ -114,6 +127,9 @@ func Summarize(subject string, pack scenario.Pack, runs []Run) (Summary, error) 
 		}
 		if run.InjectError != "" {
 			sum.InjectFailures++
+		}
+		if run.TeardownError != "" {
+			sum.TeardownFailures++
 		}
 
 		for _, sc := range res.Scores {

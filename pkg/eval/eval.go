@@ -114,6 +114,16 @@ type Run struct {
 	// reaper was built to stop Simian leaking faults into a cluster; it
 	// becomes a measuring instrument the moment the subject can act.
 	ClearedAt time.Time `json:"cleared_at,omitempty"`
+
+	// TeardownError is why this scenario's arena is still in the cluster.
+	//
+	// Not a scoring input, and deliberately not one: every measure is about
+	// what the subject answered, and a namespace that would not go away says
+	// nothing about that. It is recorded because the leftover is annotated
+	// chaos-eligible, so the next run can inject into it — a scorecard that
+	// is right about the subject and silent about that is the wrong artifact.
+	// Read back from the audit log, not from the subject's run file.
+	TeardownError string `json:"teardown_error,omitempty"`
 }
 
 // Unit says how to read a Score's value.
