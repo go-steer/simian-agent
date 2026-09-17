@@ -112,7 +112,7 @@ func bindFlags(cmd *cobra.Command, o *options) {
 	f.StringVar(&o.subjectDir, "subject-dir", "", "Working directory for an exec: subject")
 	f.StringSliceVar(&o.subjectEnv, "subject-env", nil, "Extra KEY=VALUE environment for an exec: subject. Repeatable.")
 	f.DurationVar(&o.remediationPoll, "remediation-poll", o.remediationPoll, "How often to ask the cluster whether the fault is gone while the subject works, for time-to-remediate. 0 disables the watch.")
-	f.DurationVar(&o.teardownTimeout, "teardown-timeout", o.teardownTimeout, "Bound on cleanup, which runs even after Ctrl-C")
+	f.DurationVar(&o.teardownTimeout, "teardown-timeout", o.teardownTimeout, "Bound on cleanup, which runs even after Ctrl-C. Most of it is spent waiting for the chaos controller's finalizers to finish, because the arena refuses to be destroyed until they have. Raise it for faults that are slow to undo; an arena left behind is a suite-level failure.")
 
 	f.StringSliceVar(&o.eligibleNS, "eligible-namespace", nil, "Treat these namespaces as chaos-eligible instead of reading the simian.chaos/eligible annotation. Repeatable.")
 	f.StringVar(&o.chaosSA, "chaos-sa", o.chaosSA, "ServiceAccount the arena RoleBinding grants chaos rights to")

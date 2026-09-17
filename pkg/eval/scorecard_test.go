@@ -198,6 +198,46 @@ func TestWriteTextSpellsOutAnInjectFailure(t *testing.T) {
 	}
 }
 
+// A leaked arena is not a scoring failure and must not read like one. The row
+// keeps its numbers; the line underneath says the cluster still has something
+// in it.
+func TestWriteTextSeparatesALeakedArenaFromAnUnscoredScenario(t *testing.T) {
+	s := Summary{
+		Subject:          "lookout",
+		Pack:             "lookout",
+		Scenarios:        1,
+		Manifested:       1,
+		EfficacyRate:     1,
+		TeardownFailures: 1,
+		Results: []ScenarioResult{{
+			ScenarioID:    "s-1",
+			ScenarioName:  "a partition",
+			Manifested:    true,
+			Scores:        []Score{{Name: MeasureRecall, Value: 1, Unit: UnitFraction}},
+			TeardownError: "namespace simian-s-1: still active",
+		}},
+	}
+
+	var buf bytes.Buffer
+	if err := s.WriteText(&buf); err != nil {
+		t.Fatalf("WriteText: %v", err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, "arenas left      1") {
+		t.Errorf("the harness block does not count the leak:\n%s", out)
+	}
+	if !strings.Contains(out, "s-1: SCORED, BUT LEFT BEHIND") {
+		t.Errorf("the leak is not called out:\n%s", out)
+	}
+	if strings.Contains(out, "NOT SCORED") {
+		t.Errorf("a leaked arena is reported as an unscored scenario, which it is not:\n%s", out)
+	}
+	if !strings.Contains(out, "simian-s-1") {
+		t.Errorf("the namespace left behind is not named, so nobody can go delete it:\n%s", out)
+	}
+}
+
 func scenarioRow(t *testing.T, out, id string) string {
 	t.Helper()
 	for _, line := range strings.Split(out, "\n") {

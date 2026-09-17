@@ -43,10 +43,22 @@ type fakeArena struct {
 	// onTeardown runs inside Teardown, which is where a test can look at the
 	// rest of the world the way the real arena's safety check does.
 	onTeardown func(ns string)
+
+	// teardownErr is what Teardown refuses with, modelling the real arena's
+	// safety check declining while chaos is still leased. It stops refusing
+	// after teardownOKAfter attempts; zero means it never stops.
+	teardownErr     error
+	teardownOKAfter int
+	teardownCalls   map[string]int
 }
 
 func newFakeArena() *fakeArena {
-	return &fakeArena{fail: map[string]error{}, live: map[string]int{}, peak: map[string]int{}}
+	return &fakeArena{
+		fail:          map[string]error{},
+		live:          map[string]int{},
+		peak:          map[string]int{},
+		teardownCalls: map[string]int{},
+	}
 }
 
 func (a *fakeArena) Setup(_ context.Context, ns string) error {
@@ -66,14 +78,28 @@ func (a *fakeArena) Setup(_ context.Context, ns string) error {
 func (a *fakeArena) Teardown(_ context.Context, ns string) error {
 	a.mu.Lock()
 	hook := a.onTeardown
-	a.torndown = append(a.torndown, ns)
-	a.live[ns]--
+	a.teardownCalls[ns]++
+	refuse := a.teardownErr != nil && (a.teardownOKAfter == 0 || a.teardownCalls[ns] <= a.teardownOKAfter)
+	if !refuse {
+		a.torndown = append(a.torndown, ns)
+		a.live[ns]--
+	}
+	err := a.teardownErr
 	a.mu.Unlock()
 
 	if hook != nil {
 		hook(ns)
 	}
+	if refuse {
+		return err
+	}
 	return nil
+}
+
+func (a *fakeArena) teardownAttempts(ns string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.teardownCalls[ns]
 }
 
 func (a *fakeArena) tornDown() []string {

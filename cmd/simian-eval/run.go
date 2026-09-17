@@ -16,11 +16,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-steer/simian-agent/pkg/audit"
@@ -165,8 +167,14 @@ func runEval(ctx context.Context, o *options, out, progress io.Writer) error {
 		slog.String("audit", auditPath),
 		slog.String("run", runPath))
 
+	// Held, not returned: the scorecard below is a valid measurement of the
+	// subject either way, and a run that exits before printing it has thrown
+	// away the cluster time that produced it. Joined with the scoring result
+	// at the end so the exit status still says something was left behind.
+	leaked := leakedArenas(runs)
+
 	if !o.score {
-		return nil
+		return leaked
 	}
 
 	// Scored from the files, not from the runs in memory. Going through the
@@ -176,7 +184,30 @@ func runEval(ctx context.Context, o *options, out, progress io.Writer) error {
 	if err := auditFile.Sync(); err != nil {
 		return fmt.Errorf("audit log: %w", err)
 	}
-	return scoreArtifacts(o, pack, auditPath, runPath, out)
+	return errors.Join(scoreArtifacts(o, pack, auditPath, runPath, out), leaked)
+}
+
+// leakedArenas is the suite-level verdict on cleanup: nil, or one error naming
+// every scenario whose arena is still in the cluster.
+//
+// A non-zero exit rather than a log line, and deliberately not a scoring
+// change. Every measure in the scorecard is still valid — the subject answered
+// what it answered — but what is left behind is a namespace annotated
+// simian.chaos/eligible, and on a shared cluster that is a standing permission
+// to inject. An operator who runs this from a script should find out from the
+// exit code and not from the next run colliding with it.
+func leakedArenas(runs []eval.Run) error {
+	var leaked []string
+	for _, r := range runs {
+		if r.TeardownError != "" {
+			leaked = append(leaked, fmt.Sprintf("%s (%s)", r.ScenarioID, r.TeardownError))
+		}
+	}
+	if len(leaked) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%d of %d scenario(s) could not tear their arena down, so chaos-eligible namespaces are still in the cluster: %s",
+		len(leaked), len(runs), strings.Join(leaked, "; "))
 }
 
 // scoreArtifacts reads the two files back and prints the scorecard.

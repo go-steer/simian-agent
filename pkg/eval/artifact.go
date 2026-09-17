@@ -83,6 +83,18 @@ type ScenarioFacts struct {
 
 	// Faults are the fault UIDs seen for this scenario, sorted.
 	Faults []string `json:"faults,omitempty"`
+
+	// TeardownError is why this scenario's arena is still in the cluster.
+	// Never a reason to skip a measure — see eval.Run.TeardownError.
+	TeardownError string `json:"teardown_error,omitempty"`
+}
+
+// scenarioAccum is what one scenario's audit lines add up to while the log is
+// read: a trail per fault, plus the facts that are about the scenario rather
+// than about any one fault.
+type scenarioAccum struct {
+	faults   map[string]*faultFacts
+	teardown string
 }
 
 // faultFacts accumulates one fault's audit trail while the log is read.
@@ -114,7 +126,7 @@ func ReadAudit(r io.Reader) ([]ScenarioFacts, error) {
 	// Ordered so the scorecard is stable, and so a caller diffing two runs
 	// sees the difference rather than the map iteration.
 	order := []string{}
-	byScenario := map[string]map[string]*faultFacts{}
+	byScenario := map[string]*scenarioAccum{}
 
 	for scanner.Scan() {
 		var l auditLine
@@ -124,11 +136,13 @@ func ReadAudit(r io.Reader) ([]ScenarioFacts, error) {
 		if l.Event == "" || l.ScenarioID == "" {
 			continue
 		}
-		if _, ok := byScenario[l.ScenarioID]; !ok {
-			byScenario[l.ScenarioID] = map[string]*faultFacts{}
+		acc, ok := byScenario[l.ScenarioID]
+		if !ok {
+			acc = &scenarioAccum{faults: map[string]*faultFacts{}}
+			byScenario[l.ScenarioID] = acc
 			order = append(order, l.ScenarioID)
 		}
-		applyLine(byScenario[l.ScenarioID], l)
+		applyLine(acc, l)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("eval: reading audit log: %w", err)
@@ -141,15 +155,25 @@ func ReadAudit(r io.Reader) ([]ScenarioFacts, error) {
 	return out, nil
 }
 
-// applyLine folds one audit event into the fault it is about.
-func applyLine(faults map[string]*faultFacts, l auditLine) {
+// applyLine folds one audit event into the scenario, or into the fault it is
+// about.
+func applyLine(acc *scenarioAccum, l auditLine) {
+	// Scenario-scoped events first: these name no fault, and everything below
+	// is keyed by one.
+	if l.Event == audit.EventEvalArenaLeaked {
+		acc.teardown = l.Reason
+		if acc.teardown == "" {
+			acc.teardown = "arena teardown failed"
+		}
+		return
+	}
 	if l.FaultUID == "" {
 		return
 	}
-	f, ok := faults[l.FaultUID]
+	f, ok := acc.faults[l.FaultUID]
 	if !ok {
 		f = &faultFacts{uid: l.FaultUID}
-		faults[l.FaultUID] = f
+		acc.faults[l.FaultUID] = f
 	}
 
 	switch l.Event {
@@ -216,8 +240,9 @@ func payloadString(p map[string]any, key string) string {
 // efficacy record of its own. A scenario is one incident, and half a cascade
 // is not the incident the expectations describe — scoring a subject on the
 // half that landed would grade it against ground truth that was never true.
-func summarizeFacts(sid string, faults map[string]*faultFacts) ScenarioFacts {
-	out := ScenarioFacts{ScenarioID: sid}
+func summarizeFacts(sid string, acc *scenarioAccum) ScenarioFacts {
+	faults := acc.faults
+	out := ScenarioFacts{ScenarioID: sid, TeardownError: acc.teardown}
 	for uid := range faults {
 		out.Faults = append(out.Faults, uid)
 	}
@@ -383,6 +408,10 @@ func Join(pack scenario.Pack, facts []ScenarioFacts, rf RunFile) ([]Run, error) 
 			InjectedAt:   f.InjectedAt,
 			DetectedAt:   rec.DetectedAt,
 			ClearedAt:    rec.ClearedAt,
+			// From the audit log, not the run file: what the harness failed to
+			// clean up is the harness's own fact to report, and the run file is
+			// the subject's half.
+			TeardownError: f.TeardownError,
 		})
 	}
 
