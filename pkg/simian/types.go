@@ -21,6 +21,7 @@ package simian
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -189,6 +190,44 @@ type FaultManifest struct {
 	Rationale       string            `json:"rationale,omitempty"`
 	PlanID          string            `json:"plan_id,omitempty"`
 	Annotations     map[string]string `json:"annotations,omitempty"`
+}
+
+// TargetNamespaces returns every namespace the manifest declares a target in,
+// deduped and sorted.
+//
+// A manifest may name several, and the safety accounting has to treat all of
+// them as in scope. Targets[0] is not "the" namespace — it is only where a
+// driver happens to create its object. Reading it as the blast radius is how a
+// fault aimed at two namespaces gets booked against one: the cooldown, the
+// in-flight count, the lease lookup and the arena's teardown check all go
+// looking in the first namespace and find nothing in the second.
+func (m FaultManifest) TargetNamespaces() []string {
+	seen := make(map[string]bool, len(m.Targets))
+	out := make([]string, 0, len(m.Targets))
+	for _, t := range m.Targets {
+		if t.Namespace == "" || seen[t.Namespace] {
+			continue
+		}
+		seen[t.Namespace] = true
+		out = append(out, t.Namespace)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TargetsNamespace reports whether the manifest declares a target in ns. An
+// empty ns matches any manifest, which is how the "no filter" case is spelled
+// at every call site.
+func (m FaultManifest) TargetsNamespace(ns string) bool {
+	if ns == "" {
+		return true
+	}
+	for _, t := range m.Targets {
+		if t.Namespace == ns {
+			return true
+		}
+	}
+	return false
 }
 
 // UnmarshalJSON accepts "duration" as either a Go duration string ("2m",

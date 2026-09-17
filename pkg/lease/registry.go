@@ -93,7 +93,11 @@ func (r *Registry) List(namespace string) []simian.ActiveFault {
 	r.mu.RLock()
 	out := make([]simian.ActiveFault, 0, len(r.items))
 	for _, af := range r.items {
-		if namespace != "" && (len(af.Manifest.Targets) == 0 || af.Manifest.Targets[0].Namespace != namespace) {
+		// Any target, not the first one. A fault aimed at two namespaces is
+		// leased in both, and a caller asking "is anything still live in here"
+		// about the second one has to be told yes — that answer is what the
+		// harness waits on before teardown and what the arena refuses on.
+		if !af.Manifest.TargetsNamespace(namespace) {
 			continue
 		}
 		out = append(out, af)

@@ -120,3 +120,36 @@ func TestHistory_DefaultCapacityWhenZero(t *testing.T) {
 		t.Errorf("capacity=%d, want %d", h.capacity, DefaultHistoryCapacity)
 	}
 }
+
+// The history is what the planner reads to avoid repeating itself. A fault
+// aimed at two namespaces belongs in the history of both: asked about the
+// second one, a Targets[0] filter said the namespace had never been touched.
+func TestHistory_ListFindsAFaultByItsSecondTargetNamespace(t *testing.T) {
+	h := NewHistory(10)
+	now := time.Now().UTC()
+	h.Push(RecentFault{
+		FaultUID:  "f-wide",
+		AppliedAt: now,
+		Manifest: simian.FaultManifest{
+			UID: "f-wide",
+			Targets: []simian.TargetRef{
+				{Namespace: "ns-a", Name: "frontend"},
+				{Namespace: "ns-b", Name: "payments"},
+			},
+		},
+	})
+
+	for _, ns := range []string{"ns-a", "ns-b"} {
+		got := h.List(ns, 0)
+		if len(got) != 1 {
+			t.Errorf("List(%q) = %d, want 1", ns, len(got))
+			continue
+		}
+		if got[0].FaultUID != "f-wide" {
+			t.Errorf("List(%q) returned %q, want f-wide", ns, got[0].FaultUID)
+		}
+	}
+	if got := h.List("ns-c", 0); len(got) != 0 {
+		t.Errorf("List(\"ns-c\") = %d, want 0", len(got))
+	}
+}

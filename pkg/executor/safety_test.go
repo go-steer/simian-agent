@@ -366,3 +366,67 @@ func TestAnInFlightApplyDoesNotBlockAnotherNamespace(t *testing.T) {
 		t.Fatalf("second Apply in a different namespace: %v", err)
 	}
 }
+
+// wideManifest declares targets in two namespaces, which is the shape every
+// Targets[0] read gets wrong.
+func wideManifest() simian.FaultManifest {
+	m := goodManifest()
+	m.Targets = []simian.TargetRef{
+		{Namespace: "online-boutique", Name: "frontend"},
+		{Namespace: "boutique-2", Name: "paymentservice"},
+	}
+	return m
+}
+
+func TestTheCooldownStartsInEveryTargetNamespace(t *testing.T) {
+	// recordApply stamped Targets[0] only, so the second namespace a fault
+	// landed in came out of the apply with no cooldown at all: the next fault
+	// aimed at it went straight through, however tight MinCooldown was set.
+	cfg := DefaultConfig()
+	cfg.MinCooldown = time.Hour
+
+	exec, _ := newBudgetExecutor(t, cfg, &testutil.FakeDriver{EngineName: simian.EngineChaosMesh})
+
+	if _, err := exec.Apply(context.Background(), wideManifest()); err != nil {
+		t.Fatalf("first Apply: %v", err)
+	}
+
+	second := goodManifest()
+	second.Targets[0].Namespace = "boutique-2"
+	_, err := exec.Apply(context.Background(), second)
+	if err == nil {
+		t.Fatal("a fault hit boutique-2 inside the cooldown the previous fault should have started there")
+	}
+	if ee := asExecutorError(t, err); ee.Reason != simian.ReasonBudgetExceeded {
+		t.Fatalf("reason = %q, want %q", ee.Reason, simian.ReasonBudgetExceeded)
+	}
+}
+
+func TestAManifestRefusedOnItsSecondNamespaceLeavesTheFirstFree(t *testing.T) {
+	// reserve books the in-flight count per namespace. Booking as it walks the
+	// targets would leave the first namespace held by an apply that never
+	// happened -- a leak that only ever shows up as the *next* fault being
+	// refused for no reason anyone can see.
+	cfg := DefaultConfig()
+	cfg.MinCooldown = time.Hour
+
+	exec, _ := newBudgetExecutor(t, cfg, &testutil.FakeDriver{EngineName: simian.EngineChaosMesh})
+
+	// Put boutique-2 in cooldown on its own.
+	warmup := goodManifest()
+	warmup.Targets[0].Namespace = "boutique-2"
+	if _, err := exec.Apply(context.Background(), warmup); err != nil {
+		t.Fatalf("warmup Apply: %v", err)
+	}
+
+	// online-boutique is untouched, so this manifest is refused on its second
+	// target after the first has already been walked.
+	if _, err := exec.Apply(context.Background(), wideManifest()); err == nil {
+		t.Fatal("expected the wide manifest to be refused on boutique-2")
+	}
+
+	// online-boutique must still be free.
+	if _, err := exec.Apply(context.Background(), goodManifest()); err != nil {
+		t.Fatalf("online-boutique was left reserved by a refused apply: %v", err)
+	}
+}
