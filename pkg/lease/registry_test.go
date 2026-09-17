@@ -427,3 +427,33 @@ func TestSweepOrphansHonoursTheSingleDriverField(t *testing.T) {
 		t.Errorf("ReapExpired called %d times via Driver, want 1", np.calls)
 	}
 }
+
+// A fault aimed at two namespaces is leased in both. Filtering on Targets[0]
+// told a caller asking about the second one that the namespace was quiet —
+// which is the answer the harness waits on before teardown and the answer the
+// arena refuses a destroy on.
+func TestListFindsAFaultLeasedInItsSecondNamespace(t *testing.T) {
+	r := NewRegistry("holder-1")
+	m := simian.FaultManifest{
+		Engine: simian.EngineChaosMesh,
+		Targets: []simian.TargetRef{
+			{Namespace: "ns-a", Name: "frontend"},
+			{Namespace: "ns-b", Name: "payments"},
+		},
+	}
+	r.Register("f-1", "engine-1", m, time.Now().Add(time.Minute))
+
+	for _, ns := range []string{"ns-a", "ns-b", ""} {
+		got := r.List(ns)
+		if len(got) != 1 {
+			t.Errorf("List(%q) = %d faults, want 1", ns, len(got))
+			continue
+		}
+		if got[0].FaultUID != "f-1" {
+			t.Errorf("List(%q) returned %q, want f-1", ns, got[0].FaultUID)
+		}
+	}
+	if got := r.List("ns-c"); len(got) != 0 {
+		t.Errorf("List(\"ns-c\") = %d faults, want 0", len(got))
+	}
+}

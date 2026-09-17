@@ -104,10 +104,10 @@ func (h *History) List(namespace string, limit int) []RecentFault {
 	out := make([]RecentFault, 0, len(h.items))
 	for i := len(h.items) - 1; i >= 0; i-- {
 		rf := h.items[i]
-		if namespace != "" {
-			if len(rf.Manifest.Targets) == 0 || rf.Manifest.Targets[0].Namespace != namespace {
-				continue
-			}
+		// Any target namespace matches, not just the first: a fault aimed at
+		// two namespaces belongs in the history of both.
+		if !rf.Manifest.TargetsNamespace(namespace) {
+			continue
 		}
 		out = append(out, rf)
 		if limit > 0 && len(out) >= limit {

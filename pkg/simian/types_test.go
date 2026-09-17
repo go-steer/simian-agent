@@ -71,3 +71,68 @@ func TestPlanBudgetUnmarshalPreservesOtherFields(t *testing.T) {
 		t.Errorf("MaxSeverityTier: got %q want %q", b.MaxSeverityTier, "namespace")
 	}
 }
+
+// A manifest may declare targets in more than one namespace. Everything that
+// accounts for blast radius has to see all of them, so the two accessors that
+// answer "which namespaces" and "is this one of them" are the contract the
+// cooldown, the lease lookup, the history and the arena teardown check all
+// depend on.
+func TestTargetNamespacesCoversEveryTargetNotJustTheFirst(t *testing.T) {
+	cases := []struct {
+		name    string
+		targets []TargetRef
+		want    []string
+	}{
+		{"none", nil, []string{}},
+		{"one", []TargetRef{{Namespace: "ns-a"}}, []string{"ns-a"}},
+		{
+			"two, sorted",
+			[]TargetRef{{Namespace: "ns-b"}, {Namespace: "ns-a"}},
+			[]string{"ns-a", "ns-b"},
+		},
+		{
+			"deduped across pods in the same namespace",
+			[]TargetRef{{Namespace: "ns-a", Name: "p1"}, {Namespace: "ns-a", Name: "p2"}},
+			[]string{"ns-a"},
+		},
+		{
+			"an unnamespaced target is not a namespace",
+			[]TargetRef{{Namespace: "", Name: "node-1"}, {Namespace: "ns-a"}},
+			[]string{"ns-a"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := FaultManifest{Targets: tc.targets}
+			got := m.TargetNamespaces()
+			if len(got) != len(tc.want) {
+				t.Fatalf("TargetNamespaces() = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("TargetNamespaces() = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestTargetsNamespaceMatchesASecondTargetAndTreatsEmptyAsNoFilter(t *testing.T) {
+	m := FaultManifest{Targets: []TargetRef{
+		{Namespace: "ns-a", Name: "frontend"},
+		{Namespace: "ns-b", Name: "payments"},
+	}}
+	for _, tc := range []struct {
+		ns   string
+		want bool
+	}{
+		{"ns-a", true},
+		{"ns-b", true}, // the one Targets[0] alone would have missed
+		{"ns-c", false},
+		{"", true}, // "no filter" — every call site spells it this way
+	} {
+		if got := m.TargetsNamespace(tc.ns); got != tc.want {
+			t.Errorf("TargetsNamespace(%q) = %v, want %v", tc.ns, got, tc.want)
+		}
+	}
+}

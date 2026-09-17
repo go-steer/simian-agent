@@ -188,7 +188,7 @@ func (e *Executor) validateSpecNamespaceScope(ctx context.Context, m *simian.Fau
 		return nil, nil
 	}
 
-	targetNS := targetNamespaces(*m)
+	targetNS := m.TargetNamespaces()
 	if len(targetNS) == 0 {
 		return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonNamespaceNotEligible,
 			"manifest has no target namespace to scope the spec selector to", nil)
@@ -218,22 +218,6 @@ func (e *Executor) validateSpecNamespaceScope(ctx context.Context, m *simian.Fau
 		}
 	}
 	return narrowed, nil
-}
-
-// targetNamespaces returns the deduped, sorted namespaces named by the
-// manifest's targets.
-func targetNamespaces(m simian.FaultManifest) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, t := range m.Targets {
-		if t.Namespace == "" || seen[t.Namespace] {
-			continue
-		}
-		seen[t.Namespace] = true
-		out = append(out, t.Namespace)
-	}
-	sort.Strings(out)
-	return out
 }
 
 func toAnySlice(ss []string) []any {

@@ -143,7 +143,7 @@ func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, e
 
 	// Hold a slot for the whole run-up to the lease. validateSafety has
 	// already guaranteed at least one target with a non-empty namespace.
-	release, err := e.reserve(m.Targets[0].Namespace)
+	release, err := e.reserve(m.TargetNamespaces())
 	if err != nil {
 		e.rejected(ctx, m, err)
 		return "", err
@@ -171,7 +171,7 @@ func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, e
 		// The spec left a selector unscoped and we pinned it to the target
 		// namespaces. Record it: the manifest that reaches the driver is no
 		// longer byte-identical to the one that was submitted.
-		validated.Payload["selectors_narrowed_to"] = targetNamespaces(m)
+		validated.Payload["selectors_narrowed_to"] = m.TargetNamespaces()
 		validated.Payload["selector_paths"] = narrowed
 	}
 	e.auditor.Emit(ctx, validated)
@@ -529,7 +529,11 @@ func (e *Executor) validateSafety(ctx context.Context, m *simian.FaultManifest) 
 // as what has landed. It is idempotent: Apply releases it as soon as the lease
 // is registered and the registry starts counting, and the deferred call is
 // then a no-op.
-func (e *Executor) reserve(ns string) (release func(), err error) {
+// It books every namespace the manifest targets, not just the first. A fault
+// aimed at two namespaces occupies both, and reserving one of them leaves the
+// other free for a second fault to land in a moment later — which is exactly
+// the back-to-back apply the cooldown exists to prevent.
+func (e *Executor) reserve(namespaces []string) (release func(), err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -544,21 +548,27 @@ func (e *Executor) reserve(ns string) (release func(), err error) {
 	}
 
 	if e.cfg.MinCooldown > 0 {
-		// An apply already in flight against this namespace counts as
-		// consecutive. The cooldown is about how close together two faults
-		// hit a namespace, and two that overlap are as close as it gets.
-		if e.inFlightNS[ns] > 0 {
-			return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonBudgetExceeded,
-				fmt.Sprintf("namespace %q already has a fault being applied", ns), nil)
-		}
-		if last, ok := e.lastApplyByNS[ns]; ok && time.Since(last) < e.cfg.MinCooldown {
-			return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonBudgetExceeded,
-				fmt.Sprintf("namespace %q is in cooldown", ns), nil)
+		// Checked across every namespace before any is booked, so a manifest
+		// refused on its second namespace does not leave the first reserved.
+		for _, ns := range namespaces {
+			// An apply already in flight against this namespace counts as
+			// consecutive. The cooldown is about how close together two faults
+			// hit a namespace, and two that overlap are as close as it gets.
+			if e.inFlightNS[ns] > 0 {
+				return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonBudgetExceeded,
+					fmt.Sprintf("namespace %q already has a fault being applied", ns), nil)
+			}
+			if last, ok := e.lastApplyByNS[ns]; ok && time.Since(last) < e.cfg.MinCooldown {
+				return nil, simian.NewExecutorError(simian.StageSafety, simian.ReasonBudgetExceeded,
+					fmt.Sprintf("namespace %q is in cooldown", ns), nil)
+			}
 		}
 	}
 
 	e.inFlight++
-	e.inFlightNS[ns]++
+	for _, ns := range namespaces {
+		e.inFlightNS[ns]++
+	}
 	done := false
 	return func() {
 		e.mu.Lock()
@@ -568,19 +578,23 @@ func (e *Executor) reserve(ns string) (release func(), err error) {
 		}
 		done = true
 		e.inFlight--
-		if e.inFlightNS[ns]--; e.inFlightNS[ns] <= 0 {
-			delete(e.inFlightNS, ns)
+		for _, ns := range namespaces {
+			if e.inFlightNS[ns]--; e.inFlightNS[ns] <= 0 {
+				delete(e.inFlightNS, ns)
+			}
 		}
 	}, nil
 }
 
 func (e *Executor) recordApply(m simian.FaultManifest) {
-	if len(m.Targets) == 0 {
-		return
-	}
 	e.mu.Lock()
-	e.lastApplyByNS[m.Targets[0].Namespace] = time.Now()
-	e.mu.Unlock()
+	defer e.mu.Unlock()
+	now := time.Now()
+	// Every namespace the fault landed in starts its cooldown, not just the
+	// one the driver put the object in.
+	for _, ns := range m.TargetNamespaces() {
+		e.lastApplyByNS[ns] = now
+	}
 }
 
 func (e *Executor) rejected(ctx context.Context, m simian.FaultManifest, err error) {
