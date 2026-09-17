@@ -18,7 +18,7 @@ currently shaped:
 | --- | --- |
 | Agent harness | `core-agent`, `mast` |
 | Deterministic detector / triage tool | `k8s-lookout` |
-| Agent under test | `core-sre-agent` (and any other subject) |
+| Agent under test | `k8s-sre-agent` (and any other subject) |
 | Integrated demo | `kube-agent-demo-e2e` |
 | **Adversary + ground truth** | **`simian-agent`** |
 
@@ -46,7 +46,7 @@ produces an eval result that reads **"the agent missed a network partition"**
 when there was no network partition. That is worse than no measurement,
 because it is a confident wrong number.
 
-`core-sre-agent` already learned this the hard way. Its live harness bails
+`k8s-sre-agent` already learned this the hard way. Its live harness bails
 with:
 
 ```
@@ -67,7 +67,7 @@ This does not mean Simian's loop stays as it is — see §7.
 
 ## 2. The customer already exists
 
-`core-sre-agent` contains a hand-rolled miniature of what Simian should be:
+`k8s-sre-agent` contains a hand-rolled miniature of what Simian should be:
 
 * `internal/faults/` — 1,540 LOC, 11 fixtures, each declaring injection YAML,
   settle conditions, and machine-checkable expected findings.
@@ -98,7 +98,7 @@ and are adopted wholesale below:
 
 ### 2.1 Hard constraint: that code is not modified
 
-`core-sre-agent/internal/faults`, `cmd/sre-eval-live`, and `evals/` are
+`k8s-sre-agent/internal/faults`, `cmd/sre-eval-live`, and `evals/` are
 **frozen for the purposes of this work.** They keep working exactly as they do
 today, on their own fixtures, with their own kind cluster lifecycle. The
 existing baselines stay re-runnable with the existing binary.
@@ -533,7 +533,7 @@ never touched — `--allow-short-faults` accepts the measurement out loud.
 
 ### 6.4 The subject seam
 
-Simian must not import `mast`, `core-agent`, or `core-sre-agent`.
+Simian must not import `mast`, `core-agent`, or `k8s-sre-agent`.
 
 ```go
 type Subject interface {
@@ -545,7 +545,7 @@ type Subject interface {
 Adapters:
 
 * **`exec:`** ✅ — run a binary, read a JSON report on stdout. Covers
-  `core-sre-agent`, `mast` workload bundles, `claude -p`, `gemini-cli`, and a
+  `k8s-sre-agent`, `mast` workload bundles, `claude -p`, `gemini-cli`, and a
   shell script. Built first; it covers everything that matters.
 * **`lookout:`** ✅ — run k8s-lookout's `health` scan and translate its finding
   stream into a report. Not an `exec:` subject, because the detector already
@@ -555,7 +555,7 @@ Adapters:
   reads it from — a side channel would give the deterministic subject something
   no agent subject gets, and the comparison between those two rows is the point
   of running it.
-* **`sre-agent:`** ✅ — run `core-sre-agent`'s one-shot assessment and read the
+* **`sre-agent:`** ✅ — run `k8s-sre-agent`'s one-shot assessment and read the
   report out of the transcript it writes. Not an `exec:` subject for a
   mechanical reason rather than a conceptual one: the agent's
   `schema.HealthReport` is already the graded triple field-for-field, including
@@ -582,7 +582,7 @@ Adapters:
 * **`mcp:`** — for subjects that expose themselves as tools.
 
 `Report` mirrors the machine-stable triple and nothing else. The `exec`
-adapter translates `core-sre-agent`'s `schema.HealthReport` into it; that
+adapter translates `k8s-sre-agent`'s `schema.HealthReport` into it; that
 translation is ~30 lines and lives on Simian's side of the fence.
 
 The `exec:` adapter hands the prompt over three ways at once — on stdin, in
@@ -630,7 +630,7 @@ are what a subject inspects first.
 
 ### 6.5 Scoring
 
-Deliberately the same four measures `core-sre-agent/evals` uses, so the
+Deliberately the same four measures `k8s-sre-agent/evals` uses, so the
 numbers are comparable, plus three the adversary is uniquely positioned to
 provide:
 
@@ -654,7 +654,7 @@ is charged: claiming one of the concrete failure modes the fault kinds know how
 to inject, in a scenario that did not inject it. Calling a `Pending` pod a
 `CrashLoopBackOff` is a misdiagnosis; noting that it also has no resource limits
 is not. That is what makes a healthy control cost something, and it matches what
-`core-sre-agent` actually scores.
+`k8s-sre-agent` actually scores.
 
 The vocabulary of concrete failure modes is ported from the agent rig rather
 than re-derived, exclusions included. Most of those exclusions were paid for
@@ -767,7 +767,7 @@ to calibrate the instrument.
 An LLM agent's score moves for three reasons: the fault, the agent, and
 sampling noise. With lookout there is no third term. Run the same scenario
 twice and get two different scores and the harness is broken; that is a test
-you cannot run with any agent subject. `core-sre-agent` already reaches for
+you cannot run with any agent subject. `k8s-sre-agent` already reaches for
 this — its `-bounded` flag "swaps the producer: the same fixtures and the same
 four evaluators, scoring `internal/bounded` instead of the agent." Same idea,
 one repo over.
@@ -878,7 +878,7 @@ graph tools are the first ones with real answers.
 | **1** | Efficacy (`ProbeSpec`, settle gate, `fault.efficacy` audit event) | A `NetworkChaos` fault on a DPv2 cluster fails at inject time with a named probe, instead of succeeding |
 | **2** | `kube-state` driver, both modes, nine fault kinds | Each of the nine produces its target Reason on kind, verified by its own probe |
 | **3** | `Scenario` type, `ScenarioID` plumbed, parity + lookout packs | Twenty-one scenarios reach the same observable state as their upstream twins; equivalence test green |
-| **4** | `pkg/eval` + `cmd/simian-eval` + `exec:` subject | **k8s-lookout scored in CI, twice, with identical results** (§6.7) — then `core-sre-agent`, comparable to its existing baseline |
+| **4** | `pkg/eval` + `cmd/simian-eval` + `exec:` subject | **k8s-lookout scored in CI, twice, with identical results** (§6.7) — then `k8s-sre-agent`, comparable to its existing baseline |
 | **5** | Topology-driven generation | A generated scenario, never hand-written, that the stack misses — with valid ground truth |
 | **6** | Curriculum; multi-cluster; the dashboard | Driven by `kube-agent-demo-e2e`'s two-cluster fleet |
 
@@ -897,7 +897,7 @@ claim in the roadmap had been made by hand against a live GKE cluster.
 An eval rig cannot be built on a cluster someone has to remember to create.
 This is the true first task, and it is copy-work rather than design work:
 `k8s-lookout/examples/kind/{cluster.yaml,up,down}` and
-`core-sre-agent/internal/kindcluster` are both known-good and both solve
+`k8s-sre-agent/internal/kindcluster` are both known-good and both solve
 exactly this. `kindcluster` is the closer fit — it is Go, it is already shaped
 as a library for a test harness, and it does fresh-per-run with a
 `context.WithoutCancel` teardown.
@@ -996,7 +996,7 @@ within a group is independent of its siblings.
 | #62 ✅ | `pkg/eval`: `Report`, `Subject`, and the seven measures | M | #60 |
 | #63 ✅ | `cmd/simian-eval` + `exec:`/`noop:` adapters + arena lifecycle, namespace fencing, and the artifacts scored back through #66 | M | #53, #62 |
 | #64 ✅ | **Lookout subject + the scored e2e in CI** — §6.7. The `lookout:` adapter, then the crash-loop gate bug it found on its first live run (#108), then `make eval-lookout` in the `e2e-kind` workflow: smoke on push, whole pack weekly | M | #61, #63 |
-| #65 ✅ | **`core-sre-agent` subject; its own baseline reproduced through this rig** — the `sre-agent:` adapter, the transcript kept in `--out`, and the label leak the agent found on its first live run (§6.4.1). On the parity pack: `hallucinated_fault`, `fault_severity` and `root_cause` land within ±0.01 of the agent's own `sre-eval-live` baseline; recall differs by exactly one fixture, and it is the one both projects already distrust. See `pkg/scenario/packs/parity/README.md` | M | #64 |
+| #65 ✅ | **`k8s-sre-agent` subject; its own baseline reproduced through this rig** — the `sre-agent:` adapter, the transcript kept in `--out`, and the label leak the agent found on its first live run (§6.4.1). On the parity pack: `hallucinated_fault`, `fault_severity` and `root_cause` land within ±0.01 of the agent's own `sre-eval-live` baseline; recall differs by exactly one fixture, and it is the one both projects already distrust. See `pkg/scenario/packs/parity/README.md` | M | #64 |
 | #66 ✅ | `simian evaluate`: audit + report artifacts joined on `ScenarioID`, `NOT SCORED` rows, `--min-efficacy` refusal | S | #62 |
 | **Phase 5 — the product** |
 | #67 | Dataplane pack (5 scenarios), starting with the `stress-real` / `latency-not-saturation` matched pair | L | #55, #61 |

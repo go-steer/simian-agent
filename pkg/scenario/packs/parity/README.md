@@ -68,7 +68,7 @@ This is the measurement the pack exists to make: run the agent against Simian's
 reproduction of its own fixtures, and see whether the numbers its own harness
 produces come back.
 
-`core-sre-agent` @ `bin/sre-agent`, Sonnet 5 orchestrator with a Haiku 4.5
+`k8s-sre-agent` @ `bin/sre-agent`, Sonnet 5 orchestrator with a Haiku 4.5
 specialist roster, GKE (Kubernetes v1.36.3-gke.1537000), whole pack, every
 fault landed — `efficacy rate 1.00`:
 

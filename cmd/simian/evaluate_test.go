@@ -56,7 +56,7 @@ const auditLog = `{"time":"2026-09-05T11:59:58Z","level":"INFO","msg":"audit","c
 `
 
 const reportJSON = `{
-  "subject": "core-sre-agent",
+  "subject": "k8s-sre-agent",
   "runs": [{
     "scenario_id": "s-1",
     "detected_at": "2026-09-05T12:00:51Z",
@@ -106,7 +106,7 @@ func TestEvaluateScoresARunFromItsArtifacts(t *testing.T) {
 	got := out.String()
 
 	for _, want := range []string{
-		"subject=core-sre-agent",
+		"subject=k8s-sre-agent",
 		"pack=parity",
 		"efficacy rate    1.00",
 		"recall",
@@ -143,7 +143,7 @@ func TestEvaluateJSONAndTextAgree(t *testing.T) {
 	if err := json.Unmarshal(jsonOut.Bytes(), &summary); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if summary.Subject != "core-sre-agent" || summary.EfficacyRate != 1 {
+	if summary.Subject != "k8s-sre-agent" || summary.EfficacyRate != 1 {
 		t.Errorf("summary = %+v", summary)
 	}
 	if summary.Means["recall"] != 1 {
@@ -291,7 +291,7 @@ func TestEvaluateCmdWiresItsFlags(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &summary); err != nil {
 		t.Fatalf("unmarshal %q: %v", out.String(), err)
 	}
-	if summary.Subject != "core-sre-agent" {
+	if summary.Subject != "k8s-sre-agent" {
 		t.Errorf("summary = %+v", summary)
 	}
 }

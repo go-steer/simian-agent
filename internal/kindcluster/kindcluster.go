@@ -38,7 +38,7 @@
 // Any one of these would usually be enough. They are all here because the
 // check costs milliseconds and the miss costs a production incident.
 //
-// This design is lifted from core-sre-agent's kindcluster package, which
+// This design is lifted from k8s-sre-agent's kindcluster package, which
 // solves the same problem for the live eval tier. The additions here are
 // cluster-config support (Simian needs a NetworkPolicy-enforcing CNI, see
 // dev/kind/cluster.yaml) and Chaos Mesh installation (see chaosmesh.go).

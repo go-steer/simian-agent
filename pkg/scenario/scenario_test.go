@@ -25,7 +25,7 @@ import (
 // of this package.
 //
 // This table is ported case-for-case from the agent-side live eval tier
-// (core-sre-agent/internal/faults/inject_test.go, TestWantMatching). The two
+// (k8s-sre-agent/internal/faults/inject_test.go, TestWantMatching). The two
 // rigs exist to produce comparable numbers; if this matcher drifts from that
 // one, a recall score from Simian and a recall score from the agent's own
 // suite stop meaning the same thing, and nobody finds out from the numbers.

@@ -72,7 +72,7 @@ type Summary struct {
 	// assumes the cluster was broken in the way the scenario said; where it
 	// was not, a zero means "there was nothing to find" rather than "the
 	// subject missed it", and the two are indistinguishable from the score
-	// alone. `core-sre-agent`'s harness refuses to report at all below a
+	// alone. `k8s-sre-agent`'s harness refuses to report at all below a
 	// threshold, on the grounds that the harness is broken, not the agent.
 	EfficacyRate float64 `json:"efficacy_rate"`
 }

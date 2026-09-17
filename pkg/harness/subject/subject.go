@@ -16,7 +16,7 @@
 // eval.Subject.
 //
 // Simian does not import the subject. Not mast, not core-agent, not
-// core-sre-agent, in either direction. An adversary that shares a prompt
+// k8s-sre-agent, in either direction. An adversary that shares a prompt
 // template, a model client or a Kubernetes client version with the subject can
 // fail in a correlated way and produce an eval that passes for the wrong
 // reason. Everything here talks to the subject the way an operator would —
@@ -63,7 +63,7 @@ type Options struct {
 //
 //	exec:<command line>       run a binary and read a JSON report on its stdout
 //	lookout:<command line>    run k8s-lookout's health scan and translate it
-//	sre-agent:<command line>  run core-sre-agent's assessment and read its transcript
+//	sre-agent:<command line>  run k8s-sre-agent's assessment and read its transcript
 //	noop:                     report nothing at all
 //
 // The scheme is required rather than inferred. `http:` and `mcp:` subjects are

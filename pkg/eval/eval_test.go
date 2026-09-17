@@ -260,7 +260,7 @@ func (f *fakeSubject) Investigate(_ context.Context, prompt string) (Report, err
 func TestASubjectsReportScoresThroughARun(t *testing.T) {
 	s := testScenario(scenario.ExpectedFinding{Kind: "Pod", Name: "checkout-api", Reasons: []string{"ImagePullBackOff"}})
 	subject := &fakeSubject{
-		name: "core-sre-agent",
+		name: "k8s-sre-agent",
 		report: Report{
 			Findings:        []scenario.Finding{finding("Pod", "checkout-api-1", "ImagePullBackOff", scenario.SeverityCritical)},
 			OverallSeverity: scenario.SeverityCritical,
