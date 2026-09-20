@@ -22,6 +22,7 @@ import (
 	"github.com/go-steer/simian-agent/pkg/simian"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
@@ -114,5 +115,70 @@ func TestAnUnknownFieldInAChaosSpecIsRefusedRatherThanDropped(t *testing.T) {
 	if got[0].FieldValidation != metav1.FieldValidationStrict {
 		t.Errorf("created with FieldValidation %q, want %q; an unknown field would be silently dropped and the subject graded against a fault nobody wrote",
 			got[0].FieldValidation, metav1.FieldValidationStrict)
+	}
+}
+
+// The CR is created in Targets[0].Namespace, which is also the namespace it
+// acts on — today. The arena's pre-destroy check has to be able to tell those
+// apart before they diverge (#129), and it can only do that if the object says
+// which is which.
+func TestTheCreatedObjectSaysWhichNamespaceTheFaultActsOn(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		targets        []simian.TargetRef
+		wantLabel      string
+		wantAnnotation string
+	}{
+		{
+			name:           "one namespace",
+			targets:        []simian.TargetRef{{Namespace: "flow-checkout"}},
+			wantLabel:      "flow-checkout",
+			wantAnnotation: "flow-checkout",
+		},
+		{
+			name: "two namespaces: annotation only, and it names both",
+			targets: []simian.TargetRef{
+				{Namespace: "flow-checkout"},
+				{Namespace: "flow-cart"},
+			},
+			wantAnnotation: "flow-cart,flow-checkout",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, fake := newTestDriver(t)
+
+			if _, err := d.Apply(context.Background(), simian.FaultManifest{
+				UID:          "u-1",
+				Engine:       simian.EngineChaosMesh,
+				APIVersion:   APIGroup + "/v1alpha1",
+				ResourceKind: "HTTPChaos",
+				Duration:     time.Minute,
+				Targets:      tc.targets,
+				Spec:         map[string]any{"target": "Response"},
+			}); err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+
+			var created *unstructured.Unstructured
+			for _, a := range fake.Actions() {
+				if c, ok := a.(clienttesting.CreateActionImpl); ok {
+					created = c.Object.(*unstructured.Unstructured)
+				}
+			}
+			if created == nil {
+				t.Fatal("no create action")
+			}
+
+			// The marks that were always there stay there.
+			if got := created.GetLabels()["simian.chaos/managed"]; got != "true" {
+				t.Errorf("managed label = %q, want \"true\"", got)
+			}
+			if got := created.GetLabels()[simian.TargetNamespaceLabel]; got != tc.wantLabel {
+				t.Errorf("%s = %q, want %q", simian.TargetNamespaceLabel, got, tc.wantLabel)
+			}
+			if got := created.GetAnnotations()[simian.TargetNamespacesAnnotation]; got != tc.wantAnnotation {
+				t.Errorf("%s = %q, want %q", simian.TargetNamespacesAnnotation, got, tc.wantAnnotation)
+			}
+		})
 	}
 }

@@ -230,6 +230,86 @@ func (m FaultManifest) TargetsNamespace(ns string) bool {
 	return false
 }
 
+// Marks that say where a fault acts, as opposed to where its object lives.
+//
+// Today those are the same namespace, because every driver creates its object
+// in the namespace it is aiming at. Nothing requires that: Chaos Mesh selects
+// through spec.selector.namespaces and reconciles a CR wherever it sits. The
+// moment a CR is staged somewhere else, every check that asks "is anything
+// still live in here" by listing objects *in* here starts passing vacuously —
+// which is worse than failing, because it looks like it is working.
+//
+// These marks are what such a check should read instead. They are stamped now,
+// while location and target still agree, so the check can be made correct
+// before anything moves rather than during.
+//
+// They stay on the right side of the line pkg/driver/kubestate/driver.go draws
+// around what a subject may read off an object: "Simian is here, acting on
+// this namespace" is a property of the cluster the subject was pointed at.
+// "Simian did ContainerExitLoop to you" is the answer, and is not stamped
+// anywhere.
+const (
+	// TargetNamespaceLabel carries the single namespace a fault acts on, so an
+	// operator can select on it — `kubectl get networkchaos -A -l
+	// simian.chaos/target-namespace=flow-payments` is the question you ask
+	// when you are looking for what is still running against a namespace.
+	//
+	// Only set when there is exactly one. A label value cannot hold a list,
+	// and a 63-character namespace name would not fit in a key that encoded
+	// one per key either. The annotation below is the authoritative answer;
+	// this is the selectable summary of the common case.
+	TargetNamespaceLabel = "simian.chaos/target-namespace"
+
+	// TargetNamespacesAnnotation carries every namespace the fault acts on, as
+	// a comma-separated list. Authoritative. An annotation rather than a label
+	// because it has to hold a list and nothing needs to select on it — the
+	// consumers list by TargetNamespaceLabel's managed sibling and filter in
+	// Go.
+	TargetNamespacesAnnotation = "simian.chaos/target-namespaces"
+)
+
+// TargetNamespaceMarks returns the label and annotation entries a driver should
+// stamp on the object it creates, so a later reader can tell what the fault
+// acts on without inferring it from where the object landed.
+//
+// Returns nothing for a manifest with no namespaced target. An object with no
+// marks is read as acting where it lives, which is both the pre-existing
+// behaviour and the only safe reading of an object that cannot say otherwise.
+func (m FaultManifest) TargetNamespaceMarks() (labels, annotations map[string]string) {
+	ns := m.TargetNamespaces()
+	if len(ns) == 0 {
+		return nil, nil
+	}
+	if len(ns) == 1 {
+		labels = map[string]string{TargetNamespaceLabel: ns[0]}
+	}
+	return labels, map[string]string{TargetNamespacesAnnotation: strings.Join(ns, ",")}
+}
+
+// ObjectActsOnNamespace reports whether an object carrying these marks is a
+// fault acting on ns.
+//
+// Fail-safe on an unmarked object: a caller that found it by listing inside ns
+// has no evidence it acts anywhere else, and under-reporting a live fault is
+// how an arena gets destroyed out from under one. Drivers that have not been
+// taught to stamp — and objects created before they were — keep counting
+// exactly as they did.
+func ObjectActsOnNamespace(labels, annotations map[string]string, ns string) bool {
+	list, ok := annotations[TargetNamespacesAnnotation]
+	if !ok {
+		if v, hasLabel := labels[TargetNamespaceLabel]; hasLabel {
+			return v == ns
+		}
+		return true
+	}
+	for _, target := range strings.Split(list, ",") {
+		if target == ns {
+			return true
+		}
+	}
+	return false
+}
+
 // UnmarshalJSON accepts "duration" as either a Go duration string ("2m",
 // "30s") or an integer nanosecond count, so external callers and the LLM can
 // write the human form without needing to compute nanoseconds.

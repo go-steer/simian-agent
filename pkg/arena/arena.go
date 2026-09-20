@@ -37,6 +37,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/go-steer/simian-agent/pkg/simian"
 )
 
 // Annotation keys used on arena namespaces. Kept here (not in pkg/executor) so
@@ -471,6 +473,19 @@ func faultResources() []faultResource {
 // activeFaultCount lists simian-labeled chaos resources in the namespace across
 // every engine and returns count + sorted names. Best-effort: missing CRDs are
 // not errors.
+//
+// "In the namespace" is the listing, not the question. The question is what is
+// still acting on it, and an object answers that itself via the marks the
+// driver stamps (simian.ObjectActsOnNamespace). The two agree today, because
+// every driver creates in the namespace it aims at. They stop agreeing the
+// moment a chaos CR is staged elsewhere — and at that point a check that
+// counted by location would return zero and let the arena be destroyed with
+// the fault still live. Reading the marks now costs nothing and means the
+// check does not have to be rewritten under a behaviour change later.
+//
+// An object carrying no marks is counted, because it was found in here and
+// cannot say otherwise. That keeps the other two drivers, and anything already
+// running when this rolled out, exactly as they were.
 func (m *Manager) activeFaultCount(ctx context.Context, namespace string) (int, []string, error) {
 	if m.Dyn == nil {
 		return 0, nil, nil
@@ -486,6 +501,9 @@ func (m *Manager) activeFaultCount(ctx context.Context, namespace string) (int, 
 			return 0, nil, err
 		}
 		for _, item := range list.Items {
+			if !simian.ObjectActsOnNamespace(item.GetLabels(), item.GetAnnotations(), namespace) {
+				continue
+			}
 			kind := item.GetKind()
 			if kind == "" {
 				kind = res.kind
