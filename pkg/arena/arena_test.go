@@ -32,8 +32,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+
 	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/yaml"
+
+	"github.com/go-steer/simian-agent/pkg/simian"
 )
 
 func newManager() *Manager {
@@ -471,4 +474,44 @@ func equalSlice(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// The pre-destroy check asks "what is still acting on this namespace", and
+// until now it answered by listing what was *sitting in* it. Those agree today
+// and stop agreeing the moment a chaos CR is staged elsewhere (#129) — at
+// which point counting by location returns zero and the arena is destroyed
+// with the fault still live. The marks are what it reads instead.
+func TestActiveFaultCountCountsWhatActsOnTheNamespaceNotWhatSitsInIt(t *testing.T) {
+	ctx := context.Background()
+
+	acting := unstructuredFault("chaos-mesh.org/v1alpha1", "NetworkChaos", "chaos-marks", "simian-acts-here", true)
+	acting.SetAnnotations(map[string]string{simian.TargetNamespacesAnnotation: "chaos-marks"})
+
+	// Parked in this namespace, aimed at another one. Counting it would make
+	// destroy refuse over a fault that is not this arena's problem.
+	visiting := unstructuredFault("chaos-mesh.org/v1alpha1", "NetworkChaos", "chaos-marks", "simian-acts-elsewhere", true)
+	visiting.SetAnnotations(map[string]string{simian.TargetNamespacesAnnotation: "somewhere-else"})
+
+	// Two targets, one of them here.
+	wide := unstructuredFault("chaos-mesh.org/v1alpha1", "NetworkChaos", "chaos-marks", "simian-acts-on-both", true)
+	wide.SetAnnotations(map[string]string{simian.TargetNamespacesAnnotation: "chaos-marks,somewhere-else"})
+
+	// No marks: the other drivers, and anything that was already running when
+	// the marks rolled out. Found in here, so counted, exactly as before.
+	unmarked := unstructuredFault("networking.k8s.io/v1", "NetworkPolicy", "chaos-marks", "simian-np-legacy", true)
+
+	m := newDynManager(t, acting, visiting, wide, unmarked)
+
+	count, names, err := m.activeFaultCount(ctx, "chaos-marks")
+	if err != nil {
+		t.Fatalf("activeFaultCount: %v", err)
+	}
+	want := []string{
+		"NetworkChaos/simian-acts-here",
+		"NetworkChaos/simian-acts-on-both",
+		"NetworkPolicy/simian-np-legacy",
+	}
+	if count != len(want) || !equalSlice(names, want) {
+		t.Errorf("activeFaultCount = %d %v, want %d %v", count, names, len(want), want)
+	}
 }

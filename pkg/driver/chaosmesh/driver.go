@@ -87,10 +87,22 @@ func (d *Driver) Apply(ctx context.Context, m simian.FaultManifest) (string, err
 	obj.SetKind(m.ResourceKind)
 	obj.SetGenerateName(d.namePrefix)
 	obj.SetNamespace(ns)
-	obj.SetLabels(map[string]string{
+	lbls := map[string]string{
 		"simian.chaos/managed":   "true",
 		"simian.chaos/fault-uid": m.UID,
-	})
+	}
+	// Where the fault acts, recorded separately from where this object lives.
+	// They are the same namespace today — ns above is Targets[0] — and the
+	// point of writing it down anyway is that the arena's pre-destroy check
+	// can stop inferring one from the other before they diverge.
+	targetLabels, targetAnnotations := m.TargetNamespaceMarks()
+	for k, v := range targetLabels {
+		lbls[k] = v
+	}
+	obj.SetLabels(lbls)
+	if len(targetAnnotations) > 0 {
+		obj.SetAnnotations(targetAnnotations)
+	}
 
 	// Deep-copy the spec map into the unstructured object. Inject the duration
 	// — every Chaos Mesh resource accepts a top-level spec.duration string.

@@ -136,3 +136,100 @@ func TestTargetsNamespaceMatchesASecondTargetAndTreatsEmptyAsNoFilter(t *testing
 		}
 	}
 }
+
+func TestTargetNamespaceMarksSayWhereAFaultActs(t *testing.T) {
+	cases := []struct {
+		name           string
+		targets        []TargetRef
+		wantLabel      string // "" = no label expected
+		wantAnnotation string // "" = no annotation expected
+	}{
+		{
+			name:           "one namespace gets both, so an operator can select on it",
+			targets:        []TargetRef{{Namespace: "flow-payments", Name: "edge"}},
+			wantLabel:      "flow-payments",
+			wantAnnotation: "flow-payments",
+		},
+		{
+			name: "two namespaces get the annotation only -- a label value cannot hold a list",
+			targets: []TargetRef{
+				{Namespace: "flow-b", Name: "edge"},
+				{Namespace: "flow-a", Name: "upstream"},
+			},
+			wantAnnotation: "flow-a,flow-b",
+		},
+		{
+			name:    "a target with no namespace marks nothing",
+			targets: []TargetRef{{Name: "node-1"}},
+		},
+		{name: "no targets at all", targets: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lbls, anns := FaultManifest{Targets: tc.targets}.TargetNamespaceMarks()
+			if got := lbls[TargetNamespaceLabel]; got != tc.wantLabel {
+				t.Errorf("label %s = %q, want %q", TargetNamespaceLabel, got, tc.wantLabel)
+			}
+			if got := anns[TargetNamespacesAnnotation]; got != tc.wantAnnotation {
+				t.Errorf("annotation %s = %q, want %q", TargetNamespacesAnnotation, got, tc.wantAnnotation)
+			}
+		})
+	}
+}
+
+func TestObjectActsOnNamespaceReadsTheMarksAndFailsSafeWithoutThem(t *testing.T) {
+	cases := []struct {
+		name string
+		lbls map[string]string
+		anns map[string]string
+		ns   string
+		want bool
+	}{
+		{
+			name: "annotation names it",
+			anns: map[string]string{TargetNamespacesAnnotation: "flow-a,flow-b"},
+			ns:   "flow-b",
+			want: true,
+		},
+		{
+			name: "annotation does not name it -- this is the staged CR the old check counted anyway",
+			anns: map[string]string{TargetNamespacesAnnotation: "flow-a"},
+			ns:   "simian-staging",
+			want: false,
+		},
+		{
+			name: "annotation wins over a label that disagrees",
+			lbls: map[string]string{TargetNamespaceLabel: "flow-a"},
+			anns: map[string]string{TargetNamespacesAnnotation: "flow-b"},
+			ns:   "flow-b",
+			want: true,
+		},
+		{
+			name: "label alone still answers",
+			lbls: map[string]string{TargetNamespaceLabel: "flow-a"},
+			ns:   "flow-a",
+			want: true,
+		},
+		{
+			// The fail-safe. An object found by listing inside ns that cannot
+			// say where it acts is counted: under-reporting a live fault is how
+			// an arena gets destroyed out from under one.
+			name: "no marks at all is counted",
+			ns:   "flow-a",
+			want: true,
+		},
+		{
+			name: "a prefix match is not a match",
+			anns: map[string]string{TargetNamespacesAnnotation: "flow-a-staging"},
+			ns:   "flow-a",
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ObjectActsOnNamespace(tc.lbls, tc.anns, tc.ns); got != tc.want {
+				t.Errorf("ObjectActsOnNamespace(%v, %v, %q) = %v, want %v", tc.lbls, tc.anns, tc.ns, got, tc.want)
+			}
+		})
+	}
+}
