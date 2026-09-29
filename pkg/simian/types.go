@@ -138,6 +138,11 @@ const (
 	ProbeTypeCmd        = "cmd"
 	ProbeTypeHTTP       = "http"
 	ProbeTypePrometheus = "prometheus"
+
+	// ProbeTypeTCP is a bare TCP connect against the target pods: reachable or
+	// not, and how long the connect took. It works whatever the pod speaks,
+	// which is why the default network gates use it rather than http.
+	ProbeTypeTCP = "tcp"
 )
 
 // ProbeSpec describes a probe attached to a fault.
@@ -146,7 +151,7 @@ const (
 // pkg/probe for the k8s shape.
 type ProbeSpec struct {
 	Name string         `json:"name"`
-	Type string         `json:"type"` // cmd | http | k8s | logs | prometheus
+	Type string         `json:"type"` // cmd | http | k8s | logs | prometheus | tcp
 	Mode string         `json:"mode"` // Settle | SOT | EOT | Edge | Continuous | OnChaos
 	Spec map[string]any `json:"spec"`
 }

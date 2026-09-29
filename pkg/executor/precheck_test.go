@@ -16,6 +16,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
@@ -281,5 +282,31 @@ func TestDefaultProbesSeeTheNarrowedManifest(t *testing.T) {
 	}
 	if sawTier == "" {
 		t.Error("default builder saw an unclassified manifest — it ran before the blast-radius tier was assigned")
+	}
+}
+
+// A probe that could not run says nothing about the workload. In the trial,
+// every Bank of Anthos NetworkChaos was refused as precheck-failed because the
+// probe found no port to dial, which read as "the workload is unhealthy".
+func TestAPrecheckThatCannotRunIsNotReportedAsAnUnhealthyWorkload(t *testing.T) {
+	prober := &fakeProber{results: []probe.Result{{
+		Passed: false,
+		Err:    errors.New(`pod "balancereader-1" declares no container port, no Service selecting it names a numeric targetPort, and the probe does not set "port"`),
+	}}}
+	exec, driver, auditor, _ := newProbedExecutor(t, prober)
+
+	m := goodManifest()
+	m.Probes = []simian.ProbeSpec{sotProbe("reachable-before")}
+	if _, err := exec.Apply(context.Background(), m); err == nil {
+		t.Fatal("Apply succeeded with a gate that could not run")
+	} else if ee := asExecutorError(t, err); ee.Reason != simian.ReasonCannotGate {
+		t.Errorf("reason = %q, want %q", ee.Reason, simian.ReasonCannotGate)
+	}
+	if got := len(driver.AppliedCopy()); got != 0 {
+		t.Errorf("driver.Applied = %d, want 0", got)
+	}
+	ev, _ := auditor.FindEvent(audit.EventFaultPrecheck)
+	if ev.Reason != string(simian.ReasonCannotGate) {
+		t.Errorf("fault.precheck reason = %q, want %q", ev.Reason, simian.ReasonCannotGate)
 	}
 }

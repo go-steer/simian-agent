@@ -139,7 +139,7 @@ ingress — and asserts on what comes back, or on the fact that nothing does.
 | `namespace` | Defaults to the fault's own target namespace |
 | `label_selector` | Which pods to dial; defaults to the fault's own target labels |
 | `name` | Dial one named pod instead |
-| `port` | Defaults to the pod's first declared container port |
+| `port` | Defaults to the pod's first declared container port; for a pod that declares none, the first numeric `targetPort` of a Service that selects it |
 | `path` / `scheme` / `method` | Default `/`, `http`, `GET` |
 | `jsonpath` | Evaluate the expression over a JSON body and match on the result instead of the raw body |
 | `expect_reachable` | The connection must succeed, whatever the status |
@@ -203,6 +203,26 @@ within the deadline" is a change Simian caused, not a property of the workload.
 The `Expected` string says so out loud — `latency >= 125ms (or no response
 within 1s)` — so the audit record never claims a measurement it does not have.
 
+### The `tcp` probe type
+
+The four network gates below ask two questions: does a connection open, and
+how fast. The `tcp` probe asks exactly those and nothing else. It takes the
+`http` probe's pod-selection, port and timing fields, and the expectations
+`expect_reachable`, `expect_unreachable`, `min_latency` and `max_latency`.
+Latency is connect time. A key that describes a request or a response
+(`path`, `scheme`, `method`, `jsonpath`, `expect_status`, `expect_contains`,
+`expect_equals`) is an error rather than ignored.
+
+It exists because asking in HTTP/1.1 answered the wrong question. A gRPC
+service answers a connection with an HTTP/2 SETTINGS frame, the `http` probe
+reads that as a broken response, and a healthy pod becomes "unreachable". In a
+39-hour trial that refused every `NetworkChaos` against Online Boutique before
+it ran. A connect works whatever the pod speaks. A netem delay on the target's
+egress holds its SYN-ACK, so connect time carries the injected latency; a
+partition drops the SYN, so the connect times out. Every other rule above
+applies unchanged: a fresh dial each attempt, every pod must pass, no pods is
+a failure, and a connect that times out after `min_latency` counts as slow.
+
 ### The `logs` probe type
 
 The `k8s` probe reads a field and the `http` probe dials a port. Neither can
@@ -260,9 +280,9 @@ a vote on.
 
 | Engine | Kind | Gate |
 |---|---|---|
-| `network-policy` | `NetworkPolicy` | Reachable before, unreachable after |
-| `chaos-mesh` | `NetworkChaos` (`partition`) | Reachable before, unreachable after |
-| `chaos-mesh` | `NetworkChaos` (`delay`) | Fast before, measurably slower after |
+| `network-policy` | `NetworkPolicy` | Reachable before, unreachable after (`tcp`) |
+| `chaos-mesh` | `NetworkChaos` (`partition`) | Reachable before, unreachable after (`tcp`) |
+| `chaos-mesh` | `NetworkChaos` (`delay`) | Fast before, measurably slower after (`tcp`, connect time) |
 | `envoy-fault` | `EnvoyHttpDelay` | Admin API reports the delay runtime key at the requested percentage |
 | `envoy-fault` | `EnvoyHttpAbort` | Admin API reports the abort runtime key at the requested percentage |
 | `kube-state` | `ImageUnresolvable` | Pods reach `ImagePullBackOff` |
@@ -625,13 +645,18 @@ at the deadline, and the audit record says so with `left_to_reaper: true`.
 A failing **SOT** probe is the cheaper case, and reads differently:
 
 ```
-executor[precheck:precheck-failed]: probe "simian-reachable-before" (http)
+executor[precheck:precheck-failed]: probe "simian-reachable-before" (tcp)
 never passed in 33.05s (7 polls)
 ```
 
 Stage `precheck`, reason `precheck-failed`, and nothing to roll back — the
 driver was never called, no object was created, no lease was taken. The fault
 is simply refused.
+
+An SOT probe that could not run at all is refused with `cannot-gate` instead:
+no port to dial, no pods to dial, a spec it cannot parse. That is Simian unable
+to verify a fault against this target, not the target being unhealthy, and the
+two reasons keep a triaging reader from confusing them.
 
 A manifest carrying probes submitted to a controller with no prober wired in is
 rejected with `probe-not-configured` rather than applied unverified. Skipping a
@@ -655,8 +680,8 @@ cannot be debugged once the arena is gone. For a dataplane gate it is the
 whole record of the experiment:
 
 ```
-fault.precheck  simian-reachable-before  passed  "payments-0 (http://10.244.1.7:8080/): 200 in 2ms"
-fault.efficacy  simian-partitioned       passed  "payments-0 (http://10.244.1.7:8080/): unreachable after 3s: context deadline exceeded"
+fault.precheck  simian-reachable-before  passed  "payments-0 (tcp://10.244.1.7:8080): connected in 1ms"
+fault.efficacy  simian-partitioned       passed  "payments-0 (tcp://10.244.1.7:8080): unreachable after 3s: dial tcp 10.244.1.7:8080: i/o timeout"
 ```
 
 **An eval result whose fault carries no passing `fault.efficacy` record is not

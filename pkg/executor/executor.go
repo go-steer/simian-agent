@@ -334,10 +334,11 @@ func (e *Executor) settle(ctx context.Context, m simian.FaultManifest) error {
 // reason, which is indistinguishable from no gate at all.
 func (e *Executor) precheck(ctx context.Context, m simian.FaultManifest) error {
 	return e.runProbes(ctx, m, m.SOTProbes(), probeStage{
-		mode:   simian.ProbeModeSOT,
-		event:  audit.EventFaultPrecheck,
-		stage:  simian.StagePrecheck,
-		reason: simian.ReasonPrecheckFailed,
+		mode:       simian.ProbeModeSOT,
+		event:      audit.EventFaultPrecheck,
+		stage:      simian.StagePrecheck,
+		reason:     simian.ReasonPrecheckFailed,
+		unrunnable: simian.ReasonCannotGate,
 	})
 }
 
@@ -347,6 +348,10 @@ type probeStage struct {
 	event  string
 	stage  simian.ExecutorStage
 	reason simian.RejectionReason
+
+	// unrunnable, if set, replaces reason for a probe that could not run at
+	// all (Result.Err) rather than one that ran and was not satisfied.
+	unrunnable simian.RejectionReason
 }
 
 // runProbes runs one mode's probes in order, emitting an audit event per
@@ -380,9 +385,13 @@ func (e *Executor) runProbes(ctx context.Context, m simian.FaultManifest, probes
 			"attempts":   res.Attempts,
 			"elapsed_ms": res.Elapsed.Milliseconds(),
 		}
+		why := st.reason
+		if res.Err != nil && st.unrunnable != "" {
+			why = st.unrunnable
+		}
 		reason := ""
 		if !res.Passed {
-			reason = string(st.reason)
+			reason = string(why)
 		}
 		if res.Err != nil {
 			payload["error"] = res.Err.Error()
@@ -396,7 +405,7 @@ func (e *Executor) runProbes(ctx context.Context, m simian.FaultManifest, probes
 			Payload:  payload,
 		})
 		if !res.Passed {
-			return simian.NewExecutorError(st.stage, st.reason, res.Describe(), res.Err)
+			return simian.NewExecutorError(st.stage, why, res.Describe(), res.Err)
 		}
 	}
 	return nil

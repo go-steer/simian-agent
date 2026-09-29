@@ -69,6 +69,14 @@ const (
 	// the driver runs, so there is nothing to roll back.
 	ReasonPrecheckFailed RejectionReason = "precheck-failed"
 
+	// ReasonCannotGate means an SOT probe could not run against the target at
+	// all — no port to dial, no pods to dial, a spec it cannot parse — as
+	// opposed to running and finding the workload unhealthy. Simian cannot
+	// verify a fault here, so it does not apply one, and says it is Simian's
+	// limitation rather than letting precheck-failed read as "the workload is
+	// broken".
+	ReasonCannotGate RejectionReason = "cannot-gate"
+
 	// ReasonProbeNotConfigured means the manifest carries Settle probes but no
 	// prober is wired in. Loud by design: silently skipping the gate would
 	// report unverified faults as verified.

@@ -83,7 +83,7 @@ type gateKey struct {
 // stale the moment a cluster ships a different set of CRDs.
 var gates = map[gateKey]gate{
 	{simian.EngineNetworkPolicy, "NetworkPolicy"}: {
-		describe: "reachability: the target must answer on its container port before the fault, and stop answering after it",
+		describe: "reachability: the target must accept a TCP connection on its port before the fault, and stop accepting one after it",
 		build:    networkPolicyProbes,
 	},
 	{simian.EngineChaosMesh, "NetworkChaos"}: {
@@ -227,11 +227,15 @@ func networkChaosProbes(m simian.FaultManifest) []simian.ProbeSpec {
 // unreachable after. The SOT half is what makes the Settle half mean anything
 // — "nothing answered" is not evidence of a partition against a workload that
 // was never answering.
+//
+// Both halves are tcp probes. A partition is a question about whether a
+// connection opens, and asking it in HTTP/1.1 refused every NetworkChaos
+// against a gRPC service as "already unreachable" before it ran.
 func reachabilityPair(selector map[string]string) []simian.ProbeSpec {
 	return []simian.ProbeSpec{
 		{
 			Name: ProbeReachableBefore,
-			Type: simian.ProbeTypeHTTP,
+			Type: simian.ProbeTypeTCP,
 			Mode: simian.ProbeModeSOT,
 			Spec: withSelector(selector, map[string]any{
 				"expect_reachable": true,
@@ -241,7 +245,7 @@ func reachabilityPair(selector map[string]string) []simian.ProbeSpec {
 		},
 		{
 			Name: ProbePartitioned,
-			Type: simian.ProbeTypeHTTP,
+			Type: simian.ProbeTypeTCP,
 			Mode: simian.ProbeModeSettle,
 			Spec: withSelector(selector, map[string]any{
 				"expect_unreachable": true,
@@ -265,6 +269,10 @@ const minGatedDelay = 100 * time.Millisecond
 // separates "200ms landed" from "nothing landed" by two orders of magnitude
 // while leaving room for the fault to be applied honestly and still measure
 // low.
+//
+// What is measured is connect time. The delay sits on the target's egress, so
+// it holds the SYN-ACK and a connect pays it once — a cleaner reading than a
+// request, which pays it once per internal hop the handler makes.
 func delayPair(selector map[string]string, delay map[string]any) []simian.ProbeSpec {
 	latency, err := time.ParseDuration(stringField(delay, "latency"))
 	if err != nil || latency < minGatedDelay {
@@ -273,7 +281,7 @@ func delayPair(selector map[string]string, delay map[string]any) []simian.ProbeS
 	return []simian.ProbeSpec{
 		{
 			Name: ProbeFastBefore,
-			Type: simian.ProbeTypeHTTP,
+			Type: simian.ProbeTypeTCP,
 			Mode: simian.ProbeModeSOT,
 			Spec: withSelector(selector, map[string]any{
 				"expect_reachable": true,
@@ -284,7 +292,7 @@ func delayPair(selector map[string]string, delay map[string]any) []simian.ProbeS
 		},
 		{
 			Name: ProbeDelayed,
-			Type: simian.ProbeTypeHTTP,
+			Type: simian.ProbeTypeTCP,
 			Mode: simian.ProbeModeSettle,
 			Spec: withSelector(selector, map[string]any{
 				"min_latency":     (latency / 2).String(),
