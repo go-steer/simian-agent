@@ -46,6 +46,7 @@ func main() {
 	root.AddCommand(newWatchCmd())
 	root.AddCommand(newProvisionCmd())
 	root.AddCommand(newEvaluateCmd())
+	root.AddCommand(newAuditCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

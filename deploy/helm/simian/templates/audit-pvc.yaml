@@ -1,0 +1,21 @@
+{{- if and .Values.audit.file.enabled .Values.audit.file.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: simian-audit
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "simian.labels" . | nindent 4 }}
+  annotations:
+    # The trail is the record of what was done to the cluster; uninstalling
+    # the controller should not take it with it.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.audit.file.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.audit.file.persistence.size }}
+{{- end }}

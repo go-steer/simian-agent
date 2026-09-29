@@ -36,6 +36,10 @@ spec:
             - --mcp-addr=:8081
             - --eligible-namespace=online-boutique
             # Add additional --eligible-namespace flags here.
+            # Durable audit trail; read back with `simian audit export`.
+            # The emptyDir below survives container restarts, not pod
+            # deletion — swap it for a PVC to keep the trail longer.
+            - --audit-file=/var/lib/simian/audit.jsonl
           env:
             # Vertex / ADC (default). Comment these out and uncomment GEMINI_API_KEY
             # if you prefer the Gemini Developer API.
@@ -74,6 +78,12 @@ spec:
             runAsUser: 65532
             capabilities:
               drop: ["ALL"]
+          volumeMounts:
+            - name: audit
+              mountPath: /var/lib/simian
+      volumes:
+        - name: audit
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

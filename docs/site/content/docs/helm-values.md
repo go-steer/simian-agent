@@ -92,6 +92,28 @@ otherwise looks exactly like a planner that produced nothing.
 | `autonomous.maxSeverityPerCycle` | `namespace` | Highest blast tier the loop will apply. |
 | `autonomous.hypothesisHint` | `""` | Optional soft preference passed to the LLM. Use this to bias toward newer engines (network-policy, envoy-fault). |
 
+## Audit trail
+
+| Value | Default | Notes |
+|---|---|---|
+| `audit.file.enabled` | `true` | Also append audit events to a JSON-lines file (`--audit-file`). Stdout logging is unaffected. |
+| `audit.file.path` | `/var/lib/simian/audit.jsonl` | Its directory is the mount point for the audit volume. |
+| `audit.file.maxBytes` | `104857600` | Past this the file rotates to `<path>.1`; two generations are kept. |
+| `audit.file.persistence.enabled` | `false` | Put the file on a PVC (`simian-audit`, kept on uninstall) instead of an emptyDir. Switches the Deployment to `strategy: Recreate`. Recommended overlay: `true`. |
+| `audit.file.persistence.size` | `1Gi` | |
+| `audit.file.persistence.storageClass` | `""` | Empty uses the cluster default. |
+
+An emptyDir survives container restarts but not the pod being deleted or
+rescheduled; persistence keeps the trail past both. At start-up the controller
+reads the file and writes a `lease.expired` event, reason
+`untracked-after-restart`, for every fault the previous process applied and
+never ended, so a restart no longer leaves faults with no end on record. Read
+the trail back with [`simian audit export`]({{< relref "cli-reference.md#exporting-the-audit-trail" >}}).
+
+On GKE the controller's stdout already reaches Cloud Logging, so the audit
+events are retained there as well; the file is what you have on clusters
+without a log pipeline, and what `simian audit export` reads directly.
+
 ## MCP server
 
 | Value | Default | Notes |
@@ -105,4 +127,4 @@ otherwise looks exactly like a planner that produced nothing.
 |---|---|---|
 | `resources.requests.cpu` / `.memory` | `100m` / `128Mi` | Recommended overlay: `200m` / `256Mi`. |
 | `resources.limits.cpu` / `.memory` | `500m` / `512Mi` | Recommended overlay: `1000m` / `1Gi` (prevents OOM during LLM bursts). |
-| `podSecurityContext` | restricted-PSS-compatible | `runAsNonRoot: true`, `runAsUser: 65532`, `seccompProfile.type: RuntimeDefault`. |
+| `podSecurityContext` | restricted-PSS-compatible | `runAsNonRoot: true`, `runAsUser: 65532`, `fsGroup: 65532` (so the controller can write a PVC-backed audit volume), `seccompProfile.type: RuntimeDefault`. |
