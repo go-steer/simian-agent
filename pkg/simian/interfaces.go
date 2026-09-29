@@ -49,12 +49,12 @@ type ChaosDriver interface {
 // clear its own leaked faults by reading the cluster, with no help from the
 // in-memory lease registry.
 //
-// Most engines do not need it. Every Chaos Mesh resource carries a
-// spec.duration that the chaos-controller-manager honours server-side, so a
-// Chaos Mesh fault recovers even if Simian is killed mid-fault. Engines that
-// create plain Kubernetes objects have no such backstop — kill the process and
-// the object stays until something deletes it, and the registry that knew
-// about it is gone.
+// Engines that create plain Kubernetes objects need it most: kill the process
+// and the object stays until something deletes it, and the registry that knew
+// about it is gone. Chaos Mesh resources carry a spec.duration the
+// chaos-controller-manager honours server-side, so the fault itself recovers
+// on time, but the object is left in the arena with the fault's spec in it;
+// that driver implements this to delete the residue.
 //
 // A driver that implements this is asked to sweep the eligible namespaces on
 // every reaper tick and once at startup. Implementations must be safe to call
