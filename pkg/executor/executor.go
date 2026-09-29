@@ -125,10 +125,8 @@ func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, e
 		FaultUID: m.UID,
 		PlanID:   m.PlanID,
 		Mode:     m.Source,
-		Payload: map[string]any{
-			"engine": m.Engine,
-			"kind":   m.ResourceKind,
-		},
+		// What was asked for, before narrowing touches the spec.
+		Payload: m.AuditRecord(),
 	})
 
 	if err := e.validateSchema(m); err != nil {
@@ -215,16 +213,18 @@ func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, e
 	// than holding both against the cap for the length of the settle wait.
 	release()
 
+	// What the driver was actually given, so this one record answers "what
+	// is running, on what, until when" without a join against received.
+	applied := m.AuditRecord()
+	applied["engine_uid"] = engineUID
+	applied["deadline"] = deadline.UTC().Format(time.RFC3339)
+	applied["verified_by"] = verifiedBy(driver, m)
 	e.auditor.Emit(ctx, simian.AuditEvent{
 		Event:    audit.EventDriverApplied,
 		FaultUID: m.UID,
 		PlanID:   m.PlanID,
 		Mode:     m.Source,
-		Payload: map[string]any{
-			"engine_uid":  engineUID,
-			"deadline":    deadline.UTC().Format(time.RFC3339),
-			"verified_by": verifiedBy(driver, m),
-		},
+		Payload:  applied,
 	})
 	e.auditor.Emit(ctx, simian.AuditEvent{
 		Event:    audit.EventLeaseRegistered,

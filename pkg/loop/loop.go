@@ -176,6 +176,7 @@ func (l *Loop) RunOnce(ctx context.Context, ns string) (simian.AttackPlan, []str
 				"namespace":  ns,
 				"step_count": len(plan.Steps),
 				"hypothesis": plan.Hypothesis,
+				"steps":      planStepRecords(plan.Steps),
 			},
 		})
 	}
@@ -339,4 +340,23 @@ func tierExceeds(have, max simian.BlastRadiusTier) bool {
 		return true
 	}
 	return h > m
+}
+
+// planStepRecords is the plan's steps as they go on plan.generated. A step
+// that is never submitted — its dependency failed, the cycle was cut short —
+// leaves no executor record, so this is the only place it is written down.
+func planStepRecords(steps []simian.PlanStep) []any {
+	out := make([]any, 0, len(steps))
+	for _, s := range steps {
+		rec := map[string]any{
+			"order":     s.Order,
+			"rationale": s.Rationale,
+			"fault":     s.Manifest.AuditRecord(),
+		}
+		if len(s.DependsOn) > 0 {
+			rec["depends_on"] = s.DependsOn
+		}
+		out = append(out, rec)
+	}
+	return out
 }

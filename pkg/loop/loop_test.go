@@ -185,6 +185,34 @@ func TestRunOnce_HappyPathAppliesAllSteps(t *testing.T) {
 	}
 }
 
+// A step that is never submitted leaves no executor record, so plan.generated
+// is the only place the whole plan is written down (#142).
+func TestRunOnce_PlanGeneratedCarriesTheSteps(t *testing.T) {
+	l, au := newLoopUnderTest(t, planJSON(2), &recordingExecutor{}, planner.Budget{
+		MaxFaultsPerCycle: 5, MaxConcurrentFaults: 3, MaxSeverityPerCycle: simian.TierNamespace,
+	})
+	if _, _, err := l.RunOnce(context.Background(), "boutique"); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	var steps []any
+	for _, e := range au.events {
+		if e.Event == audit.EventPlanGenerated {
+			steps, _ = e.Payload["steps"].([]any)
+		}
+	}
+	if len(steps) != 2 {
+		t.Fatalf("plan.generated steps = %d, want 2", len(steps))
+	}
+	step := steps[1].(map[string]any)
+	fault, _ := step["fault"].(map[string]any)
+	if step["order"] != 2 || fault["kind"] != "PodChaos" || fault["spec"].(map[string]any)["action"] != "pod-kill" {
+		t.Errorf("step = %v", step)
+	}
+	if targets, _ := fault["targets"].([]any); len(targets) != 1 || targets[0].(map[string]any)["namespace"] != "boutique" {
+		t.Errorf("step targets = %v", fault["targets"])
+	}
+}
+
 func TestRunOnce_HealthGateSkips(t *testing.T) {
 	exec := &recordingExecutor{}
 	l, au := newLoopUnderTest(t, planJSON(2), exec, planner.Budget{MaxFaultsPerCycle: 5, MaxConcurrentFaults: 1})
