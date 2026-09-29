@@ -17,6 +17,7 @@ package sut
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -312,5 +313,35 @@ func TestRegistryRoundTrip(t *testing.T) {
 	}
 	if list[0].Name() != "a" || list[1].Name() != "b" {
 		t.Errorf("list order: %v", []string{list[0].Name(), list[1].Name()})
+	}
+}
+
+type failingStore struct{ noopStore }
+
+func (failingStore) Save(context.Context, Baseline) error {
+	return errors.New(`configmaps "simian-baseline" is forbidden`)
+}
+
+// #143: the save failed in every arena for 39 hours and said so only on
+// stderr. The baseline still serves, but whoever is watching the audit trail
+// has to hear that it will not survive a restart.
+func TestAFailedBaselineSaveIsReported(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	k8s := fake.NewClientset(newDeployment("payments", "api", 1, 1))
+	var gotNS string
+	var gotErr error
+	m := &Manager{K8s: k8s, Store: failingStore{}, baselines: map[string]Baseline{},
+		OnPersistFailure: func(_ context.Context, ns string, err error) { gotNS, gotErr = ns, err }}
+	if _, err := m.EstablishBaselineFromTopology(ctx, "payments", BaselineConfig{
+		ReadyTimeout: 2 * time.Second, PollInterval: 50 * time.Millisecond,
+	}); err != nil {
+		t.Fatalf("EstablishBaselineFromTopology: %v", err)
+	}
+	if gotNS != "payments" || gotErr == nil || !strings.Contains(gotErr.Error(), "forbidden") {
+		t.Errorf("OnPersistFailure got (%q, %v), want payments and the store's error", gotNS, gotErr)
+	}
+	if _, ok := m.Baseline("payments"); !ok {
+		t.Error("a failed save dropped the in-memory baseline")
 	}
 }

@@ -115,7 +115,7 @@ func newSutDeployCmd() *cobra.Command {
 				}
 				am := arena.New(clientset, chaosSAName, chaosSANS)
 				am.Dyn = dyn
-				if err := am.Create(ctx, arena.Spec{Namespace: namespace, ExtraAnnotations: extraAnn}); err != nil {
+				if err := am.Create(ctx, arena.Spec{Namespace: namespace, ExtraAnnotations: extraAnn, SUTInController: useController}); err != nil {
 					return fmt.Errorf("arena create: %w", err)
 				}
 				fmt.Printf("arena %q ready\n", namespace)

@@ -7,7 +7,7 @@ AI-native chaos engineering orchestrator for Kubernetes. **Milestone 1 shipped**
 ## What works today
 
 ### Arena lifecycle (M2 Part A)
-- **`simian arena create <ns>`** — annotates a namespace `simian.chaos/eligible="true"` and creates the chaos-SA `Role` + `RoleBinding` for it. Idempotent on re-run; refuses to overwrite a namespace someone else owns.
+- **`simian arena create <ns>`** — annotates a namespace `simian.chaos/eligible="true"` and creates the chaos-SA `Role` + `RoleBinding` for it. Idempotent on re-run; refuses to overwrite a namespace someone else owns. `--sut-in-controller` also lets the controller deploy a SUT there (for `sut deploy --use-controller`).
 - **`simian arena destroy <ns>`** — removes RoleBinding + namespace. Refuses if simian-managed chaos resources are still active (override with `--force`).
 - **`simian arena describe <ns>`** — eligibility annotation, exclusion list, RoleBinding state, active-fault count.
 - **`ValidatingAdmissionPolicy` backstop** — even a buggy or compromised `simian-provisioner` SA cannot create non-eligible namespaces or grant the chaos SA into namespaces that aren't arenas.

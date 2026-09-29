@@ -515,3 +515,101 @@ func TestActiveFaultCountCountsWhatActsOnTheNamespaceNotWhatSitsInIt(t *testing.
 		t.Errorf("activeFaultCount = %d %v, want %d %v", count, names, len(want), want)
 	}
 }
+
+// The controller writes the baseline into every arena it establishes one for,
+// and nothing in an annotation-based arena granted that before #143.
+func TestEveryArenaLetsTheControllerSaveItsBaseline(t *testing.T) {
+	ctx := context.Background()
+	m := newManager()
+	if err := m.Create(ctx, Spec{Namespace: "chaos-1"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	role, err := m.K8s.RbacV1().Roles("chaos-1").Get(ctx, DefaultRoleName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get role: %v", err)
+	}
+	for _, verb := range []string{"get", "create", "update"} {
+		if !grants(role.Rules, "", "configmaps", verb) {
+			t.Errorf("arena Role does not grant configmaps:%s", verb)
+		}
+	}
+	if grants(role.Rules, "", "serviceaccounts", "create") {
+		t.Error("SUT deploy rights granted to an arena that did not ask for them")
+	}
+}
+
+func TestSUTInControllerComesAndGoesWithTheSpec(t *testing.T) {
+	ctx := context.Background()
+	m := newManager()
+	role := func() *rbacv1.Role {
+		t.Helper()
+		r, err := m.K8s.RbacV1().Roles("chaos-1").Get(ctx, DefaultRoleName, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("get role: %v", err)
+		}
+		return r
+	}
+
+	if err := m.Create(ctx, Spec{Namespace: "chaos-1", SUTInController: true}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if diff := diffRules(append(roleRules(), sutRules()...), role().Rules); diff != "" {
+		t.Errorf("Role with SUTInController:\n%s", diff)
+	}
+
+	if err := m.Create(ctx, Spec{Namespace: "chaos-1"}); err != nil {
+		t.Fatalf("re-Create: %v", err)
+	}
+	if diff := diffRules(roleRules(), role().Rules); diff != "" {
+		t.Errorf("Role after re-creating without SUTInController:\n%s", diff)
+	}
+}
+
+// The chart's sutInController block is the other half of the Role, and the
+// test above strips it. Held to sutRules() the same way.
+func TestSUTRulesMatchTheChart(t *testing.T) {
+	_, thisFile, _, _ := goruntime.Caller(0)
+	path := filepath.Join(filepath.Dir(thisFile), "..", "..", "deploy", "helm", "simian", "templates", "serviceaccount.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var block []string
+	inside := false
+	for _, line := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.Contains(trimmed, ".Values.sutInController.enabled"):
+			inside = true
+		case inside && strings.HasPrefix(trimmed, "{{- end"):
+			inside = false
+		case inside:
+			block = append(block, line)
+		}
+	}
+	if len(block) == 0 {
+		t.Fatal("no sutInController block in the chart's Role")
+	}
+	var rules []rbacv1.PolicyRule
+	if err := yaml.Unmarshal([]byte(strings.Join(block, "\n")), &rules); err != nil {
+		t.Fatalf("parse sutInController block: %v", err)
+	}
+	if diff := diffRules(sutRules(), rules); diff != "" {
+		t.Errorf("chart's sutInController block is out of sync with sutRules():\n%s", diff)
+	}
+}
+
+func grants(rules []rbacv1.PolicyRule, group, resource, verb string) bool {
+	for _, r := range rules {
+		for _, g := range r.APIGroups {
+			for _, res := range r.Resources {
+				for _, v := range r.Verbs {
+					if g == group && res == resource && v == verb {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}

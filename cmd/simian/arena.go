@@ -53,6 +53,7 @@ func newArenaCreateCmd() *cobra.Command {
 		chaosSANS   string
 		annotations []string
 		labelsArgs  []string
+		sutInCtrl   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "create <namespace>",
@@ -78,6 +79,7 @@ func newArenaCreateCmd() *cobra.Command {
 				Namespace:        args[0],
 				ExtraAnnotations: extraAnn,
 				ExtraLabels:      extraLbl,
+				SUTInController:  sutInCtrl,
 			}
 			if err := mgr.Create(ctx, spec); err != nil {
 				return err
@@ -91,6 +93,7 @@ func newArenaCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&chaosSANS, "chaos-sa-namespace", "simian-system", "Namespace where the chaos controller SA lives")
 	cmd.Flags().StringArrayVar(&annotations, "annotation", nil, "Extra namespace annotation key=value (repeatable; e.g. simian.chaos/exclude-workloads=loadgenerator)")
 	cmd.Flags().StringArrayVar(&labelsArgs, "label", nil, "Extra namespace label key=value (repeatable)")
+	cmd.Flags().BoolVar(&sutInCtrl, "sut-in-controller", false, "Also let the controller deploy a SUT into the arena (for 'simian sut deploy --use-controller'; matches the chart's sutInController.enabled)")
 	return cmd
 }
 

@@ -85,6 +85,11 @@ const (
 	EventHealthGateFailed = "cycle.health_gate_failed"
 	EventLLMUnavailable   = "cycle.llm_unavailable"
 	EventStepSkipped      = "cycle.step_skipped"
+
+	// EventBaselinePersistFailed: a baseline was established but could not be
+	// saved. It serves from memory until the next restart, after which the
+	// loop's health gate skips every cycle in that namespace.
+	EventBaselinePersistFailed = "baseline.persist_failed"
 )
 
 // SLogAuditor is the default Auditor — it writes audit events to a slog.Logger
