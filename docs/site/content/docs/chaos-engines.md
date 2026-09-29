@@ -156,7 +156,14 @@ simian chaos --clear f-<UID>               # clear before lease expiry
 
 Chaos Mesh resources carry a `spec.duration` that `chaos-controller-manager`
 honours server-side, so a `chaos-mesh` fault recovers on its own even if Simian
-is killed mid-fault.
+is killed mid-fault. The object does not go away, though: it stays in the arena,
+spec and all, where the next scenario's subject can read it and where it counts
+as an active fault in `simian arena destroy`'s pre-check. So the `chaos-mesh`
+driver stamps the same deadline annotation described below, and the sweep
+deletes a managed Chaos Mesh object a minute after it expires. The minute
+leaves faults the running controller still holds to its own lease, which ends
+them with their fault UID attached. Objects created before the annotation
+existed are judged by creation time plus `spec.duration`.
 
 A `network-policy` or `kube-state` fault has no such backstop — a NetworkPolicy
 or a synthesized Deployment stays until something deletes it, and the in-memory

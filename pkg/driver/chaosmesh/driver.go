@@ -104,8 +104,17 @@ func (d *Driver) Apply(ctx context.Context, m simian.FaultManifest) (string, err
 		lbls[k] = v
 	}
 	obj.SetLabels(lbls)
-	if len(targetAnnotations) > 0 {
-		obj.SetAnnotations(targetAnnotations)
+	annotations := map[string]string{}
+	for k, v := range targetAnnotations {
+		annotations[k] = v
+	}
+	// The deadline, so a later process can tell residue from a live fault
+	// without the lease that knew — see ReapExpired.
+	if m.Duration > 0 {
+		annotations[ExpiryAnnotation] = time.Now().Add(m.Duration).UTC().Format(time.RFC3339)
+	}
+	if len(annotations) > 0 {
+		obj.SetAnnotations(annotations)
 	}
 
 	// Deep-copy the spec map into the unstructured object. Inject the duration
@@ -150,9 +159,32 @@ func (d *Driver) Clear(ctx context.Context, engineUIDStr string) error {
 // Catalog implements ChaosDriver. Enumerates installed CRDs in the chaos-mesh.org
 // API group and emits one CatalogEntry per Kind.
 func (d *Driver) Catalog(ctx context.Context) ([]simian.CatalogEntry, error) {
+	preferred, resources, err := d.faultResources()
+	if err != nil {
+		return nil, fmt.Errorf("chaos-mesh catalog: %w", err)
+	}
+	out := make([]simian.CatalogEntry, 0, len(resources))
+	for _, r := range resources {
+		out = append(out, simian.CatalogEntry{
+			Engine:          simian.EngineChaosMesh,
+			APIVersion:      preferred,
+			ResourceKind:    r.Kind,
+			BlastRadiusTier: catalog.Classify(simian.EngineChaosMesh, r.Kind),
+			Description:     r.Kind + " (chaos-mesh.org)",
+			SpecTemplate:    specTemplates[r.Kind],
+			EfficacyGate:    catalog.EfficacyGate(simian.EngineChaosMesh, r.Kind),
+		})
+	}
+	return out, nil
+}
+
+// faultResources returns the preferred chaos-mesh.org group version and its
+// user-facing fault resources, one per Kind. Both empty when Chaos Mesh is not
+// installed, which is not an error.
+func (d *Driver) faultResources() (string, []metav1.APIResource, error) {
 	groups, err := d.disco.ServerGroups()
 	if err != nil {
-		return nil, fmt.Errorf("chaos-mesh catalog: server groups: %w", err)
+		return "", nil, fmt.Errorf("server groups: %w", err)
 	}
 	var preferred string
 	for _, g := range groups.Groups {
@@ -162,14 +194,13 @@ func (d *Driver) Catalog(ctx context.Context) ([]simian.CatalogEntry, error) {
 		}
 	}
 	if preferred == "" {
-		// Chaos Mesh not installed; not an error — just an empty catalog.
-		return nil, nil
+		return "", nil, nil
 	}
 	resList, err := d.disco.ServerResourcesForGroupVersion(preferred)
 	if err != nil {
-		return nil, fmt.Errorf("chaos-mesh catalog: server resources for %s: %w", preferred, err)
+		return "", nil, fmt.Errorf("server resources for %s: %w", preferred, err)
 	}
-	out := make([]simian.CatalogEntry, 0, len(resList.APIResources))
+	var out []metav1.APIResource
 	seen := map[string]bool{}
 	for _, r := range resList.APIResources {
 		// Filter subresources (status, scale, etc.)
@@ -185,17 +216,9 @@ func (d *Driver) Catalog(ctx context.Context) ([]simian.CatalogEntry, error) {
 			continue
 		}
 		seen[r.Kind] = true
-		out = append(out, simian.CatalogEntry{
-			Engine:          simian.EngineChaosMesh,
-			APIVersion:      preferred,
-			ResourceKind:    r.Kind,
-			BlastRadiusTier: catalog.Classify(simian.EngineChaosMesh, r.Kind),
-			Description:     r.Kind + " (chaos-mesh.org)",
-			SpecTemplate:    specTemplates[r.Kind],
-			EfficacyGate:    catalog.EfficacyGate(simian.EngineChaosMesh, r.Kind),
-		})
+		out = append(out, r)
 	}
-	return out, nil
+	return preferred, out, nil
 }
 
 // gvrFor resolves a GVK to a GVR using the cached REST mapper.
