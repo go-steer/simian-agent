@@ -200,6 +200,17 @@ func applyLine(acc *scenarioAccum, l auditLine) {
 		if f.failure == "" {
 			f.failure = describeProbeFailure(l)
 		}
+	case audit.EventFaultInjected:
+		// Only the failure counts. The engine saying it injected is not the
+		// workload showing the effect, so a pass does not stand in for an
+		// efficacy record; a refusal, though, is the whole story, and without
+		// this the scenario would read "no passing efficacy record" instead.
+		if passed, _ := l.Payload["passed"].(bool); !passed && f.failure == "" {
+			f.failure = "the engine did not inject it"
+			if errText := payloadString(l.Payload, "error"); errText != "" {
+				f.failure += ": " + errText
+			}
+		}
 	}
 }
 

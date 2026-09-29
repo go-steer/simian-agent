@@ -67,6 +67,23 @@ type OrphanReaper interface {
 	ReapExpired(ctx context.Context, namespaces []string, now time.Time) (cleared []string, err error)
 }
 
+// InjectionConfirmer is an optional ChaosDriver capability: the driver can ask
+// its engine whether a fault it applied actually took effect.
+//
+// Apply returning nil means the engine accepted the object, not that anything
+// happened. Chaos Mesh accepts a DNSChaos, fails to inject it into every pod,
+// and retries quietly until the duration runs out; without this the audit log
+// records that fault as having run. An engine's own status is weaker evidence
+// than an efficacy probe — it says the injection succeeded, not that the
+// workload noticed — but it is available for every kind the engine has, where
+// probes exist only for the few kinds someone has written one for.
+type InjectionConfirmer interface {
+	// ConfirmInjected waits, within a bound of the driver's choosing, for the
+	// engine to report the fault injected. observed describes the last state
+	// seen either way, so a failure can be debugged after the arena is gone.
+	ConfirmInjected(ctx context.Context, engineUID string) (observed string, err error)
+}
+
 // CompletionRequest is the LLMProvider input. Tools are read-only context tools
 // the model may call during reasoning. ResponseSchema is the JSON Schema for
 // structured output (e.g. the FaultManifest schema).

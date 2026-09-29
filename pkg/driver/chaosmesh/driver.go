@@ -45,6 +45,10 @@ type Driver struct {
 	disco      discovery.DiscoveryInterface
 	mapper     *restmapper.DeferredDiscoveryRESTMapper
 	namePrefix string
+
+	// Bounds for ConfirmInjected; zero means the package defaults.
+	confirmTimeout  time.Duration
+	confirmInterval time.Duration
 }
 
 // New creates a Driver. namePrefix is the GenerateName prefix for created

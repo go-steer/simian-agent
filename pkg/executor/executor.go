@@ -221,8 +221,9 @@ func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, e
 		PlanID:   m.PlanID,
 		Mode:     m.Source,
 		Payload: map[string]any{
-			"engine_uid": engineUID,
-			"deadline":   deadline.UTC().Format(time.RFC3339),
+			"engine_uid":  engineUID,
+			"deadline":    deadline.UTC().Format(time.RFC3339),
+			"verified_by": verifiedBy(driver, m),
 		},
 	})
 	e.auditor.Emit(ctx, simian.AuditEvent{
@@ -235,6 +236,10 @@ func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, e
 	// The lease is registered before the gate runs, deliberately. Everything
 	// below can fail, and a fault the cluster has already accepted must be
 	// reapable no matter which way it does.
+	if err := e.confirmInjected(ctx, driver, m, engineUID); err != nil {
+		e.abandon(ctx, m, engineUID, err)
+		return "", err
+	}
 	if err := e.settle(ctx, m); err != nil {
 		e.abandon(ctx, m, engineUID, err)
 		return "", err
@@ -249,6 +254,58 @@ func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, e
 	}
 
 	return m.UID, nil
+}
+
+// confirmInjected asks the engine whether the fault it just accepted actually
+// took effect, for drivers that can say (simian.InjectionConfirmer). Runs
+// before the Settle probes: when the engine already knows the injection
+// failed, there is nothing for a probe to wait for.
+func (e *Executor) confirmInjected(ctx context.Context, driver simian.ChaosDriver, m simian.FaultManifest, engineUID string) error {
+	c, ok := driver.(simian.InjectionConfirmer)
+	if !ok {
+		return nil
+	}
+	start := time.Now()
+	observed, err := c.ConfirmInjected(ctx, engineUID)
+	payload := map[string]any{
+		"passed":     err == nil,
+		"observed":   observed,
+		"elapsed_ms": time.Since(start).Milliseconds(),
+	}
+	reason := ""
+	if err != nil {
+		reason = string(simian.ReasonInjectionFailed)
+		payload["error"] = err.Error()
+	}
+	e.auditor.Emit(ctx, simian.AuditEvent{
+		Event:    audit.EventFaultInjected,
+		FaultUID: m.UID,
+		PlanID:   m.PlanID,
+		Mode:     m.Source,
+		Reason:   reason,
+		Payload:  payload,
+	})
+	if err != nil {
+		return simian.NewExecutorError(simian.StageDriver, simian.ReasonInjectionFailed,
+			"engine did not inject the fault", err)
+	}
+	return nil
+}
+
+// verifiedBy names the checks that will stand between this fault and the
+// audit log calling it applied: the engine's own status, where the driver can
+// read one, then each Settle probe. Empty means nothing will check, which a
+// reader of driver.applied could not otherwise tell apart from a fault that
+// was confirmed. Never nil, so it is written as [] rather than omitted.
+func verifiedBy(driver simian.ChaosDriver, m simian.FaultManifest) []string {
+	out := []string{}
+	if _, ok := driver.(simian.InjectionConfirmer); ok {
+		out = append(out, "engine-status")
+	}
+	for _, p := range m.SettleProbes() {
+		out = append(out, p.Name)
+	}
+	return out
 }
 
 // settle runs the manifest's Settle probes in order and returns once they have
@@ -363,7 +420,8 @@ func (e *Executor) attachDefaultProbes(m *simian.FaultManifest) []string {
 	return names
 }
 
-// abandon backs out a fault that was applied but never manifested.
+// abandon backs out a fault that was applied but never manifested, whether
+// the engine said so or a probe did.
 //
 // An unverified fault is not a valid experiment, and leaving it running would
 // contaminate the next one while the caller — holding an error and no UID —
@@ -371,6 +429,10 @@ func (e *Executor) attachDefaultProbes(m *simian.FaultManifest) []string {
 // on purpose, so the reaper collects it at the deadline instead.
 func (e *Executor) abandon(ctx context.Context, m simian.FaultManifest, engineUID string, cause error) {
 	reason := string(simian.ReasonProbeFailed)
+	var ee *simian.ExecutorError
+	if errors.As(cause, &ee) {
+		reason = string(ee.Reason)
+	}
 	payload := map[string]any{
 		"engine_uid": engineUID,
 		"error":      cause.Error(),
