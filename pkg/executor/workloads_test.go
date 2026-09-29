@@ -1,0 +1,133 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package executor
+
+import (
+	"context"
+	"maps"
+	"slices"
+	"strings"
+	"testing"
+
+	appsv1 "k8s.io/api/apps/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/go-steer/simian-agent/pkg/audit"
+	"github.com/go-steer/simian-agent/pkg/simian"
+)
+
+func deployment(ns, name string, sel *metav1.LabelSelector) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		Spec:       appsv1.DeploymentSpec{Selector: sel},
+	}
+}
+
+// #144: `simian chaos --workload paymentservice` sends a target with a name
+// and no labels. The gate has to see the workload's pods, not none.
+func TestANamedTargetIsGatedOnItsWorkloadsPods(t *testing.T) {
+	client := fake.NewClientset(deployment("online-boutique", "paymentservice",
+		&metav1.LabelSelector{MatchLabels: map[string]string{"app": "paymentservice"}}))
+	prober := &fakeProber{}
+	exec, _, auditor, _ := newProbedExecutor(t, prober, WithWorkloadSelectors(KubernetesWorkloadSelectors{Client: client}))
+
+	m := goodManifest()
+	m.Probes = []simian.ProbeSpec{sotProbe("reachable")}
+	if _, err := exec.Apply(context.Background(), m); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(prober.seen) == 0 {
+		t.Fatal("no probe ran")
+	}
+	if got := prober.seen[0].Labels; !maps.Equal(got, map[string]string{"app": "paymentservice"}) {
+		t.Errorf("probe target labels = %v, want the Deployment's selector", got)
+	}
+	validated, _ := auditor.FindEvent(audit.EventExecutorValidated)
+	if got, _ := validated.Payload["target_labels_from_workload"].([]string); !slices.Equal(got, []string{"online-boutique/paymentservice"}) {
+		t.Errorf("validated payload = %v, want the resolution recorded", validated.Payload)
+	}
+}
+
+func TestLabelsTheManifestBringsAreLeftAlone(t *testing.T) {
+	client := fake.NewClientset(deployment("online-boutique", "paymentservice",
+		&metav1.LabelSelector{MatchLabels: map[string]string{"app": "paymentservice"}}))
+	prober := &fakeProber{}
+	exec, _, _, _ := newProbedExecutor(t, prober, WithWorkloadSelectors(KubernetesWorkloadSelectors{Client: client}))
+
+	m := goodManifest()
+	m.Targets[0].Labels = map[string]string{"tier": "payments"}
+	m.Probes = []simian.ProbeSpec{sotProbe("reachable")}
+	if _, err := exec.Apply(context.Background(), m); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got := prober.seen[0].Labels; !maps.Equal(got, map[string]string{"tier": "payments"}) {
+		t.Errorf("probe target labels = %v, want the manifest's own", got)
+	}
+}
+
+func TestAWorkloadThatCannotBeResolvedIsRecordedNotFatal(t *testing.T) {
+	prober := &fakeProber{}
+	exec, _, auditor, _ := newProbedExecutor(t, prober, WithWorkloadSelectors(KubernetesWorkloadSelectors{Client: fake.NewClientset()}))
+
+	m := goodManifest()
+	m.Probes = []simian.ProbeSpec{sotProbe("reachable")}
+	if _, err := exec.Apply(context.Background(), m); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	validated, _ := auditor.FindEvent(audit.EventExecutorValidated)
+	got, _ := validated.Payload["target_labels_unresolved"].([]string)
+	if len(got) != 1 || !strings.Contains(got[0], "no Deployment, StatefulSet or DaemonSet") {
+		t.Errorf("target_labels_unresolved = %v", validated.Payload["target_labels_unresolved"])
+	}
+}
+
+func TestKubernetesWorkloadSelectors(t *testing.T) {
+	client := fake.NewClientset(
+		deployment("ns", "web", &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}}),
+		deployment("ns", "fancy", &metav1.LabelSelector{
+			MatchLabels:      map[string]string{"app": "fancy"},
+			MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "tier", Operator: metav1.LabelSelectorOpIn, Values: []string{"a"}}},
+		}),
+		&appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "db"},
+			Spec:       appsv1.StatefulSetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "db"}}},
+		},
+	)
+	ws := KubernetesWorkloadSelectors{Client: client}
+	for _, tc := range []struct {
+		kind, name string
+		want       map[string]string
+		wantErr    string
+	}{
+		{"", "web", map[string]string{"app": "web"}, ""},
+		{"", "db", map[string]string{"app": "db"}, ""},
+		{"StatefulSet", "db", map[string]string{"app": "db"}, ""},
+		{"Deployment", "db", nil, "no Deployment"},
+		{"", "fancy", nil, "by expression"},
+		{"CronJob", "web", nil, "no pod selector"},
+	} {
+		got, err := ws.PodLabels(context.Background(), "ns", tc.kind, tc.name)
+		if tc.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("%s/%s: err = %v, want %q", tc.kind, tc.name, err, tc.wantErr)
+			}
+			continue
+		}
+		if err != nil || !maps.Equal(got, tc.want) {
+			t.Errorf("%s/%s = %v, %v; want %v", tc.kind, tc.name, got, err, tc.want)
+		}
+	}
+}
