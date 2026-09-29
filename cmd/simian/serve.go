@@ -177,6 +177,7 @@ func newServeCmd() *cobra.Command {
 			execOpts := []executor.Option{
 				executor.WithHistory(history),
 				executor.WithProber(prober),
+				executor.WithWorkloadSelectors(executor.KubernetesWorkloadSelectors{Client: clientset}),
 			}
 			if defaultProbes {
 				execOpts = append(execOpts, executor.WithDefaultProbes(catalog.DefaultProbes))

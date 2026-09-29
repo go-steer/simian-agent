@@ -622,6 +622,14 @@ Ungated is not *silently* ungated. The `executor.validated` event lists the
 probes Simian attached under `default_probes`; no such key means the fault ran
 unverified, which is a fact about the data point rather than a footnote.
 
+Probes find their pods by `targets[0].labels`. A target that names a workload
+and carries no labels — what `simian chaos --workload` sends — gets the
+workload's own pod selector (Deployment, StatefulSet or DaemonSet
+`spec.selector.matchLabels`), read just before the gate runs and recorded
+under `target_labels_from_workload`. A name that cannot be resolved, or a
+selector that uses `matchExpressions`, is left as it came and listed under
+`target_labels_unresolved`; write the labels into the manifest in that case.
+
 ## What happens on failure
 
 `Apply` returns a typed `*simian.ExecutorError` with stage `probe` and reason

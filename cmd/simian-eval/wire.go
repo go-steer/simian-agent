@@ -108,7 +108,10 @@ func buildPlane(cfg *rest.Config, o *options, auditor simian.Auditor, logger *sl
 		simian.ProbeTypeTCP:  httpProber.TCP(),
 		simian.ProbeTypeLogs: probe.NewKubernetesLogsProber(clientset),
 	})
-	execOpts := []executor.Option{executor.WithProber(prober)}
+	execOpts := []executor.Option{
+		executor.WithProber(prober),
+		executor.WithWorkloadSelectors(executor.KubernetesWorkloadSelectors{Client: clientset}),
+	}
 	if o.defaultProbes {
 		execOpts = append(execOpts, executor.WithDefaultProbes(catalog.DefaultProbes))
 	}

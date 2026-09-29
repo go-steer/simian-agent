@@ -117,7 +117,7 @@ Examples:
 	cmd.Flags().StringVar(&kind, "kind", "", "ResourceKind (e.g. PodChaos, NetworkChaos, NetworkPolicy, EnvoyHttpDelay, ImageUnresolvable)")
 	cmd.Flags().StringVar(&apiVersion, "api-version", "chaos-mesh.org/v1alpha1", "CRD apiVersion. Override for non-chaos-mesh engines: networking.k8s.io/v1 for network-policy, simian.io/v1 for envoy-fault, apps/v1 for kube-state.")
 	cmd.Flags().StringVar(&ns, "namespace", "", "Target namespace")
-	cmd.Flags().StringVar(&workload, "workload", "", "Target workload name")
+	cmd.Flags().StringVar(&workload, "workload", "", "Target workload name. The controller looks up its pod selector (Deployment, StatefulSet or DaemonSet) so the efficacy probes know which pods to check.")
 	cmd.Flags().StringVar(&duration, "duration", "2m", "Fault duration (Go duration string)")
 	cmd.Flags().StringVar(&specJSON, "spec", "", "Inline JSON spec for the fault. Use --spec-file for larger specs read from disk, or --stdin-spec to read from stdin.")
 	cmd.Flags().StringVar(&specFile, "spec-file", "", "Path to a JSON file containing the fault spec. Mutually exclusive with --spec and --stdin-spec.")

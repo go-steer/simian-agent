@@ -44,6 +44,9 @@ type Executor struct {
 	// defaultProbes supplies the gate for manifests that declare none. nil
 	// leaves every fault gated only by what its author wrote.
 	defaultProbes func(simian.FaultManifest) []simian.ProbeSpec
+	// workloads, if set, fills in the labels of targets that name a workload
+	// and carry none. See WithWorkloadSelectors.
+	workloads WorkloadSelectors
 
 	mu            sync.Mutex
 	lastApplyByNS map[string]time.Time
@@ -175,7 +178,9 @@ func (e *Executor) apply(ctx context.Context, m simian.FaultManifest) (string, e
 
 	// Attach Simian's own gate before anything reads m.Probes. Done after
 	// narrowing so a default probe inherits the selector the driver will
-	// actually be given, not the one the manifest arrived with.
+	// actually be given, not the one the manifest arrived with. Labels are
+	// filled in first because the default probes select pods by them.
+	labelled, unlabelled := e.resolveTargetLabels(ctx, &m)
 	attached := e.attachDefaultProbes(&m)
 
 	validated := simian.AuditEvent{
@@ -184,8 +189,16 @@ func (e *Executor) apply(ctx context.Context, m simian.FaultManifest) (string, e
 		PlanID:   m.PlanID,
 		Mode:     m.Source,
 	}
-	if len(attached) > 0 || len(narrowed) > 0 {
+	if len(attached) > 0 || len(narrowed) > 0 || len(labelled) > 0 || len(unlabelled) > 0 {
 		validated.Payload = map[string]any{}
+	}
+	if len(labelled) > 0 {
+		// The targets arrived as names; the labels are the workloads' own
+		// pod selectors, read at this moment.
+		validated.Payload["target_labels_from_workload"] = labelled
+	}
+	if len(unlabelled) > 0 {
+		validated.Payload["target_labels_unresolved"] = unlabelled
 	}
 	if len(attached) > 0 {
 		validated.Payload["default_probes"] = attached
