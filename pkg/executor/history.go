@@ -15,6 +15,7 @@
 package executor
 
 import (
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -38,14 +39,46 @@ type RecentFault struct {
 	ClearReason string               `json:"clear_reason,omitempty"`
 }
 
-// History is a bounded, in-memory record of recently-applied faults. Safe
-// for concurrent use. Lost on process restart — that's intentional for v1
-// (R-FAULT-05's durable history is the SimianLease CR design, deferred).
+// RefusedFault is a fault the executor would not run, or ran and backed out:
+// rejected by validation or safety, refused by its own precheck, failed by the
+// driver, or never injected or never verified.
+//
+// Kept apart from RecentFault because it means the opposite. A recent fault
+// happened; a refused one did not, and a planner shown only the first has no
+// way to know the second was ever tried. In a 39-hour trial that is how the
+// same invalid HTTPChaos was proposed 220 times.
+type RefusedFault struct {
+	FaultUID  string                 `json:"fault_uid"`
+	Manifest  simian.FaultManifest   `json:"manifest"`
+	RefusedAt time.Time              `json:"refused_at"`
+	Stage     simian.ExecutorStage   `json:"stage,omitempty"`
+	Reason    simian.RejectionReason `json:"reason,omitempty"`
+	Error     string                 `json:"error"`
+}
+
+// RefusalWorthRemembering reports whether a refusal says something about the
+// fault, rather than about the moment it arrived. A budget refusal — the
+// concurrency cap, a cooldown — is the latter: the same fault submitted a
+// minute later may well run, so telling a planner not to repeat it would be
+// wrong.
+func RefusalWorthRemembering(err error) bool {
+	var ee *simian.ExecutorError
+	if errors.As(err, &ee) && ee.Reason == simian.ReasonBudgetExceeded {
+		return false
+	}
+	return err != nil
+}
+
+// History is a bounded, in-memory record of recently-applied faults, and a
+// second ring of recently-refused ones. Safe for concurrent use. Lost on
+// process restart — that's intentional for v1 (R-FAULT-05's durable history
+// is the SimianLease CR design, deferred).
 type History struct {
 	mu       sync.RWMutex
 	capacity int
 	items    []RecentFault  // ring buffer; head is items[0] when len < cap
 	byUID    map[string]int // index into items by FaultUID for UpdateCleared
+	refused  []RefusedFault // ring buffer, same capacity, oldest first
 }
 
 // NewHistory constructs a bounded ring with the given capacity. Capacity ≤ 0
@@ -58,7 +91,37 @@ func NewHistory(capacity int) *History {
 		capacity: capacity,
 		items:    make([]RecentFault, 0, capacity),
 		byUID:    make(map[string]int, capacity),
+		refused:  make([]RefusedFault, 0, capacity),
 	}
+}
+
+// PushRefused records a fault the executor refused or backed out.
+func (h *History) PushRefused(rf RefusedFault) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.refused) >= h.capacity {
+		h.refused = h.refused[1:]
+	}
+	h.refused = append(h.refused, rf)
+}
+
+// ListRefused returns up to limit most-recent refusals, newest first,
+// optionally filtered to one namespace. limit ≤ 0 returns all of them.
+func (h *History) ListRefused(namespace string, limit int) []RefusedFault {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	out := make([]RefusedFault, 0, len(h.refused))
+	for i := len(h.refused) - 1; i >= 0; i-- {
+		rf := h.refused[i]
+		if !rf.Manifest.TargetsNamespace(namespace) {
+			continue
+		}
+		out = append(out, rf)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out
 }
 
 // Push records a newly-applied fault. ClearedAt is expected to be zero;

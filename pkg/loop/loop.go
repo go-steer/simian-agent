@@ -16,6 +16,7 @@ package loop
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -33,6 +34,21 @@ import (
 type RecentLookup interface {
 	Recent(namespace string, limit int) []executor.RecentFault
 }
+
+// RefusalLookup is the optional half of the executor's history: what it would
+// not run. Checked for on Recents, so wiring the executor there brings both.
+type RefusalLookup interface {
+	Refused(namespace string, limit int) []executor.RefusedFault
+}
+
+// A step refused this many times inside the window is not submitted again
+// until the window has moved past the oldest refusal. The planner is told
+// about refusals and usually stops; this is for when it does not, so the
+// executor is not asked the same question hundreds of times.
+const (
+	repeatedRefusalLimit  = 3
+	repeatedRefusalWindow = time.Hour
+)
 
 // CatalogFunc returns the currently-permitted fault catalog. Typically a
 // thin wrapper over the executor's gatherCatalog helper.
@@ -55,6 +71,9 @@ type Loop struct {
 	Auditor    simian.Auditor
 	Logger     *slog.Logger
 	Hypothesis string
+
+	refusalMu sync.Mutex
+	refusals  map[string][]time.Time // step key → recent refusal times
 }
 
 // Run drives the loop on a ticker until ctx is done. Returns the context
@@ -150,6 +169,11 @@ func (l *Loop) RunOnce(ctx context.Context, ns string) (simian.AttackPlan, []str
 	if l.Recents != nil {
 		if rs := l.Recents.Recent(ns, 10); len(rs) > 0 {
 			in.RecentFaults = rs
+		}
+		if rl, ok := l.Recents.(RefusalLookup); ok {
+			if rs := rl.Refused(ns, 10); len(rs) > 0 {
+				in.RecentRefusals = rs
+			}
 		}
 	}
 
@@ -287,7 +311,22 @@ func (l *Loop) executePlan(ctx context.Context, ns string, plan simian.AttackPla
 				m := s.Manifest
 				m.PlanID = plan.PlanID
 				m.Source = simian.SourceAutonomous
+				// Keyed before Apply: safety narrowing rewrites the spec in place.
+				key := stepKey(m)
+				if n := l.recentRefusals(key); n >= repeatedRefusalLimit {
+					if l.Auditor != nil {
+						l.Auditor.Emit(ctx, simian.AuditEvent{
+							Event:   audit.EventStepSkipped,
+							PlanID:  plan.PlanID,
+							Mode:    simian.SourceAutonomous,
+							Reason:  "repeated-refusal",
+							Payload: map[string]any{"namespace": ns, "order": s.Order, "refusals": n, "window": repeatedRefusalWindow.String()},
+						})
+					}
+					return
+				}
 				uid, err := l.Executor.Apply(ctx, m)
+				l.noteOutcome(key, err)
 				if err != nil {
 					if l.Auditor != nil {
 						l.Auditor.Emit(ctx, simian.AuditEvent{
@@ -359,4 +398,63 @@ func planStepRecords(steps []simian.PlanStep) []any {
 		out = append(out, rec)
 	}
 	return out
+}
+
+// stepKey identifies a step by what it would do: kind, targets and spec. Two
+// steps with the same key get the same answer from the executor, give or take
+// the cluster's state.
+func stepKey(m simian.FaultManifest) string {
+	b, err := json.Marshal(struct {
+		Kind    string             `json:"k"`
+		Targets []simian.TargetRef `json:"t"`
+		Spec    map[string]any     `json:"s"`
+	}{m.ResourceKind, m.Targets, m.Spec})
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// recentRefusals returns how many times the step was refused inside the
+// window, dropping older refusals as it goes.
+func (l *Loop) recentRefusals(key string) int {
+	if key == "" {
+		return 0
+	}
+	l.refusalMu.Lock()
+	defer l.refusalMu.Unlock()
+	cutoff := time.Now().Add(-repeatedRefusalWindow)
+	times := l.refusals[key]
+	i := 0
+	for i < len(times) && times[i].Before(cutoff) {
+		i++
+	}
+	if i == len(times) {
+		delete(l.refusals, key)
+		return 0
+	}
+	l.refusals[key] = times[i:]
+	return len(times) - i
+}
+
+// noteOutcome records a refusal against the step, or forgets its refusals if
+// it ran. Budget refusals are not counted: they are about the moment, not the
+// step.
+func (l *Loop) noteOutcome(key string, err error) {
+	if key == "" {
+		return
+	}
+	l.refusalMu.Lock()
+	defer l.refusalMu.Unlock()
+	if err == nil {
+		delete(l.refusals, key)
+		return
+	}
+	if !executor.RefusalWorthRemembering(err) {
+		return
+	}
+	if l.refusals == nil {
+		l.refusals = map[string][]time.Time{}
+	}
+	l.refusals[key] = append(l.refusals[key], time.Now())
 }

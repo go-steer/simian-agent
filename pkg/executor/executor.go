@@ -110,16 +110,41 @@ func (e *Executor) Recent(namespace string, limit int) []RecentFault {
 	return e.history.List(namespace, limit)
 }
 
+// Refused returns recently-refused faults, newest first, optionally filtered
+// by namespace. Returns nil if no history buffer is wired.
+func (e *Executor) Refused(namespace string, limit int) []RefusedFault {
+	if e.history == nil {
+		return nil
+	}
+	return e.history.ListRefused(namespace, limit)
+}
+
 // History returns the underlying buffer (may be nil). Exposed so the reaper
 // callback in serve.go can update entries on deadline-driven clears without
 // importing the executor's internals.
 func (e *Executor) History() *History { return e.history }
 
 // Apply runs the full executor pipeline.
+//
+// Every refusal that says something about the fault is also recorded in the
+// history, whichever stage it came from, so a planner can be told about it.
 func (e *Executor) Apply(ctx context.Context, m simian.FaultManifest) (string, error) {
 	if m.UID == "" {
 		m.UID = newFaultUID()
 	}
+	uid, err := e.apply(ctx, m)
+	if e.history != nil && RefusalWorthRemembering(err) {
+		rf := RefusedFault{FaultUID: m.UID, Manifest: m, RefusedAt: time.Now(), Error: err.Error()}
+		var ee *simian.ExecutorError
+		if errors.As(err, &ee) {
+			rf.Stage, rf.Reason = ee.Stage, ee.Reason
+		}
+		e.history.PushRefused(rf)
+	}
+	return uid, err
+}
+
+func (e *Executor) apply(ctx context.Context, m simian.FaultManifest) (string, error) {
 	e.auditor.Emit(ctx, simian.AuditEvent{
 		Event:    audit.EventExecutorReceived,
 		FaultUID: m.UID,

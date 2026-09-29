@@ -17,6 +17,7 @@ package loop
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -396,5 +397,94 @@ func TestTierExceedsFailsClosedOnBothSides(t *testing.T) {
 				t.Errorf("tierExceeds(%q, %q) = %v, want %v", tt.have, tt.max, got, tt.want)
 			}
 		})
+	}
+}
+
+type fakeRefusals struct {
+	fakeRecents
+	refused []executor.RefusedFault
+}
+
+func (f fakeRefusals) Refused(_ string, _ int) []executor.RefusedFault { return f.refused }
+
+// capturingLLM answers with a fixed plan and keeps the last prompt it saw.
+type capturingLLM struct {
+	mu   sync.Mutex
+	plan string
+	user string
+}
+
+func (c *capturingLLM) Name() string { return "capturing" }
+func (c *capturingLLM) Complete(_ context.Context, req simian.CompletionRequest) (simian.CompletionResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, m := range req.Messages {
+		c.user = m.Content
+	}
+	return simian.CompletionResponse{Text: c.plan}, nil
+}
+
+func TestRunOnce_ThePlannerHearsWhatTheExecutorRefused(t *testing.T) {
+	llm := &capturingLLM{plan: planJSON(1)}
+	l, _ := newLoopUnderTest(t, planJSON(1), &recordingExecutor{}, planner.Budget{
+		MaxFaultsPerCycle: 5, MaxConcurrentFaults: 5, MaxSeverityPerCycle: simian.TierNamespace,
+	})
+	l.Generator = planner.NewGenerator(llm)
+	l.Recents = fakeRefusals{refused: []executor.RefusedFault{{
+		Manifest:  simian.FaultManifest{ResourceKind: "HTTPChaos", Targets: []simian.TargetRef{{Namespace: "boutique", Name: "frontend"}}},
+		RefusedAt: time.Now(),
+		Reason:    simian.ReasonSchemaInvalid,
+		Error:     "spec.port: required",
+	}}}
+	if _, _, err := l.RunOnce(context.Background(), "boutique"); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	llm.mu.Lock()
+	defer llm.mu.Unlock()
+	if !strings.Contains(llm.user, "spec.port: required") {
+		t.Errorf("planner prompt does not carry the refusal:\n%s", llm.user)
+	}
+}
+
+// When the planner proposes a refused step anyway, the loop stops submitting
+// it after repeatedRefusalLimit refusals rather than asking forever.
+func TestRunOnce_ARepeatedlyRefusedStepStopsBeingSubmitted(t *testing.T) {
+	exec := &recordingExecutor{err: &simian.ExecutorError{Stage: simian.StageSchema, Reason: simian.ReasonSchemaInvalid, Message: "spec.port: required"}}
+	l, au := newLoopUnderTest(t, planJSON(1), exec, planner.Budget{
+		MaxFaultsPerCycle: 5, MaxConcurrentFaults: 5, MaxSeverityPerCycle: simian.TierNamespace,
+	})
+	for range repeatedRefusalLimit + 2 {
+		if _, _, err := l.RunOnce(context.Background(), "boutique"); err != nil {
+			t.Fatalf("RunOnce: %v", err)
+		}
+	}
+	if got := exec.AppliedCount(); got != repeatedRefusalLimit {
+		t.Errorf("executor asked %d times, want %d", got, repeatedRefusalLimit)
+	}
+	au.mu.Lock()
+	defer au.mu.Unlock()
+	skipped := 0
+	for _, e := range au.events {
+		if e.Event == audit.EventStepSkipped && e.Reason == "repeated-refusal" {
+			skipped++
+		}
+	}
+	if skipped != 2 {
+		t.Errorf("repeated-refusal skips = %d, want 2", skipped)
+	}
+}
+
+func TestRunOnce_BudgetRefusalsDoNotCountTowardsBackoff(t *testing.T) {
+	exec := &recordingExecutor{err: &simian.ExecutorError{Stage: simian.StageSafety, Reason: simian.ReasonBudgetExceeded, Message: "cap"}}
+	l, _ := newLoopUnderTest(t, planJSON(1), exec, planner.Budget{
+		MaxFaultsPerCycle: 5, MaxConcurrentFaults: 5, MaxSeverityPerCycle: simian.TierNamespace,
+	})
+	for range repeatedRefusalLimit + 2 {
+		if _, _, err := l.RunOnce(context.Background(), "boutique"); err != nil {
+			t.Fatalf("RunOnce: %v", err)
+		}
+	}
+	if got := exec.AppliedCount(); got != repeatedRefusalLimit+2 {
+		t.Errorf("executor asked %d times, want %d", got, repeatedRefusalLimit+2)
 	}
 }

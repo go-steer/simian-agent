@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -47,8 +48,11 @@ type GenerateInput struct {
 	Baseline     *sut.Baseline // optional; nil if no SUT deployed
 	Catalog      []simian.CatalogEntry
 	RecentFaults []executor.RecentFault
-	Budget       Budget
-	Hypothesis   string // optional user-supplied seed
+	// RecentRefusals are faults the executor would not run, newest first. A
+	// planner that only sees what ran proposes what did not, again.
+	RecentRefusals []executor.RefusedFault
+	Budget         Budget
+	Hypothesis     string // optional user-supplied seed
 }
 
 // Generator drafts an AttackPlan by asking the LLM for structured output.
@@ -305,6 +309,12 @@ func buildPlanUserPrompt(in GenerateInput) string {
 		sb.WriteString("\n")
 	}
 
+	if len(in.RecentRefusals) > 0 {
+		sb.WriteString("## Recently refused — do not repeat without changing what caused the refusal\n")
+		sb.WriteString(summarizeRefusals(in.RecentRefusals))
+		sb.WriteString("\n")
+	}
+
 	sb.WriteString("Emit the AttackPlan JSON now.")
 	return sb.String()
 }
@@ -348,4 +358,79 @@ func summarizeTopology(t *topology.TargetTopology) string {
 		}
 	}
 	return sb.String()
+}
+
+// refusalErrorLimit bounds how much of each refusal's error reaches the
+// prompt. The cause is in the first line or two; the rest is probe output.
+const refusalErrorLimit = 240
+
+// summarizeRefusals renders refusals one line per distinct (kind, targets,
+// reason, error), newest first, with a count. Identical refusals are folded
+// because they arrive in runs — the same step refused cycle after cycle — and
+// ten copies of one line would crowd out the other refusals without saying
+// anything the count does not.
+func summarizeRefusals(refusals []executor.RefusedFault) string {
+	type group struct {
+		line  string
+		count int
+		last  time.Time
+	}
+	var order []string
+	groups := map[string]*group{}
+	for _, rf := range refusals {
+		msg := rf.Error
+		if len(msg) > refusalErrorLimit {
+			msg = msg[:refusalErrorLimit] + "…"
+		}
+		reason := string(rf.Reason)
+		if reason == "" {
+			reason = "refused"
+		}
+		line := fmt.Sprintf("%s on %s: %s: %s", rf.Manifest.ResourceKind, describeTargets(rf.Manifest.Targets), reason, msg)
+		g, ok := groups[line]
+		if !ok {
+			g = &group{line: line, last: rf.RefusedAt}
+			groups[line] = g
+			order = append(order, line)
+		}
+		g.count++
+		if rf.RefusedAt.After(g.last) {
+			g.last = rf.RefusedAt
+		}
+	}
+	var sb strings.Builder
+	for _, key := range order {
+		g := groups[key]
+		fmt.Fprintf(&sb, "  %s (x%d, last %s)\n", g.line, g.count, g.last.Format(time.RFC3339))
+	}
+	return sb.String()
+}
+
+// describeTargets renders every target, not just the first: a refusal can be
+// about any of them.
+func describeTargets(targets []simian.TargetRef) string {
+	if len(targets) == 0 {
+		return "(no target)"
+	}
+	parts := make([]string, 0, len(targets))
+	for _, t := range targets {
+		switch {
+		case t.Name != "":
+			parts = append(parts, t.Namespace+"/"+t.Name)
+		case len(t.Labels) > 0:
+			parts = append(parts, t.Namespace+"/"+renderLabels(t.Labels))
+		default:
+			parts = append(parts, t.Namespace)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func renderLabels(labels map[string]string) string {
+	parts := make([]string, 0, len(labels))
+	for k, v := range labels {
+		parts = append(parts, k+"="+v)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
 }
