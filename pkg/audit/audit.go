@@ -48,6 +48,13 @@ const (
 	// point — which is only reportable if the events are here to check.
 	EventFaultEfficacy = "fault.efficacy"
 
+	// EventFaultInjected records the engine's own verdict on an applied fault,
+	// from drivers that can ask for one (simian.InjectionConfirmer). Kept
+	// apart from fault.efficacy on purpose: the engine saying it injected is
+	// not the workload showing the effect, and eval's rule that every fault
+	// needs a passing efficacy record should not be satisfied by it.
+	EventFaultInjected = "fault.injected"
+
 	EventLeaseHeartbeat = "lease.heartbeat"
 	EventLeaseExpired   = "lease.expired"
 	EventLeaseCleared   = "lease.cleared"

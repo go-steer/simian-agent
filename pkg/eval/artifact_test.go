@@ -767,3 +767,56 @@ func TestAScenarioWithFaultsAndNoFaultEventsIsAnInjectFailure(t *testing.T) {
 		t.Errorf("run = %+v, want an inject failure", runs[0])
 	}
 }
+
+// The engine refusing a fault is the reason it did not manifest, and the
+// scenario should say so rather than "no passing efficacy record", which
+// sends an operator looking for a probe that never ran.
+func TestAnInjectionTheEngineRefusedIsNamedAsTheReason(t *testing.T) {
+	e := newEmitter()
+	e.emit("s-1", simian.AuditEvent{Event: audit.EventDriverApplied, FaultUID: "f"})
+	e.emit("s-1", simian.AuditEvent{
+		Event: audit.EventFaultInjected, FaultUID: "f",
+		Payload: map[string]any{
+			"passed": false,
+			"error":  "bank/simian-wl7jn not injected after 30s: ls: cannot access '/etc/resolv.conf.chaos.bak'",
+		},
+	})
+
+	facts, err := eval.ReadAudit(e.log())
+	if err != nil {
+		t.Fatalf("ReadAudit: %v", err)
+	}
+	got := factsFor(t, facts, "s-1")
+	if got.Manifested {
+		t.Fatal("a fault the engine refused counted as manifested")
+	}
+	for _, want := range []string{"engine did not inject", "resolv.conf.chaos.bak"} {
+		if !strings.Contains(got.InjectError, want) {
+			t.Errorf("inject error = %q, want it to mention %q", got.InjectError, want)
+		}
+	}
+}
+
+// The engine saying it injected is not evidence the workload noticed, so it
+// does not stand in for an efficacy record. A fault with only that is still
+// one nobody checked.
+func TestAnInjectionTheEngineConfirmedIsNotAnEfficacyRecord(t *testing.T) {
+	e := newEmitter()
+	e.emit("s-1", simian.AuditEvent{Event: audit.EventDriverApplied, FaultUID: "f"})
+	e.emit("s-1", simian.AuditEvent{
+		Event: audit.EventFaultInjected, FaultUID: "f",
+		Payload: map[string]any{"passed": true, "observed": "AllInjected=True, 1 target(s)"},
+	})
+
+	facts, err := eval.ReadAudit(e.log())
+	if err != nil {
+		t.Fatalf("ReadAudit: %v", err)
+	}
+	got := factsFor(t, facts, "s-1")
+	if got.Manifested {
+		t.Fatal("engine confirmation alone counted as manifested")
+	}
+	if !strings.Contains(got.InjectError, "no passing efficacy record") {
+		t.Errorf("inject error = %q, want the no-efficacy-record explanation", got.InjectError)
+	}
+}

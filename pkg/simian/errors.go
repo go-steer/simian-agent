@@ -56,6 +56,13 @@ const (
 	// turns an eval result into a confident wrong number.
 	ReasonProbeFailed RejectionReason = "probe-failed"
 
+	// ReasonInjectionFailed means the engine accepted the fault and then
+	// reported it could not inject it — see InjectionConfirmer. The cluster
+	// holds the object but not the fault, so it is rolled back like a failed
+	// probe, and named separately because the engine, not the workload, said
+	// so.
+	ReasonInjectionFailed RejectionReason = "injection-failed"
+
 	// ReasonPrecheckFailed means an SOT probe never passed, so the experiment
 	// would have started from a state its own verification cannot interpret —
 	// a workload that was already unreachable, or already slow. Rejected before
