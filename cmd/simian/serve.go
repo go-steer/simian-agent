@@ -242,6 +242,13 @@ func newServeCmd() *cobra.Command {
 			// Same arena resolver the orphan reaper uses: baselines live in
 			// arena namespaces, so that is exactly where List should look.
 			sutMgr.Store = sut.NewConfigMapStore(clientset, arenaNamespaces)
+			sutMgr.OnPersistFailure = func(ctx context.Context, ns string, err error) {
+				auditor.Emit(ctx, simian.AuditEvent{
+					Event:   audit.EventBaselinePersistFailed,
+					Reason:  "store-save-failed",
+					Payload: map[string]any{"namespace": ns, "error": err.Error()},
+				})
+			}
 			if n, err := sutMgr.LoadCachedBaselines(cmd.Context()); err != nil {
 				logger.Warn("simian serve: baseline cache warm incomplete",
 					slog.Int("loaded", n), slog.String("error", err.Error()))

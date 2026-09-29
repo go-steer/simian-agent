@@ -63,6 +63,13 @@ type Manager struct {
 	// that need cross-restart durability — typically `simian serve`.
 	Store BaselineStore
 
+	// OnPersistFailure, if set, is told when a baseline could not be saved to
+	// Store. The deploy still succeeds and the in-memory copy still serves,
+	// but a baseline that did not persist is gone after the next restart and
+	// the autonomous loop stops with it, so this should reach the audit
+	// trail. Unset, the failure goes to stderr.
+	OnPersistFailure func(ctx context.Context, namespace string, err error)
+
 	mu        sync.RWMutex
 	baselines map[string]Baseline // keyed by namespace
 }
@@ -186,7 +193,7 @@ func (m *Manager) Deploy(ctx context.Context, opts DeployOptions) (*Baseline, er
 	// configmaps in the SUT namespace; surface it to the operator without
 	// rolling back the deploy.
 	if err := m.Store.Save(ctx, *bl); err != nil {
-		fmt.Fprintf(os.Stderr, "sut: warning: persist baseline for %q: %v\n", opts.Namespace, err)
+		m.persistFailed(ctx, opts.Namespace, err)
 	}
 	return bl, nil
 }
@@ -290,7 +297,7 @@ func (m *Manager) EstablishBaselineFromTopology(ctx context.Context, namespace s
 	m.baselines[namespace] = *bl
 	m.mu.Unlock()
 	if err := m.Store.Save(ctx, *bl); err != nil {
-		fmt.Fprintf(os.Stderr, "sut: warning: persist baseline for %q: %v\n", namespace, err)
+		m.persistFailed(ctx, namespace, err)
 	}
 	return bl, nil
 }
@@ -539,4 +546,12 @@ func (e *BaselineTimeoutError) Error() string {
 	}
 	return fmt.Sprintf("sut: baseline not reached for %s in namespace %q within %s; not-ready: %v",
 		e.SUT, e.Namespace, e.Elapsed, missing)
+}
+
+func (m *Manager) persistFailed(ctx context.Context, namespace string, err error) {
+	if m.OnPersistFailure != nil {
+		m.OnPersistFailure(ctx, namespace, err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "sut: warning: persist baseline for %q: %v\n", namespace, err)
 }

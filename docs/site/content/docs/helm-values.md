@@ -78,7 +78,7 @@ otherwise looks exactly like a planner that produced nothing.
 | Value | Default | Notes |
 |---|---|---|
 | `topology.resync` | `30s` | Informer resync interval. Recommended overlay: `60s` for prod (lower API server load). |
-| `sutInController.enabled` | `false` | Required for `simian sut deploy --use-controller` (the in-controller SUT path). Recommended overlay: `true`. |
+| `sutInController.enabled` | `false` | Required for `simian sut deploy --use-controller` (the in-controller SUT path). Recommended overlay: `true`. Covers only the namespaces in `eligibleNamespaces`; for arenas made with `simian arena create`, pass `--sut-in-controller` there (or `sut deploy --create-arena --use-controller`, which does it for you). |
 | `sutInjection.envoyFaults` | `false` | Whether to inject the Envoy fault sidecar into SUT Deployments. **Off by default** because the iptables interception breaks gRPC kubelet probes — see [Known limitations]({{< relref "known-limitations.md" >}}). Only enable for SUTs whose probes are HTTP-only or TCP-only. |
 
 ## Autonomous mode

@@ -111,6 +111,10 @@ type Spec struct {
 	ExtraAnnotations map[string]string
 	// ExtraLabels are merged on top of the managed-by label.
 	ExtraLabels map[string]string
+	// SUTInController grants the controller what it needs to deploy a SUT
+	// into the arena itself (sutRules). Re-creating an arena without it
+	// takes those rights away again: the Role always matches the last spec.
+	SUTInController bool
 }
 
 // State is the current view of an arena, suitable for Describe.
@@ -132,6 +136,19 @@ type State struct {
 // arena. Mirrors deploy/manifests/00-rbac.yaml's per-eligible-NS Role.
 func roleRules() []rbacv1.PolicyRule {
 	return []rbacv1.PolicyRule{
+		{
+			// The baseline, which the autonomous loop's health gate needs
+			// before it will plan anything. The controller writes it to
+			// <arena>/simian-baseline whenever it establishes one, with or
+			// without deploying the workload itself. Without these the save
+			// failed quietly in every annotation-based arena, the baseline
+			// lived only in memory, and each controller restart turned the
+			// loop off until someone re-baselined by hand (#143). get comes
+			// from the read-only core rule below.
+			APIGroups: []string{""},
+			Resources: []string{"configmaps"},
+			Verbs:     []string{"create", "update"},
+		},
 		{
 			APIGroups: []string{"chaos-mesh.org"},
 			Resources: []string{"*"},
@@ -214,6 +231,34 @@ func roleRules() []rbacv1.PolicyRule {
 	}
 }
 
+// sutRules are added to roleRules() when the controller deploys workloads
+// itself (Spec.SUTInController, sutInController.enabled in the chart): the
+// verbs establish_baseline needs to server-side-apply a SUT's manifests into
+// the arena. Kept in sync with the chart's conditional block by a test.
+func sutRules() []rbacv1.PolicyRule {
+	return []rbacv1.PolicyRule{
+		{
+			APIGroups: []string{""},
+			Resources: []string{"services", "configmaps", "serviceaccounts"},
+			Verbs:     []string{"create", "patch", "update", "delete"},
+		},
+		{
+			APIGroups: []string{"apps"},
+			Resources: []string{"deployments", "statefulsets"},
+			Verbs:     []string{"create", "patch", "update", "delete"},
+		},
+	}
+}
+
+// rulesFor returns the arena Role's rules for a spec.
+func rulesFor(spec Spec) []rbacv1.PolicyRule {
+	rules := roleRules()
+	if spec.SUTInController {
+		rules = append(rules, sutRules()...)
+	}
+	return rules
+}
+
 // Create provisions an arena: namespace + Role + RoleBinding. Idempotent —
 // re-creating an arena that already exists with matching configuration is a
 // no-op; mismatched configuration returns an error so the operator can decide
@@ -238,7 +283,7 @@ func (m *Manager) Create(ctx context.Context, spec Spec) error {
 	if err := m.upsertNamespace(ctx, spec.Namespace, annotations, labels); err != nil {
 		return err
 	}
-	if err := m.upsertRole(ctx, spec.Namespace, labels); err != nil {
+	if err := m.upsertRole(ctx, spec.Namespace, labels, rulesFor(spec)); err != nil {
 		return err
 	}
 	if err := m.upsertRoleBinding(ctx, spec.Namespace, labels); err != nil {
@@ -286,23 +331,23 @@ func (m *Manager) upsertNamespace(ctx context.Context, name string, annotations,
 	return nil
 }
 
-func (m *Manager) upsertRole(ctx context.Context, namespace string, lbls map[string]string) error {
+func (m *Manager) upsertRole(ctx context.Context, namespace string, lbls map[string]string, rules []rbacv1.PolicyRule) error {
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      m.roleName(),
 			Namespace: namespace,
 			Labels:    lbls,
 		},
-		Rules: roleRules(),
+		Rules: rules,
 	}
 	_, err := m.K8s.RbacV1().Roles(namespace).Create(ctx, role, metav1.CreateOptions{})
 	if apierrors.IsAlreadyExists(err) {
-		// Update to keep the rules in sync with the canonical roleRules() set.
+		// Update to keep the rules in sync with the canonical set.
 		existing, getErr := m.K8s.RbacV1().Roles(namespace).Get(ctx, m.roleName(), metav1.GetOptions{})
 		if getErr != nil {
 			return fmt.Errorf("arena: get existing role: %w", getErr)
 		}
-		existing.Rules = roleRules()
+		existing.Rules = rules
 		existing.Labels = mergeMap(existing.Labels, lbls)
 		_, err = m.K8s.RbacV1().Roles(namespace).Update(ctx, existing, metav1.UpdateOptions{})
 		if err != nil {
