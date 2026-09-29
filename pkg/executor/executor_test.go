@@ -222,3 +222,40 @@ func TestRecentReturnsNilWithoutHistory(t *testing.T) {
 		t.Errorf("Recent without history wired = %v, want nil", got)
 	}
 }
+
+// The trail has to say what ran and where on its own (#142). received keeps
+// what was submitted; applied says what the driver was handed, which after
+// narrowing is not the same spec.
+func TestAuditTrailCarriesTheFaultNotJustItsKind(t *testing.T) {
+	exec, _, auditor := newTestExecutor(t, DefaultConfig(), map[string]bool{"online-boutique": true}, nil)
+	m := goodManifest()
+	m.Spec["selector"] = map[string]any{"labelSelectors": map[string]any{"app": "paymentservice"}}
+	if _, err := exec.Apply(context.Background(), m); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	namespacesIn := func(p map[string]any) any {
+		sel, _ := p["spec"].(map[string]any)["selector"].(map[string]any)
+		return sel["namespaces"]
+	}
+	received, _ := auditor.FindEvent(audit.EventExecutorReceived)
+	applied, _ := auditor.FindEvent(audit.EventDriverApplied)
+	for name, p := range map[string]map[string]any{"received": received.Payload, "applied": applied.Payload} {
+		targets, _ := p["targets"].([]any)
+		if len(targets) != 1 || targets[0].(map[string]any)["name"] != "paymentservice" {
+			t.Errorf("%s targets = %v", name, p["targets"])
+		}
+		if p["kind"] != "NetworkChaos" || p["duration"] != "2m0s" {
+			t.Errorf("%s kind/duration = %v/%v", name, p["kind"], p["duration"])
+		}
+	}
+	if ns := namespacesIn(received.Payload); ns != nil {
+		t.Errorf("received spec shows selector.namespaces=%v; that was added after it was submitted", ns)
+	}
+	if ns, _ := namespacesIn(applied.Payload).([]any); len(ns) != 1 || ns[0] != "online-boutique" {
+		t.Errorf("applied spec selector.namespaces = %v, want the narrowed [online-boutique]", namespacesIn(applied.Payload))
+	}
+	if applied.Payload["engine_uid"] == nil || applied.Payload["deadline"] == nil {
+		t.Errorf("applied lost engine_uid/deadline: %v", applied.Payload)
+	}
+}
