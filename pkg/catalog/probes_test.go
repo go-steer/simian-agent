@@ -102,8 +102,8 @@ func TestNetworkPolicyPartitionGetsATwoSidedReachabilityGate(t *testing.T) {
 		t.Errorf("%s spec = %v, want an unreachability assertion", after.Name, after.Spec)
 	}
 	for _, p := range []simian.ProbeSpec{before, after} {
-		if p.Type != simian.ProbeTypeHTTP {
-			t.Errorf("%s type = %q, want http", p.Name, p.Type)
+		if p.Type != simian.ProbeTypeTCP {
+			t.Errorf("%s type = %q, want tcp", p.Name, p.Type)
 		}
 		if p.Spec["label_selector"] != "app=frontend" {
 			t.Errorf("%s selector = %v, want the policy's own", p.Name, p.Spec["label_selector"])

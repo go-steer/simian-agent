@@ -101,9 +101,11 @@ func buildPlane(cfg *rest.Config, o *options, auditor simian.Auditor, logger *sl
 		execCfg.DurationCeiling = o.durationCap
 	}
 
+	httpProber := probe.NewKubernetesHTTPProber(clientset)
 	prober := probe.NewMux(map[string]probe.Prober{
 		simian.ProbeTypeK8s:  probe.NewK8sProber(dyn, restmapper.NewDeferredDiscoveryRESTMapper(cached)),
-		simian.ProbeTypeHTTP: probe.NewKubernetesHTTPProber(clientset),
+		simian.ProbeTypeHTTP: httpProber,
+		simian.ProbeTypeTCP:  httpProber.TCP(),
 		simian.ProbeTypeLogs: probe.NewKubernetesLogsProber(clientset),
 	})
 	execOpts := []executor.Option{executor.WithProber(prober)}

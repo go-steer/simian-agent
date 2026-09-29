@@ -29,6 +29,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/jsonpath"
 
@@ -76,11 +78,33 @@ type Doer interface {
 type HTTPProber struct {
 	pods PodLister
 	http Doer
+	dial func(ctx context.Context, network, address string) (net.Conn, error)
 }
 
 // NewHTTPProber constructs a prober over the given pod lister and HTTP client.
 func NewHTTPProber(pods PodLister, doer Doer) *HTTPProber {
-	return &HTTPProber{pods: pods, http: doer}
+	return &HTTPProber{pods: pods, http: doer, dial: (&net.Dialer{}).DialContext}
+}
+
+// TCP returns the "tcp" probe type: the same pods, polling and expectations as
+// the http probe, but each attempt is a TCP connect and nothing more.
+//
+// It is what the default reachability and latency gates use, because they only
+// ever asked "does a connection open, and how fast". Asking it in HTTP/1.1
+// answered a different question. In a 39-hour trial every NetworkChaos against
+// Online Boutique was refused before it ran, because its services speak gRPC:
+// the probe read an HTTP/2 SETTINGS frame, called a healthy pod unreachable,
+// and the precheck rejected the fault. A connect works whatever the protocol.
+//
+// A netem delay on the target's egress holds its SYN-ACK, so connect time
+// carries the injected latency; a partition drops the SYN, so the connect
+// times out. Both gates keep their meaning.
+func (h *HTTPProber) TCP() Prober { return tcpProber{h} }
+
+type tcpProber struct{ h *HTTPProber }
+
+func (t tcpProber) Run(ctx context.Context, p simian.ProbeSpec, target Target) Result {
+	return t.h.run(ctx, p, target, true)
 }
 
 // NewKubernetesHTTPProber is the production wiring: resolve pods with the
@@ -107,6 +131,13 @@ type KubernetesPodLister struct {
 // ListPods implements PodLister, returning only pods that are running with an
 // assigned IP — the rest cannot be dialled, and counting them would make a
 // reachability probe fail for a reason that has nothing to do with the fault.
+//
+// A pod that declares no container port gets the numeric targetPorts of the
+// Services that select it instead. Declaring containerPort is optional and
+// plenty of workloads skip it — every Bank of Anthos service does — but a
+// Service in front of the pod has to say where traffic goes. A named
+// targetPort cannot be resolved against a pod that names no ports, and is
+// skipped.
 func (l *KubernetesPodLister) ListPods(ctx context.Context, namespace, labelSelector string) ([]Pod, error) {
 	if l.Clientset == nil {
 		return nil, fmt.Errorf("http probe: pod lister has no clientset")
@@ -116,6 +147,7 @@ func (l *KubernetesPodLister) ListPods(ctx context.Context, namespace, labelSele
 		return nil, fmt.Errorf("list pods in %s (selector=%q): %w", namespace, labelSelector, err)
 	}
 	out := make([]Pod, 0, len(list.Items))
+	var services []corev1.Service
 	for _, p := range list.Items {
 		if p.Status.Phase != corev1.PodRunning || p.Status.PodIP == "" {
 			continue
@@ -126,13 +158,66 @@ func (l *KubernetesPodLister) ListPods(ctx context.Context, namespace, labelSele
 				ports = append(ports, int(cp.ContainerPort))
 			}
 		}
+		if len(ports) == 0 {
+			if services == nil {
+				if services, err = l.services(ctx, namespace); err != nil {
+					return nil, err
+				}
+			}
+			ports = servicePortsFor(p.Labels, services)
+		}
 		out = append(out, Pod{Name: p.Name, IP: p.Status.PodIP, Ports: ports})
 	}
 	return out, nil
 }
 
+// services lists a namespace's Services, sorted by name so the port a probe
+// picks does not depend on the order the API server returns them in. Never
+// nil on success, so the caller lists at most once.
+func (l *KubernetesPodLister) services(ctx context.Context, namespace string) ([]corev1.Service, error) {
+	list, err := l.Clientset.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list services in %s to find a port for a pod that declares none: %w", namespace, err)
+	}
+	items := append([]corev1.Service{}, list.Items...)
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	return items, nil
+}
+
+// servicePortsFor returns the numeric targetPorts of every Service whose
+// selector matches podLabels, in Service then port order, deduplicated.
+func servicePortsFor(podLabels map[string]string, services []corev1.Service) []int {
+	var ports []int
+	seen := map[int]bool{}
+	for _, svc := range services {
+		if len(svc.Spec.Selector) == 0 || !labels.SelectorFromSet(svc.Spec.Selector).Matches(labels.Set(podLabels)) {
+			continue
+		}
+		for _, sp := range svc.Spec.Ports {
+			port := sp.TargetPort.IntValue()
+			if sp.TargetPort.Type == intstr.String {
+				continue
+			}
+			if port == 0 {
+				// targetPort defaults to port; the API server fills it in, but
+				// an object built by hand may not have.
+				port = int(sp.Port)
+			}
+			if port > 0 && !seen[port] {
+				seen[port] = true
+				ports = append(ports, port)
+			}
+		}
+	}
+	return ports
+}
+
 // httpSpec is the decoded ProbeSpec.Spec for an http probe.
 type httpSpec struct {
+	// tcp makes each attempt a bare connect: no request, no response, and
+	// latency is connect time.
+	tcp bool
+
 	namespace     string
 	labelSelector string
 	podName       string
@@ -158,6 +243,10 @@ type httpSpec struct {
 // describe renders the success condition for a timeout message.
 func (s httpSpec) describe() string {
 	var parts []string
+	latency := "latency"
+	if s.tcp {
+		latency = "connect time"
+	}
 	if s.expectUnreachable {
 		parts = append(parts, "connection to fail")
 	}
@@ -174,14 +263,14 @@ func (s httpSpec) describe() string {
 		parts = append(parts, fmt.Sprintf("%s == %q", s.valueName(), s.expectEquals))
 	}
 	if s.minLatency > 0 {
-		part := fmt.Sprintf("latency >= %s", s.minLatency)
+		part := fmt.Sprintf("%s >= %s", latency, s.minLatency)
 		if s.slowCountsAsTimeout() {
 			part += fmt.Sprintf(" (or no response within %s)", s.requestTimeout)
 		}
 		parts = append(parts, part)
 	}
 	if s.maxLatency > 0 {
-		parts = append(parts, fmt.Sprintf("latency <= %s", s.maxLatency))
+		parts = append(parts, fmt.Sprintf("%s <= %s", latency, s.maxLatency))
 	}
 	return strings.Join(parts, " and ") + ", on every target pod"
 }
@@ -212,6 +301,9 @@ func (a attempt) describe() string {
 	case a.err != nil:
 		return fmt.Sprintf("%s (%s): unreachable after %s: %v",
 			a.pod.Name, a.endpoint, a.latency.Round(time.Millisecond), a.err)
+	case strings.HasPrefix(a.endpoint, "tcp://"):
+		return fmt.Sprintf("%s (%s): connected in %s",
+			a.pod.Name, a.endpoint, a.latency.Round(time.Millisecond))
 	default:
 		return fmt.Sprintf("%s (%s): %d in %s, value=%q",
 			a.pod.Name, a.endpoint, a.status, a.latency.Round(time.Millisecond),
@@ -303,8 +395,12 @@ func isTimeout(err error) bool {
 
 // Run implements Prober.
 func (h *HTTPProber) Run(ctx context.Context, p simian.ProbeSpec, target Target) Result {
+	return h.run(ctx, p, target, false)
+}
+
+func (h *HTTPProber) run(ctx context.Context, p simian.ProbeSpec, target Target, tcp bool) Result {
 	res := Result{Name: p.Name, Type: p.Type}
-	spec, err := parseHTTPSpec(p.Spec, target)
+	spec, err := parseHTTPSpec(p.Spec, target, tcp)
 	if err != nil {
 		res.Err = fmt.Errorf("probe %q: %w", p.Name, err)
 		return res
@@ -401,10 +497,14 @@ func (h *HTTPProber) hit(ctx context.Context, spec httpSpec, jp *jsonpath.JSONPa
 	port := spec.port
 	if port == 0 {
 		if len(pod.Ports) == 0 {
-			a.fatal = fmt.Errorf("pod %q declares no container port, and the probe does not set %q", pod.Name, "port")
+			a.fatal = fmt.Errorf("pod %q declares no container port, no Service selecting it names a numeric targetPort, and the probe does not set %q",
+				pod.Name, "port")
 			return a
 		}
 		port = pod.Ports[0]
+	}
+	if spec.tcp {
+		return h.connect(ctx, spec, a, port)
 	}
 	a.endpoint = fmt.Sprintf("%s://%s:%d%s", spec.scheme, pod.IP, port, spec.path)
 
@@ -446,6 +546,25 @@ func (h *HTTPProber) hit(ctx context.Context, spec httpSpec, jp *jsonpath.JSONPa
 		}
 		a.value = rendered
 	}
+	return a
+}
+
+// connect performs one TCP connect against one pod and closes it at once. A
+// fresh dial every time, for the same reason the http path sets req.Close.
+func (h *HTTPProber) connect(ctx context.Context, spec httpSpec, a attempt, port int) attempt {
+	addr := net.JoinHostPort(a.pod.IP, fmt.Sprint(port))
+	a.endpoint = "tcp://" + addr
+
+	reqCtx, cancel := context.WithTimeout(ctx, spec.requestTimeout)
+	defer cancel()
+	start := time.Now()
+	conn, err := h.dial(reqCtx, "tcp", addr)
+	a.latency = time.Since(start)
+	if err != nil {
+		a.err = err
+		return a
+	}
+	_ = conn.Close()
 	return a
 }
 
@@ -493,8 +612,20 @@ func describeAttempts(attempts []attempt) string {
 }
 
 // parseHTTPSpec decodes and validates an http probe's Spec map.
-func parseHTTPSpec(raw map[string]any, target Target) (httpSpec, error) {
+//
+// A tcp spec accepts the same keys less the ones that describe a request or a
+// response. Naming one is an error rather than ignored: a tcp probe carrying
+// expect_status would read as a status check and never make one.
+func parseHTTPSpec(raw map[string]any, target Target, tcp bool) (httpSpec, error) {
+	if tcp {
+		for _, k := range []string{"path", "scheme", "method", "jsonpath", "expect_status", "expect_contains", "expect_equals"} {
+			if _, ok := raw[k]; ok {
+				return httpSpec{}, fmt.Errorf("tcp probe: %q has no meaning for a bare connect; use an http probe to assert on a response", k)
+			}
+		}
+	}
 	s := httpSpec{
+		tcp:            tcp,
 		path:           "/",
 		scheme:         "http",
 		method:         http.MethodGet,

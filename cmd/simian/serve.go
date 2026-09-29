@@ -167,9 +167,11 @@ func newServeCmd() *cobra.Command {
 			// REST mapper so a probe can name any resource the cluster knows
 			// about; the http prober dials pod IPs directly, the same way the
 			// envoy-fault driver reaches each sidecar's admin API.
+			httpProber := probe.NewKubernetesHTTPProber(clientset)
 			prober := probe.NewMux(map[string]probe.Prober{
 				simian.ProbeTypeK8s:  probe.NewK8sProber(dyn, restmapper.NewDeferredDiscoveryRESTMapper(cached)),
-				simian.ProbeTypeHTTP: probe.NewKubernetesHTTPProber(clientset),
+				simian.ProbeTypeHTTP: httpProber,
+				simian.ProbeTypeTCP:  httpProber.TCP(),
 				simian.ProbeTypeLogs: probe.NewKubernetesLogsProber(clientset),
 			})
 			execOpts := []executor.Option{

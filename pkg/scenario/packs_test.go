@@ -329,8 +329,8 @@ func TestEveryDataplaneFaultIsProvedByARequest(t *testing.T) {
 				continue
 			}
 			for _, mode := range []string{simian.ProbeModeSOT, simian.ProbeModeSettle} {
-				if !hasHTTPProbe(gateFor(f), mode) {
-					t.Errorf("scenario %q fault %d (%s): no http probe in mode %s; nothing in this gate proves the dataplane changed rather than that the CR applied",
+				if !hasDataplaneProbe(gateFor(f), mode) {
+					t.Errorf("scenario %q fault %d (%s): no http or tcp probe in mode %s; nothing in this gate proves the dataplane changed rather than that the CR applied",
 						s.ID, i, f.ResourceKind, mode)
 				}
 			}
@@ -338,9 +338,11 @@ func TestEveryDataplaneFaultIsProvedByARequest(t *testing.T) {
 	}
 }
 
-func hasHTTPProbe(probes []simian.ProbeSpec, mode string) bool {
+// hasDataplaneProbe reports whether a gate has a probe that dials the target:
+// http or tcp, the two types that see a change no object records.
+func hasDataplaneProbe(probes []simian.ProbeSpec, mode string) bool {
 	for _, p := range probes {
-		if p.Mode == mode && p.Type == simian.ProbeTypeHTTP {
+		if p.Mode == mode && (p.Type == simian.ProbeTypeHTTP || p.Type == simian.ProbeTypeTCP) {
 			return true
 		}
 	}
