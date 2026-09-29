@@ -25,6 +25,7 @@ simian sut deploy --help
 | `simian serve` | Run the controller: Fault Executor + MCP server + autonomous loop. |
 | `simian chaos` | Submit a fault either as plain-text intent (LLM-translated) or as a hand-built FaultManifest (deterministic-control). Also list/clear active faults. |
 | `simian plan` | Generate an `AttackPlan` against a real arena and emit it as JSON. Default `--dry-run=true` does not apply. |
+| `simian audit export` | Fold the audit trail into one row per fault: what was asked for, what ran on what, and how it ended. Reads `--audit-file` output or `kubectl logs`. |
 | `simian evaluate` | Score a finished run offline from its audit log and the subject's report. Contacts no cluster. |
 
 ## Common flag patterns
@@ -121,6 +122,27 @@ rather than as a miss — the cluster was never broken, so a zero would mean
 `--min-efficacy` (default `0.8`) the scorecard is still printed, then the
 command exits non-zero: the numbers measure the harness, not the subject. Pass
 `--min-efficacy 0` to report anyway; the warning stays either way.
+
+### Exporting the audit trail
+
+```bash
+simian audit export --since 24h audit.jsonl.1 audit.jsonl
+kubectl -n simian-system logs deploy/simian-controller | simian audit export --format json
+```
+
+One row per fault UID, folded from its events: source, kind, targets, the spec
+as it reached the cluster (after the safety stage narrowed it), whether the
+engine confirmed injection and the efficacy verdict, and how it ended —
+`refused`, `driver-failed`, `cleared`, `expired`, or `open` if nothing ended it.
+`--since` takes a duration back from now or an RFC 3339 time and keeps faults
+first seen after it. `--format json` writes one object per line with the full
+spec; the table truncates it. Lines that are not audit events are skipped, so a
+controller's whole log can be piped in.
+
+`simian serve --audit-file PATH` writes the file (`--audit-file-max-bytes`,
+default 100 MiB, sets the rotation point) and closes faults a previous process
+left open when it starts; the chart turns it on by default — see
+[Helm values]({{< relref "helm-values.md#audit-trail" >}}).
 
 ### Tearing down
 

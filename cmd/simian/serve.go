@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -71,6 +72,8 @@ func newServeCmd() *cobra.Command {
 		holderID             string
 		debugLLMPayloads     bool
 		recentFaultsCapacity int
+		auditFile            string
+		auditFileMaxBytes    int64
 		topologyResync       time.Duration
 		autonomous           bool
 		cycleInterval        time.Duration
@@ -89,7 +92,16 @@ func newServeCmd() *cobra.Command {
 
 			logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 			slog.SetDefault(logger)
-			auditor := audit.New(logger)
+			var auditor simian.Auditor = audit.New(logger)
+			if auditFile != "" {
+				fileAuditor, closeFaults, err := openAuditFile(auditFile, auditFileMaxBytes, logger)
+				if err != nil {
+					return err
+				}
+				defer func() { _ = fileAuditor.Close() }()
+				auditor = audit.Multi{auditor, fileAuditor}
+				closeFaults(ctx, auditor)
+			}
 
 			cfg, err := buildKubeConfig(kubeconfig)
 			if err != nil {
@@ -356,6 +368,8 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&reapInterval, "reap-interval", 30*time.Second, "Lease reaper sweep interval")
 	cmd.Flags().StringVar(&holderID, "holder-id", os.Getenv("HOSTNAME"), "Holder ID recorded on leases (defaults to HOSTNAME)")
 	cmd.Flags().BoolVar(&debugLLMPayloads, "debug-llm-payloads", false, "Log raw LLM responses (debug only; do not enable in production — see design.md §12.2)")
+	cmd.Flags().StringVar(&auditFile, "audit-file", "", "Also append audit events to this file as JSON lines, so the trail outlives the process. Read it with 'simian audit export'. At start-up, faults a previous process applied and never closed get a closing event from it.")
+	cmd.Flags().Int64Var(&auditFileMaxBytes, "audit-file-max-bytes", audit.DefaultFileMaxBytes, "Rotate --audit-file to <file>.1 past this size (one previous generation is kept)")
 	cmd.Flags().IntVar(&recentFaultsCapacity, "recent-faults-capacity", executor.DefaultHistoryCapacity, "Bounded ring size backing the get_recent_faults MCP tool")
 	cmd.Flags().DurationVar(&topologyResync, "topology-resync", 30*time.Second, "Topology informer resync interval")
 	cmd.Flags().BoolVar(&autonomous, "autonomous", false, "Enable autonomous-mode planning loop (M3)")
@@ -439,4 +453,46 @@ func buildLLM(ctx context.Context, id, model string) (simian.LLMProvider, error)
 	default:
 		return nil, fmt.Errorf("unknown llm provider %q", id)
 	}
+}
+
+// openAuditFile reads what a previous process left in the audit file, opens
+// it for appending, and returns a function that closes the faults that
+// process left open. The closing is deferred to the caller so the events go
+// through every sink, not just the file.
+func openAuditFile(path string, maxBytes int64, logger *slog.Logger) (*audit.FileAuditor, func(context.Context, simian.Auditor), error) {
+	fa, err := audit.OpenFile(path, maxBytes, func(err error) {
+		logger.Error("simian serve: audit file", slog.String("error", err.Error()))
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	var records []audit.Record
+	for _, p := range fa.Paths() {
+		f, err := os.Open(p)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			_ = fa.Close()
+			return nil, nil, fmt.Errorf("audit file: %w", err)
+		}
+		recs, err := audit.ReadRecords(f)
+		_ = f.Close()
+		if err != nil {
+			logger.Warn("simian serve: audit file partly unreadable", slog.String("path", p), slog.String("error", err.Error()))
+		}
+		records = append(records, recs...)
+	}
+	closing := audit.ClosingEvents(audit.Faults(records), time.Now().UTC())
+	return fa, func(ctx context.Context, a simian.Auditor) {
+		for _, c := range closing {
+			a.Emit(ctx, simian.AuditEvent{
+				Event: c.Event, FaultUID: c.FaultUID, PlanID: c.PlanID, ScenarioID: c.ScenarioID,
+				Mode: simian.ManifestSource(c.Mode), Reason: c.Reason, Payload: c.Payload,
+			})
+		}
+		if len(closing) > 0 {
+			logger.Info("simian serve: closed faults a previous process left open", slog.Int("faults", len(closing)))
+		}
+	}, nil
 }

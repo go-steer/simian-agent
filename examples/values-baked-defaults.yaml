@@ -138,6 +138,20 @@ autonomous:
   maxSeverityPerCycle: namespace
   hypothesisHint: ""
 
+# Audit trail: persisted. The chart default keeps the file on an
+# emptyDir, which a container restart keeps but a rescheduled pod
+# loses. A trial is the record of what was done to the cluster, so
+# keep it on a PVC (retained on uninstall).
+audit:
+  file:
+    enabled: true
+    path: /var/lib/simian/audit.jsonl
+    maxBytes: 104857600
+    persistence:
+      enabled: true
+      size: 1Gi
+      storageClass: ""
+
 # MCP server: chart defaults are correct for in-cluster use.
 mcp:
   port: 8081
@@ -163,6 +177,12 @@ resources:
 # ============================================================
 # Hardening log — what is "baked" and as of when
 # ============================================================
+#
+# 2026-09-29 (chart 0.1.8-dev):
+#   - audit.file with persistence: on. The GKE trial's controller
+#     restarts cut the stdout trail at driver.applied for faults
+#     still running; the file plus start-up closing events keep
+#     every fault's end on record (#142).
 #
 # 2026-05-15 (chart 0.1.3-dev):
 #   - chaos-mesh engine: PodChaos / StressChaos / IOChaos /

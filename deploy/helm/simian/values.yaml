@@ -107,6 +107,26 @@ autonomous:
   maxSeverityPerCycle: namespace  # highest blast tier the loop will apply: namespace | node | external
   hypothesisHint: ""       # optional soft preference passed to the LLM each cycle
 
+# Durable audit trail. The controller always logs audit events to stdout;
+# with this on it also appends them as JSON lines to a file, rotating to
+# <path>.1 past maxBytes, and at start-up closes any fault the previous
+# process applied and never ended (lease.expired, reason
+# untracked-after-restart). Read it back with `simian audit export`.
+#
+# Without persistence the file lives on an emptyDir: it survives container
+# restarts but not the pod being deleted or rescheduled. Turn persistence on
+# for a trail that outlasts the pod. On GKE, stdout already reaches Cloud
+# Logging as well.
+audit:
+  file:
+    enabled: true
+    path: /var/lib/simian/audit.jsonl
+    maxBytes: 104857600    # 100 MiB per generation; two generations kept
+    persistence:
+      enabled: false
+      size: 1Gi
+      storageClass: ""     # empty: the cluster default
+
 # MCP server.
 mcp:
   port: 8081
@@ -125,5 +145,7 @@ resources:
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65532
+  # Lets the controller write the audit volume when it is a PVC.
+  fsGroup: 65532
   seccompProfile:
     type: RuntimeDefault

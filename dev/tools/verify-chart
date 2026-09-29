@@ -112,6 +112,23 @@ out="$(render sim-baked -f examples/values-baked-defaults.yaml)"
 expect_arg "baked-defaults" "$out" "--permitted-tiers=namespace"
 reject_arg "baked-defaults" "$out" "--permitted-tiers=node"
 
+echo "▸ the audit file is on by default, on a volume the controller can write"
+# readOnlyRootFilesystem: an --audit-file with no volume under it fails at
+# start-up, so the arg and the mount have to arrive together.
+out="$(render sim-audit)"
+expect_arg "audit-default" "$out" "--audit-file=/var/lib/simian/audit.jsonl"
+if ! grep -qF "mountPath: /var/lib/simian" <<<"$out" || ! grep -qF "emptyDir: {}" <<<"$out"; then
+  echo "✗ audit-default: expected an emptyDir mounted at /var/lib/simian" >&2
+  fail=1
+fi
+out="$(render sim-audit-off --set audit.file.enabled=false)"
+reject_arg "audit-off" "$out" "--audit-file="
+out="$(render sim-audit-pvc --set audit.file.persistence.enabled=true)"
+if ! grep -qF "claimName: simian-audit" <<<"$out" || ! grep -qF "type: Recreate" <<<"$out"; then
+  echo "✗ audit-pvc: expected the simian-audit claim and a Recreate strategy" >&2
+  fail=1
+fi
+
 if [[ "$fail" -ne 0 ]]; then
   echo >&2
   echo "✗ chart assertions failed" >&2

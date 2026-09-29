@@ -7,6 +7,12 @@ metadata:
     {{- include "simian.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  {{- if and .Values.audit.file.enabled .Values.audit.file.persistence.enabled }}
+  # The audit volume is ReadWriteOnce: the old pod has to let go of it before
+  # the new one can start.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "simian.selectorLabels" . | nindent 6 }}
@@ -53,6 +59,10 @@ spec:
             - --autonomous-namespace={{ . }}
             {{- end }}
             {{- end }}
+            {{- if .Values.audit.file.enabled }}
+            - --audit-file={{ .Values.audit.file.path }}
+            - --audit-file-max-bytes={{ .Values.audit.file.maxBytes | int64 }}
+            {{- end }}
           env:
             {{- if .Values.llm.vertex.enabled }}
             - name: GOOGLE_GENAI_USE_VERTEXAI
@@ -86,6 +96,21 @@ spec:
             runAsUser: 65532
             capabilities:
               drop: ["ALL"]
+          {{- if .Values.audit.file.enabled }}
+          volumeMounts:
+            - name: audit
+              mountPath: {{ dir .Values.audit.file.path }}
+          {{- end }}
+      {{- if .Values.audit.file.enabled }}
+      volumes:
+        - name: audit
+          {{- if .Values.audit.file.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: simian-audit
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service
