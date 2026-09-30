@@ -1,0 +1,271 @@
+{
+ "BlockChaos": {
+  "fields": [
+   "action",
+   "containerNames",
+   "delay",
+   "duration",
+   "mode",
+   "remoteCluster",
+   "selector",
+   "value",
+   "volumeName"
+  ],
+  "required": [
+   "action",
+   "mode",
+   "selector",
+   "volumeName"
+  ]
+ },
+ "DNSChaos": {
+  "fields": [
+   "action",
+   "containerNames",
+   "duration",
+   "mode",
+   "patterns",
+   "remoteCluster",
+   "selector",
+   "value"
+  ],
+  "required": [
+   "action",
+   "mode",
+   "selector"
+  ]
+ },
+ "HTTPChaos": {
+  "fields": [
+   "abort",
+   "code",
+   "delay",
+   "duration",
+   "method",
+   "mode",
+   "patch",
+   "path",
+   "port",
+   "remoteCluster",
+   "replace",
+   "request_headers",
+   "response_headers",
+   "selector",
+   "target",
+   "tls",
+   "value"
+  ],
+  "required": [
+   "mode",
+   "selector",
+   "target"
+  ]
+ },
+ "IOChaos": {
+  "fields": [
+   "action",
+   "attr",
+   "containerNames",
+   "delay",
+   "duration",
+   "errno",
+   "methods",
+   "mistake",
+   "mode",
+   "path",
+   "percent",
+   "remoteCluster",
+   "selector",
+   "value",
+   "volumePath"
+  ],
+  "required": [
+   "action",
+   "mode",
+   "selector",
+   "volumePath"
+  ]
+ },
+ "JVMChaos": {
+  "fields": [
+   "action",
+   "class",
+   "containerNames",
+   "cpuCount",
+   "database",
+   "duration",
+   "exception",
+   "latency",
+   "memType",
+   "method",
+   "mode",
+   "mysqlConnectorVersion",
+   "name",
+   "pid",
+   "port",
+   "remoteCluster",
+   "returnValue",
+   "ruleData",
+   "selector",
+   "sqlType",
+   "table",
+   "value"
+  ],
+  "required": [
+   "action",
+   "mode",
+   "selector"
+  ]
+ },
+ "KernelChaos": {
+  "fields": [
+   "containerNames",
+   "duration",
+   "failKernRequest",
+   "mode",
+   "remoteCluster",
+   "selector",
+   "value"
+  ],
+  "required": [
+   "failKernRequest",
+   "mode",
+   "selector"
+  ]
+ },
+ "NetworkChaos": {
+  "fields": [
+   "action",
+   "bandwidth",
+   "corrupt",
+   "delay",
+   "device",
+   "direction",
+   "duplicate",
+   "duration",
+   "externalTargets",
+   "loss",
+   "mode",
+   "rate",
+   "remoteCluster",
+   "selector",
+   "target",
+   "targetDevice",
+   "value"
+  ],
+  "required": [
+   "action",
+   "mode",
+   "selector"
+  ]
+ },
+ "PhysicalMachineChaos": {
+  "fields": [
+   "action",
+   "address",
+   "clock",
+   "disk-fill",
+   "disk-read-payload",
+   "disk-write-payload",
+   "duration",
+   "file-append",
+   "file-create",
+   "file-delete",
+   "file-modify",
+   "file-rename",
+   "file-replace",
+   "http-abort",
+   "http-config",
+   "http-delay",
+   "http-request",
+   "jvm-exception",
+   "jvm-gc",
+   "jvm-latency",
+   "jvm-mysql",
+   "jvm-return",
+   "jvm-rule-data",
+   "jvm-stress",
+   "kafka-fill",
+   "kafka-flood",
+   "kafka-io",
+   "mode",
+   "network-bandwidth",
+   "network-corrupt",
+   "network-delay",
+   "network-dns",
+   "network-down",
+   "network-duplicate",
+   "network-flood",
+   "network-loss",
+   "network-partition",
+   "process",
+   "redis-cacheLimit",
+   "redis-expiration",
+   "redis-penetration",
+   "redis-restart",
+   "redis-stop",
+   "remoteCluster",
+   "selector",
+   "stress-cpu",
+   "stress-mem",
+   "uid",
+   "user_defined",
+   "value",
+   "vm"
+  ],
+  "required": [
+   "action",
+   "mode"
+  ]
+ },
+ "PodChaos": {
+  "fields": [
+   "action",
+   "containerNames",
+   "duration",
+   "gracePeriod",
+   "mode",
+   "remoteCluster",
+   "selector",
+   "value"
+  ],
+  "required": [
+   "action",
+   "mode",
+   "selector"
+  ]
+ },
+ "StressChaos": {
+  "fields": [
+   "containerNames",
+   "duration",
+   "mode",
+   "remoteCluster",
+   "selector",
+   "stressngStressors",
+   "stressors",
+   "value"
+  ],
+  "required": [
+   "mode",
+   "selector"
+  ]
+ },
+ "TimeChaos": {
+  "fields": [
+   "clockIds",
+   "containerNames",
+   "duration",
+   "mode",
+   "remoteCluster",
+   "selector",
+   "timeOffset",
+   "value"
+  ],
+  "required": [
+   "mode",
+   "selector",
+   "timeOffset"
+  ]
+ }
+}

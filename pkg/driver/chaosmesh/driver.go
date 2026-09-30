@@ -80,6 +80,10 @@ func (d *Driver) Apply(ctx context.Context, m simian.FaultManifest) (string, err
 		return "", fmt.Errorf("chaos-mesh apply: manifest target has no namespace")
 	}
 
+	if err := checkSpec(m.ResourceKind, m.Spec); err != nil {
+		return "", fmt.Errorf("chaos-mesh apply: %w", err)
+	}
+
 	gvk := schema.FromAPIVersionAndKind(m.APIVersion, m.ResourceKind)
 	gvr, err := d.gvrFor(gvk)
 	if err != nil {

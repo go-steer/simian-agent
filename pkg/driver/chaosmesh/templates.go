@@ -62,16 +62,22 @@ For memory: "stressors": {"memory": {"workers": 2, "size": "256MB"}}`,
  "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}},
  "timeOffset": "-10m"}`,
 
-	"HTTPChaos": `action MUST be one of: "abort" | "delay" | "replace" | "patch"
-{"action": "abort", "mode": "all", "port": 80, "method": "GET", "path": "/*",
+	"HTTPChaos": `no "action" field — "target" is required, one of: "Request" | "Response";
+then set one or more of "abort", "delay", "replace", "patch".
+"port" is the port the target container itself listens on.
+{"target": "Request", "mode": "all", "port": 8080, "method": "GET", "path": "/*",
  "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}},
  "abort": true}
-For "delay": "delay": "500ms"`,
+For delay:   "delay": "500ms"
+For replace: "target": "Response", "replace": {"code": 503}`,
 
 	"DNSChaos": `action MUST be one of: "error" | "random"
+patterns: the service's full in-cluster name. "*" is only allowed as the LAST
+character — Chaos Mesh rejects "*.svc..." or "*name..." and the fault never
+injects. A pattern outside the cluster domain is treated as an external fault.
 {"action": "error", "mode": "all",
  "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}},
- "patterns": ["*.<service>.svc.cluster.local"]}`,
+ "patterns": ["<service>.<ns>.svc.cluster.local"]}`,
 
 	"BlockChaos": `action MUST be one of: "delay"
 {"action": "delay", "mode": "one",
@@ -81,7 +87,7 @@ For "delay": "delay": "500ms"`,
 	"JVMChaos": `action MUST be one of: "latency" | "exception" | "return" | "stress" | "gc" | "ruleData"
 {"action": "latency", "mode": "one",
  "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}},
- "class": "com.example.Service", "method": "handleRequest", "latencyDuration": 1000,
+ "class": "com.example.Service", "method": "handleRequest", "latency": 1000,
  "port": 9277}`,
 
 	"KernelChaos": `injects kernel faults via BPF — high blast radius (TierNode); use sparingly.
@@ -90,7 +96,7 @@ For "delay": "delay": "500ms"`,
  "failKernRequest": {"failtype": 0, "callchain": [{"funcname": "__x64_sys_mount"}]}}`,
 
 	"PhysicalMachineChaos": `targets bare-metal nodes (TierNode); spec varies by action.
-{"action": "stress-cpu", "address": ["<node-ip>:port"],
+{"action": "stress-cpu", "mode": "one", "address": ["<node-ip>:port"],
  "stress-cpu": {"load": 80, "workers": 2}}`,
 }
 
