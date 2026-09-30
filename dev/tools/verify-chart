@@ -129,6 +129,18 @@ if ! grep -qF "claimName: simian-audit" <<<"$out" || ! grep -qF "type: Recreate"
   fail=1
 fi
 
+echo "▸ the baked-defaults overlay pins the image the chart is written for"
+# The chart renders the controller's flags; an image older than the chart
+# exits on the first one it does not know. The overlay pinned 0.1.3-dev for
+# months while the chart grew --audit-file, so an install that followed the
+# recommended path got a controller that never started.
+app_version="$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$CHART/Chart.yaml")"
+pinned="$(sed -n 's/^  tag: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' examples/values-baked-defaults.yaml | head -1)"
+if [[ -z "$pinned" || "$pinned" != "$app_version" ]]; then
+  echo "✗ baked-defaults: image.tag is '$pinned', chart appVersion is '$app_version' — bump the pin with the chart" >&2
+  fail=1
+fi
+
 if [[ "$fail" -ne 0 ]]; then
   echo >&2
   echo "✗ chart assertions failed" >&2

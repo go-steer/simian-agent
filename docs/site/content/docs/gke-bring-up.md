@@ -48,7 +48,7 @@ Local `simian serve` against a remote cluster works — arena creation, fault ap
 
 On the cluster above, the same `frontend` pod answered in ~40ms from inside the cluster and 170–330ms from a workstation. The SOT half of the delay gate requires the target to be *faster* than a quarter of the injected latency before it will accept the fault as gateable, so an off-cluster controller fails prechecks that an in-cluster one passes, on a fault that is perfectly fine.
 
-Use local serve to get your first fault out. Move to [the Helm chart]({{< relref "deploy.md" >}}) before you trust the verdicts.
+Use local serve to get your first fault out. Move to [the Helm chart]({{< relref "deploy.md" >}}) before you trust the verdicts. [From an empty GKE cluster]({{< relref "deploy.md#from-an-empty-gke-cluster" >}}) covers what the chart does not: Chaos Mesh with the containerd flags, Workload Identity for Vertex, and the arena → workloads → baseline order.
 
 ## Arena and SUT
 
