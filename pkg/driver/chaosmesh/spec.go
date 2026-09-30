@@ -25,8 +25,7 @@ import (
 // the cost is a fault that sits un-injected until the confirmation wait gives
 // up instead of an error at apply.
 func checkSpec(kind string, spec map[string]any) error {
-	switch kind {
-	case "DNSChaos":
+	if kind == "DNSChaos" {
 		return checkDNSPatterns(spec)
 	}
 	return nil
