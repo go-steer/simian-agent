@@ -53,7 +53,11 @@ include the previous generation), or the controller's own log, from stdin when
 no file is given:
 
   kubectl -n simian-system logs deploy/simian-controller | simian audit export --since 24h
-  kubectl -n simian-system exec deploy/simian-controller -- cat /var/lib/simian/audit.jsonl | simian audit export
+
+The controller image has no shell or cat, so to read the file in the pod, run
+export there:
+
+  kubectl -n simian-system exec deploy/simian-controller -- simian audit export /var/lib/simian/audit.jsonl
 
 Lines that are not audit events are skipped.`,
 		RunE: func(cmd *cobra.Command, args []string) error {

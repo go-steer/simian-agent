@@ -128,7 +128,11 @@ command exits non-zero: the numbers measure the harness, not the subject. Pass
 ```bash
 simian audit export --since 24h audit.jsonl.1 audit.jsonl
 kubectl -n simian-system logs deploy/simian-controller | simian audit export --format json
+kubectl -n simian-system exec deploy/simian-controller -- simian audit export /var/lib/simian/audit.jsonl
 ```
+
+The controller image is distroless (no shell, no `cat`), so read the audit file
+in the pod by running `simian audit export` there, as in the last line.
 
 One row per fault UID, folded from its events: source, kind, targets, the spec
 as it reached the cluster (after the safety stage narrowed it), whether the
