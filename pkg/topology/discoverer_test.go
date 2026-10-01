@@ -310,3 +310,20 @@ func TestStopIsIdempotentSoRunCanBeBelledTwice(t *testing.T) {
 	d.Stop()
 	d.Stop()
 }
+
+// The planner needs to know which containers IOChaos and DNSChaos cannot
+// inject into, and where IOChaos can, or it picks them anyway (#163).
+func TestContainerSummaryRecordsTheRootFilesystemAndMounts(t *testing.T) {
+	readOnly := true
+	got := containerSummary(corev1.Container{
+		Name:            "redis",
+		SecurityContext: &corev1.SecurityContext{ReadOnlyRootFilesystem: &readOnly},
+		VolumeMounts:    []corev1.VolumeMount{{Name: "data", MountPath: "/data"}},
+	})
+	if !got.ReadOnlyRootFS || len(got.MountPaths) != 1 || got.MountPaths[0] != "/data" {
+		t.Errorf("summary = %+v, want read-only root and /data mounted", got)
+	}
+	if plain := containerSummary(corev1.Container{Name: "x"}); plain.ReadOnlyRootFS || len(plain.MountPaths) != 0 {
+		t.Errorf("summary of a plain container = %+v", plain)
+	}
+}

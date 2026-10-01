@@ -334,3 +334,21 @@ func TestAStepWithNoDurationDefaultsWithinTheCeiling(t *testing.T) {
 		t.Errorf("duration = %s, want the 1m ceiling rather than the 2m default", got)
 	}
 }
+
+func TestThePlannerSeesWhichContainersAreReadOnlyAndWhatTheyMount(t *testing.T) {
+	out := summarizeTopology(&topology.TargetTopology{Workloads: []topology.Workload{
+		{Kind: "Deployment", Name: "redis-cart", Containers: []topology.ContainerSummary{
+			{Name: "redis", ReadOnlyRootFS: true, MountPaths: []string{"/data"}},
+		}},
+		{Kind: "Deployment", Name: "frontend", Containers: []topology.ContainerSummary{{Name: "server"}}},
+	}})
+	if !strings.Contains(out, "Deployment/redis-cart replicas=0 readonly_rootfs=redis mounts=redis:/data") {
+		t.Errorf("redis-cart line missing its read-only root or mount:\n%s", out)
+	}
+	if strings.Contains(out, "frontend replicas=0 readonly_rootfs") || strings.Contains(out, "frontend replicas=0 mounts") {
+		t.Errorf("frontend flagged with nothing to flag:\n%s", out)
+	}
+	if system := buildPlanSystemPrompt(nil); !strings.Contains(system, "readonly_rootfs") {
+		t.Error("system prompt does not explain readonly_rootfs")
+	}
+}

@@ -75,6 +75,13 @@ const (
 	// the driver runs, so there is nothing to roll back.
 	ReasonPrecheckFailed RejectionReason = "precheck-failed"
 
+	// ReasonTargetIncompatible means the engine cannot inject this fault into
+	// the containers it targets — Chaos Mesh IOChaos or DNSChaos against a
+	// read-only root filesystem, or an IOChaos volumePath that is not a mount
+	// point. Applying it would only fail, and a failed IOChaos stays stuck
+	// behind its finalizer, so it is refused before the driver runs.
+	ReasonTargetIncompatible RejectionReason = "target-incompatible"
+
 	// ReasonCannotGate means an SOT probe could not run against the target at
 	// all — no port to dial, no pods to dial, a spec it cannot parse — as
 	// opposed to running and finding the workload unhealthy. Simian cannot
