@@ -327,6 +327,7 @@ func newServeCmd() *cobra.Command {
 						MaxConcurrentFaults: execCfg.MaxConcurrentFaults,
 						MinCooldown:         execCfg.MinCooldown,
 						MaxSeverityPerCycle: severityCap,
+						MaxFaultDuration:    execCfg.DurationCeiling,
 					},
 					Auditor:    auditor,
 					Logger:     logger,

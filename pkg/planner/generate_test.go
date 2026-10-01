@@ -275,3 +275,62 @@ func TestSampleJSONRoundTrips(t *testing.T) {
 		t.Fatalf("unexpected: %+v", plan)
 	}
 }
+
+// On the 2026-09-30 trial (--duration-ceiling=5m) the planner was never told
+// the ceiling and copied the example's "30s" into 93 of 128 plans; one asked
+// for 10m and was refused at apply (#162).
+func TestThePlannerIsToldTheDurationCeilingAndNotHandedADuration(t *testing.T) {
+	in := sampleInput()
+	in.Budget.MaxFaultDuration = 5 * time.Minute
+
+	if user := buildPlanUserPrompt(in); !strings.Contains(user, "max_fault_duration: 5m0s") {
+		t.Errorf("user prompt does not state the ceiling:\n%s", user)
+	}
+	if system := buildPlanSystemPrompt(in.Catalog); strings.Contains(system, `"duration": "30s"`) {
+		t.Error(`system prompt's example plan still pins "duration": "30s"`)
+	}
+
+	in.Budget.MaxFaultDuration = 0
+	if user := buildPlanUserPrompt(in); strings.Contains(user, "max_fault_duration") {
+		t.Errorf("user prompt states a ceiling when there is none:\n%s", user)
+	}
+}
+
+func TestAStepOverTheCeilingIsSentBackForCorrection(t *testing.T) {
+	over := strings.Replace(wellFormedPlanJSON(), `"duration": "30s"`, `"duration": "10m"`, 1)
+	p := &toggleProvider{
+		first:  simian.CompletionResponse{Text: over},
+		second: simian.CompletionResponse{Text: wellFormedPlanJSON()},
+	}
+	in := sampleInput()
+	in.Budget.MaxFaultDuration = 5 * time.Minute
+
+	plan, err := NewGenerator(p).Generate(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if p.count != 2 {
+		t.Errorf("LLM called %d times, want 2: the 10m plan should have been sent back", p.count)
+	}
+	if got := plan.Steps[0].Manifest.Duration; got != 30*time.Second {
+		t.Errorf("duration = %s, want the corrected 30s", got)
+	}
+
+	_, err = parseAttackPlan([]byte(over), in)
+	if err == nil || !strings.Contains(err.Error(), "exceeds max_fault_duration 5m0s") {
+		t.Errorf("err = %v, want it to name the ceiling so the retry can fix it", err)
+	}
+}
+
+func TestAStepWithNoDurationDefaultsWithinTheCeiling(t *testing.T) {
+	none := strings.Replace(wellFormedPlanJSON(), `"duration": "30s",`, ``, 1)
+	in := sampleInput()
+	in.Budget.MaxFaultDuration = time.Minute
+	plan, err := parseAttackPlan([]byte(none), in)
+	if err != nil {
+		t.Fatalf("parseAttackPlan: %v", err)
+	}
+	if got := plan.Steps[0].Manifest.Duration; got != time.Minute {
+		t.Errorf("duration = %s, want the 1m ceiling rather than the 2m default", got)
+	}
+}

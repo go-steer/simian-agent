@@ -39,6 +39,10 @@ type Budget struct {
 	MaxConcurrentFaults int
 	MinCooldown         time.Duration
 	MaxSeverityPerCycle simian.BlastRadiusTier
+	// MaxFaultDuration is the executor's duration ceiling. A step that asks
+	// for longer is refused at apply time, so the planner is told the limit
+	// and a plan that exceeds it is sent back for correction. 0 means none.
+	MaxFaultDuration time.Duration
 }
 
 // GenerateInput is everything the Generator needs to draft an AttackPlan.
@@ -164,6 +168,12 @@ func parseAttackPlan(raw []byte, in GenerateInput) (simian.AttackPlan, error) {
 		}
 		if s.Manifest.Duration <= 0 {
 			s.Manifest.Duration = 2 * time.Minute
+			if ceiling := in.Budget.MaxFaultDuration; ceiling > 0 && s.Manifest.Duration > ceiling {
+				s.Manifest.Duration = ceiling
+			}
+		}
+		if ceiling := in.Budget.MaxFaultDuration; ceiling > 0 && s.Manifest.Duration > ceiling {
+			return simian.AttackPlan{}, fmt.Errorf("step %d: duration %s exceeds max_fault_duration %s", s.Order, s.Manifest.Duration, ceiling)
 		}
 		// Light per-step manifest sanity — full schema validation lives in
 		// the executor, but reject obviously broken steps here so the LLM
@@ -228,7 +238,7 @@ Your response MUST be a single JSON object matching this schema (no markdown, no
         "resource_kind": "<resource_kind from catalog>",
         "spec": { ... },           // engine-native; copy the spec template under the catalog entry and adapt
         "targets": [{"namespace": "<ns>", "name": "<workload>"}],
-        "duration": "30s",
+        "duration": "<Go duration>", // see rule 10
         "blast_radius_tier": "namespace",
         "rationale": "..."
       }
@@ -251,6 +261,7 @@ Rules you MUST follow:
 7. Engine-native spec MUST be populated. Where a catalog entry's spec template lists "action MUST be one of …", picking outside that list causes the cluster to reject the manifest at apply time (driver.failed).
 8. NEVER target a workload tagged as "excluded" via topology.
 9. envoy-fault kinds (EnvoyHttpDelay, EnvoyHttpAbort) require the target workload to be flagged envoy=true in the topology snapshot. If the chosen target lacks envoy=true, pick a different workload OR a different fault kind.
+10. Choose each step's "duration" for its hypothesis: long enough for the effect to show up in probes, alerts and recovery (a fault that ends seconds after injection teaches little), and never longer than max_fault_duration in the cycle budget caps — a longer step is refused before it runs.
 
 Available fault catalog (kinds you may choose). Each entry shows engine + kind + api_version + tier; entries with a spec template include the canonical engine-native spec shape directly under the entry — copy and adapt.
 
@@ -271,7 +282,11 @@ func buildPlanUserPrompt(in GenerateInput) string {
 	fmt.Fprintf(&sb, "- max_faults_per_cycle: %d\n", in.Budget.MaxFaultsPerCycle)
 	fmt.Fprintf(&sb, "- max_concurrent_faults: %d\n", in.Budget.MaxConcurrentFaults)
 	fmt.Fprintf(&sb, "- min_cooldown: %s\n", in.Budget.MinCooldown)
-	fmt.Fprintf(&sb, "- max_severity_tier: %s\n\n", in.Budget.MaxSeverityPerCycle)
+	fmt.Fprintf(&sb, "- max_severity_tier: %s\n", in.Budget.MaxSeverityPerCycle)
+	if in.Budget.MaxFaultDuration > 0 {
+		fmt.Fprintf(&sb, "- max_fault_duration: %s (hard limit per step)\n", in.Budget.MaxFaultDuration)
+	}
+	sb.WriteString("\n")
 
 	if in.Topology != nil {
 		sb.WriteString("## Topology snapshot\n")

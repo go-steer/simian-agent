@@ -44,7 +44,7 @@ Set on `simian serve`:
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--duration-ceiling` | 15m | Hard cap per fault. |
+| `--duration-ceiling` | 15m | Hard cap per fault. The autonomous planner is told it as `max_fault_duration`, and a plan that exceeds it goes back to the model for correction before anything is applied. |
 | `--max-concurrent-faults` | 0 (no cap) | Total leased faults across namespaces. Rejected applies surface as `executor.rejected` with reason `safety:budget-exceeded`. |
 | `--min-cooldown` | 0 | Per-namespace cooldown between consecutive faults. An apply already in flight against a namespace counts as consecutive. |
 | `--permitted-tiers` | namespace,node | Blast-radius tiers this installation permits (`namespace\|node\|external`). Repeatable or comma-separated. Unset keeps the default; pass just `namespace` to keep node-level chaos off the cluster entirely. An unrecognised name stops the controller starting rather than falling back — see [Helm values]({{< relref "helm-values.md" >}}). |
