@@ -58,6 +58,10 @@ const (
 	EventLeaseHeartbeat = "lease.heartbeat"
 	EventLeaseExpired   = "lease.expired"
 	EventLeaseCleared   = "lease.cleared"
+	// EventLeaseAdopted records a restarted controller taking over the lease
+	// of a fault the previous process applied and left running. It does not
+	// end the fault: the lease.expired or lease.cleared that follows does.
+	EventLeaseAdopted   = "lease.adopted"
 	EventPageDispatched = "page.dispatched"
 	EventPageFailed     = "page.failed"
 	EventAgentResponse  = "agent.response_received"

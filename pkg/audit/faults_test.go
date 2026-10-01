@@ -17,6 +17,8 @@ package audit
 import (
 	"testing"
 	"time"
+
+	"github.com/go-steer/simian-agent/pkg/simian"
 )
 
 var t0 = time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
@@ -130,5 +132,42 @@ func TestSinceKeepsFaultsFirstSeenAfterTheCutoff(t *testing.T) {
 	rows := Since(Faults(recs), at(15))
 	if len(rows) != 1 || rows[0].FaultUID != "new" {
 		t.Errorf("rows = %+v", rows)
+	}
+}
+
+// #172: what a restarted controller adopts is rebuilt from the row, and only
+// for a fault that is still in the cluster.
+func TestActiveFaultRebuildsOnlyAStillRunningFault(t *testing.T) {
+	recs := applied("running", 0, at(120))
+	recs = append(recs, applied("ended", 0, at(10))...)
+	recs = append(recs, applied("done", 0, at(120))...)
+	recs = append(recs, Record{TS: at(20), Event: EventLeaseCleared, FaultUID: "done", Reason: "explicit-clear"})
+	byUID := map[string]FaultRow{}
+	for _, r := range Faults(recs) {
+		byUID[r.FaultUID] = r
+	}
+	now := at(60)
+
+	af, ok := byUID["running"].ActiveFault(now)
+	if !ok {
+		t.Fatal("a fault applied, never closed and before its deadline was not rebuilt")
+	}
+	m := af.Manifest
+	if af.FaultUID != "running" || af.EngineUID != "chaos-mesh|bank|simian-x" || !af.Deadline.Equal(at(120)) || !af.AppliedAt.Equal(at(0)) ||
+		m.Engine != simian.EngineChaosMesh || m.ResourceKind != "DNSChaos" || m.Duration != 10*time.Minute ||
+		m.Source != simian.SourceAutonomous || m.PlanID != "p-1" || m.Spec["action"] != "error" ||
+		len(m.Targets) != 1 || m.Targets[0].Namespace != "bank" || m.Targets[0].Name != "userservice" {
+		t.Errorf("rebuilt = %+v", af)
+	}
+	if _, ok := byUID["ended"].ActiveFault(now); ok {
+		t.Error("a fault past its deadline was rebuilt")
+	}
+	if _, ok := byUID["done"].ActiveFault(now); ok {
+		t.Error("a cleared fault was rebuilt")
+	}
+	noTargets := byUID["running"]
+	noTargets.Targets = nil
+	if _, ok := noTargets.ActiveFault(now); ok {
+		t.Error("a fault with no recorded target was rebuilt; nothing could count it per namespace")
 	}
 }
