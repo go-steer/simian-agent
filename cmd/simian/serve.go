@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"sync"
 	"syscall"
 	"time"
 
@@ -102,6 +103,16 @@ func newServeCmd() *cobra.Command {
 				auditor = audit.Multi{auditor, fileAuditor}
 				closeFaults(ctx, auditor)
 			}
+
+			// Background loops that emit audit events. Deferred after the
+			// audit file's Close, so it runs first: stop them and let them
+			// write their last events — an interrupted fault being rolled
+			// back — into the file rather than after it has closed (#158).
+			var workers sync.WaitGroup
+			defer func() {
+				cancel()
+				waitForWorkers(&workers, shutdownWait, logger)
+			}()
 
 			cfg, err := buildKubeConfig(kubeconfig)
 			if err != nil {
@@ -218,7 +229,7 @@ func newServeCmd() *cobra.Command {
 			// waiting a full reap interval to notice would extend an outage
 			// that the crash already made unbounded.
 			reaper.SweepOrphans(ctx)
-			go reaper.Run(ctx)
+			workers.Go(func() { reaper.Run(ctx) })
 
 			disco2 := topology.New(clientset, topologyResync)
 			go func() {
@@ -321,14 +332,14 @@ func newServeCmd() *cobra.Command {
 					Logger:     logger,
 					Hypothesis: hypothesisHint,
 				}
-				go func() {
+				workers.Go(func() {
 					logger.Info("simian serve: autonomous loop starting",
 						slog.Any("namespaces", autonomousNS),
 						slog.Duration("interval", cycleInterval))
 					if err := lp.Run(ctx); err != nil && err != context.Canceled {
 						logger.Warn("autonomous loop exited", slog.String("err", err.Error()))
 					}
-				}()
+				})
 			}
 
 			if mcpStdio {
@@ -452,6 +463,28 @@ func buildLLM(ctx context.Context, id, model string) (simian.LLMProvider, error)
 		return gemini.New(ctx, gemini.Config{DefaultModel: model})
 	default:
 		return nil, fmt.Errorf("unknown llm provider %q", id)
+	}
+}
+
+// shutdownWait bounds how long serve waits for its background loops after it
+// is told to stop. Long enough for an interrupted fault's rollback (the
+// executor gives that clear 10s), short of the 30s a pod gets by default
+// before SIGKILL.
+const shutdownWait = 15 * time.Second
+
+// waitForWorkers waits for wg, giving up after limit so a wedged loop cannot
+// hold the process past its grace period.
+func waitForWorkers(wg *sync.WaitGroup, limit time.Duration, logger *slog.Logger) {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(limit):
+		logger.Warn("simian serve: background loops still running at shutdown; exiting anyway",
+			slog.Duration("waited", limit))
 	}
 }
 

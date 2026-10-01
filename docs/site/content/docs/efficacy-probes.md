@@ -650,6 +650,11 @@ caller, holding an error and no UID, has no way to clear it. If the rollback
 itself fails the lease is deliberately left in place so the reaper collects it
 at the deadline, and the audit record says so with `left_to_reaper: true`.
 
+A controller told to stop while a probe, or the engine's injection check, is
+still waiting records reason `interrupted` instead, with no `passed` field:
+the shutdown cut the wait short, so nothing was learned about the fault. It is
+still backed out, on a context of its own that the shutdown does not cancel.
+
 A failing **SOT** probe is the cheaper case, and reads differently:
 
 ```

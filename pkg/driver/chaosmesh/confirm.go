@@ -62,8 +62,10 @@ func (d *Driver) ConfirmInjected(ctx context.Context, engineUIDStr string) (stri
 		interval = defaultConfirmInterval
 	}
 
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	start := time.Now()
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 
@@ -83,6 +85,12 @@ func (d *Driver) ConfirmInjected(ctx context.Context, engineUIDStr string) (stri
 
 		select {
 		case <-ctx.Done():
+			if err := parent.Err(); err != nil {
+				// The caller gave up, not the timeout: say so, or a shutdown
+				// reads as an injection that failed.
+				return observed, fmt.Errorf("chaos-mesh: %s/%s: stopped waiting after %s (%w): %s",
+					ns, name, time.Since(start).Truncate(time.Second), err, observed)
+			}
 			return observed, fmt.Errorf("chaos-mesh: %s/%s not injected after %s: %s", ns, name, timeout, observed)
 		case <-tick.C:
 		}
