@@ -17,6 +17,7 @@ package chaosmesh
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 var _ simian.OrphanReaper = (*Driver)(nil)
@@ -121,5 +123,99 @@ func TestApplyStampsTheDeadlineTheReaperReads(t *testing.T) {
 	}
 	if obj.GetAnnotations()[simian.TargetNamespacesAnnotation] != "bank" {
 		t.Errorf("target-namespace annotation lost: %v", obj.GetAnnotations())
+	}
+}
+
+// seedTerminating seeds an expired managed object that has been deleting
+// since since and is held by Chaos Mesh's finalizer, the state a failed
+// IOChaos was left in on the 2026-09-30 trial.
+func seedTerminating(t *testing.T, d *Driver, ns, name string, since time.Time) {
+	t.Helper()
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": APIGroup + "/v1alpha1",
+		"kind":       "HTTPChaos",
+		"metadata":   map[string]any{"name": name, "namespace": ns},
+		"spec":       map[string]any{},
+	}}
+	obj.SetLabels(map[string]string{"simian.chaos/managed": "true"})
+	obj.SetAnnotations(map[string]string{ExpiryAnnotation: since.Add(-30 * time.Second).Format(time.RFC3339)})
+	obj.SetCreationTimestamp(metav1.NewTime(since.Add(-time.Minute)))
+	del := metav1.NewTime(since)
+	obj.SetDeletionTimestamp(&del)
+	obj.SetFinalizers([]string{"chaos-mesh/records"})
+	if _, err := d.dyn.Resource(httpChaosGVR).Namespace(ns).Create(context.Background(), obj, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed %s/%s: %v", ns, name, err)
+	}
+}
+
+func deletes(fake *clienttesting.Fake) int {
+	n := 0
+	for _, a := range fake.Actions() {
+		if a.GetVerb() == "delete" {
+			n++
+		}
+	}
+	return n
+}
+
+// A Chaos Mesh object whose injection failed keeps its chaos-mesh/records
+// finalizer: it gets a deletionTimestamp and never goes away. The reaper
+// deleted it again on every tick — a no-op that succeeds — and reported each
+// one as a reap: 1,561 orphan-reaped events for three objects over five hours
+// of the 2026-09-30 trial (#157). Something already being deleted is not the
+// reaper's to delete, and not a reap.
+func TestAnObjectAlreadyBeingDeletedIsNotDeletedOrReportedAgain(t *testing.T) {
+	d, fake := newTestDriver(t)
+	now := time.Date(2026, 9, 30, 14, 0, 0, 0, time.UTC)
+	seedTerminating(t, d, "boutique", "simian-8jxr9", now.Add(-time.Minute))
+
+	cleared, err := d.ReapExpired(context.Background(), []string{"boutique"}, now)
+	if err != nil {
+		t.Fatalf("ReapExpired: %v", err)
+	}
+	if len(cleared) != 0 {
+		t.Errorf("cleared = %v; an object already terminating is not a reap", cleared)
+	}
+	if n := deletes(fake); n != 0 {
+		t.Errorf("issued %d deletes for an object already being deleted", n)
+	}
+}
+
+// Still terminating well past the point Chaos Mesh would have let it go, it
+// is held by a finalizer nothing will remove, and someone has to look. Said
+// once, with what holds it and how to end it — not once per tick.
+func TestAnObjectStuckDeletingIsReportedOnceWithWhatHoldsIt(t *testing.T) {
+	d, fake := newTestDriver(t)
+	now := time.Date(2026, 9, 30, 14, 0, 0, 0, time.UTC)
+	seedTerminating(t, d, "boutique", "simian-8jxr9", now.Add(-25*time.Minute))
+
+	_, err := d.ReapExpired(context.Background(), []string{"boutique"}, now)
+	if err == nil {
+		t.Fatal("a stuck object went unreported")
+	}
+	for _, want := range []string{"boutique/simian-8jxr9", "chaos-mesh/records", "25m0s", "kubectl -n boutique patch httpchaos simian-8jxr9"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("report %q does not say %q", err, want)
+		}
+	}
+
+	for tick := 1; tick <= 3; tick++ {
+		if _, err := d.ReapExpired(context.Background(), []string{"boutique"}, now.Add(time.Duration(tick)*30*time.Second)); err != nil {
+			t.Errorf("tick %d reported it again: %v", tick, err)
+		}
+	}
+	if n := deletes(fake); n != 0 {
+		t.Errorf("issued %d deletes for a stuck object", n)
+	}
+
+	// Once it is gone it is forgotten, so the set holds only what is stuck.
+	if err := d.dyn.Resource(httpChaosGVR).Namespace("boutique").Delete(context.Background(), "simian-8jxr9", metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ReapExpired(context.Background(), []string{"boutique"}, now.Add(5*time.Minute)); err != nil {
+		t.Fatalf("ReapExpired: %v", err)
+	}
+	if len(d.stuckReported) != 0 {
+		t.Errorf("still remembering %v after it went away", d.stuckReported)
 	}
 }

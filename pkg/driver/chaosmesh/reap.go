@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -35,6 +36,12 @@ const ExpiryAnnotation = "simian.chaos/expires-at"
 // so nothing is waiting on the delete; the grace leaves this process's own
 // faults to the lease registry, which ends them with their fault UID attached.
 const reapGrace = time.Minute
+
+// stuckAfter is how long an object may sit with a deletionTimestamp before
+// ReapExpired reports it. Chaos Mesh's own recovery normally lets the delete
+// through in seconds; one still terminating after this is held by a finalizer
+// nothing is going to remove.
+const stuckAfter = 5 * time.Minute
 
 // ReapExpired implements simian.OrphanReaper by deleting Simian-managed Chaos
 // Mesh objects whose duration has passed.
@@ -60,8 +67,9 @@ func (d *Driver) ReapExpired(ctx context.Context, namespaces []string, now time.
 		return nil, fmt.Errorf("chaos-mesh reap: %w", err)
 	}
 	var (
-		cleared []string
-		errs    []error
+		cleared   []string
+		errs      []error
+		seenStuck = map[string]bool{}
 	)
 	for _, r := range resources {
 		if !r.Namespaced {
@@ -81,6 +89,17 @@ func (d *Driver) ReapExpired(ctx context.Context, namespaces []string, now time.
 			}
 			for i := range list.Items {
 				obj := &list.Items[i]
+				if del := obj.GetDeletionTimestamp(); del != nil {
+					// Already being deleted. Deleting it again is a no-op that
+					// succeeds, and reporting that as a reap is what put 1,561
+					// orphan-reaped events in the trail for three objects (#157).
+					uid := engineUID(ns, obj.GetName(), gvr)
+					seenStuck[uid] = true
+					if now.Sub(del.Time) >= stuckAfter && d.firstStuckReport(uid) {
+						errs = append(errs, stuckError(r.Kind, ns, obj, now.Sub(del.Time)))
+					}
+					continue
+				}
 				deadline, ok := deadlineOf(obj)
 				if !ok || !deadline.Add(reapGrace).Before(now) {
 					continue
@@ -94,7 +113,50 @@ func (d *Driver) ReapExpired(ctx context.Context, namespaces []string, now time.
 			}
 		}
 	}
+	d.forgetStuckExcept(seenStuck)
 	return cleared, errors.Join(errs...)
+}
+
+// stuckError says which object will not go away, what holds it, and how to
+// end it by hand.
+//
+// It is not removed automatically. Chaos Mesh's chaos-mesh/records finalizer
+// is how it remembers to recover pods it injected; when injection failed
+// outright there is nothing to recover, but a partial injection would be left
+// in place for good. Which one this is takes looking at the target pods.
+func stuckError(kind, ns string, obj *unstructured.Unstructured, age time.Duration) error {
+	return fmt.Errorf("chaos-mesh reap: %s %s/%s has been deleting for %s, held by finalizers [%s]; "+
+		"Chaos Mesh has not recovered it. Check its target pods, then: kubectl -n %s patch %s %s --type=merge -p '{\"metadata\":{\"finalizers\":null}}'",
+		kind, ns, obj.GetName(), age.Truncate(time.Second), strings.Join(obj.GetFinalizers(), ", "),
+		ns, strings.ToLower(kind), obj.GetName())
+}
+
+// firstStuckReport records that uid has been reported stuck and says whether
+// this is the first time, so each stuck object is reported once per process
+// rather than on every tick.
+func (d *Driver) firstStuckReport(uid string) bool {
+	d.stuckMu.Lock()
+	defer d.stuckMu.Unlock()
+	if d.stuckReported == nil {
+		d.stuckReported = map[string]bool{}
+	}
+	if d.stuckReported[uid] {
+		return false
+	}
+	d.stuckReported[uid] = true
+	return true
+}
+
+// forgetStuckExcept drops reported objects that are no longer terminating, so
+// the set stays as small as what is actually stuck.
+func (d *Driver) forgetStuckExcept(seen map[string]bool) {
+	d.stuckMu.Lock()
+	defer d.stuckMu.Unlock()
+	for uid := range d.stuckReported {
+		if !seen[uid] {
+			delete(d.stuckReported, uid)
+		}
+	}
 }
 
 // deadlineOf reads when a Chaos Mesh object's fault ends. An unparseable

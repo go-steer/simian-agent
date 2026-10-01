@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-steer/simian-agent/pkg/catalog"
@@ -49,6 +50,10 @@ type Driver struct {
 	// Bounds for ConfirmInjected; zero means the package defaults.
 	confirmTimeout  time.Duration
 	confirmInterval time.Duration
+
+	// Objects ReapExpired has already reported as stuck deleting.
+	stuckMu       sync.Mutex
+	stuckReported map[string]bool
 }
 
 // New creates a Driver. namePrefix is the GenerateName prefix for created

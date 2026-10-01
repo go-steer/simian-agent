@@ -165,6 +165,15 @@ leaves faults the running controller still holds to its own lease, which ends
 them with their fault UID attached. Objects created before the annotation
 existed are judged by creation time plus `spec.duration`.
 
+An object Chaos Mesh could not inject can stay behind its `chaos-mesh/records`
+finalizer for good: it is marked for deletion and never removed. The sweep
+leaves objects that are already being deleted alone. One still deleting five
+minutes later is reported once as `lease.cleared` with `reason:
+orphan-reap-failed`, naming the finalizers and the `kubectl patch` that removes
+them. The sweep doesn't remove the finalizer itself: Chaos Mesh uses it to
+recover the pods it injected, and after a partial injection removing it would
+leave that injection in place. Check the target pods first.
+
 A `network-policy` or `kube-state` fault has no such backstop — a NetworkPolicy
 or a synthesized Deployment stays until something deletes it, and the in-memory
 lease that was going to delete it dies with the process. So those drivers write
