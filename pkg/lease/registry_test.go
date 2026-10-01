@@ -457,3 +457,49 @@ func TestListFindsAFaultLeasedInItsSecondNamespace(t *testing.T) {
 		t.Errorf("List(\"ns-c\") = %d faults, want 0", len(got))
 	}
 }
+
+// #171: serve waits for the reaper at shutdown, so a sweep cut short by it
+// must not be reported as a failed scan, once per engine, on every restart.
+// What it did clear before the cancellation is still audited.
+func TestASweepCutShortByShutdownIsNotAFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// Swept in engine order: kube-state first, and the rest not at all.
+	first := &reapingDriver{engine: simian.EngineKubeState, cleared: []string{"ns-a/deploy/simian-01"}, err: ctx.Err()}
+	np := &reapingDriver{engine: simian.EngineNetworkPolicy, err: ctx.Err()}
+	aud := &fakeAuditor{}
+	rp := &Reaper{
+		Registry: NewRegistry("holder-1"),
+		Drivers: map[simian.Engine]simian.ChaosDriver{
+			simian.EngineNetworkPolicy: np,
+			simian.EngineKubeState:     first,
+		},
+		Interval:   time.Second,
+		Auditor:    aud,
+		Namespaces: staticArenas("ns-a"),
+	}
+	rp.Sweep(ctx)
+
+	var reaped int
+	for _, e := range aud.events {
+		switch e.Reason {
+		case "orphan-reap-failed", "orphan-namespaces-failed":
+			t.Errorf("shutdown reported as a scan failure: %+v", e)
+		case "orphan-reaped":
+			reaped++
+		}
+	}
+	if reaped != 1 {
+		t.Errorf("orphan-reaped events = %d, want the one cleared before the cancellation", reaped)
+	}
+	if np.calls != 0 {
+		t.Errorf("the sweep went on to the next engine after the cancellation")
+	}
+
+	rp.Namespaces = func(ctx context.Context) ([]string, error) { return nil, ctx.Err() }
+	aud.events = nil
+	rp.Sweep(ctx)
+	if len(aud.events) != 0 {
+		t.Errorf("arena lookup cut short by shutdown was audited: %+v", aud.events)
+	}
+}
