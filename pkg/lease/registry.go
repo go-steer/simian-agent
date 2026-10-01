@@ -67,6 +67,18 @@ func (r *Registry) Register(faultUID, engineUID string, m simian.FaultManifest, 
 	return af
 }
 
+// Adopt takes over the lease of a fault a previous controller process
+// applied and left running. The fault keeps its own applied time and
+// deadline; only the holder changes. From here it counts against the budget
+// and is cleared at its deadline like any fault this process applied.
+func (r *Registry) Adopt(af simian.ActiveFault) {
+	af.Holder = r.holder
+	af.LastBeat = time.Now().UTC()
+	r.mu.Lock()
+	r.items[af.FaultUID] = af
+	r.mu.Unlock()
+}
+
 // Get returns the ActiveFault for a given simian fault UID.
 func (r *Registry) Get(faultUID string) (simian.ActiveFault, bool) {
 	r.mu.RLock()

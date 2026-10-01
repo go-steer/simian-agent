@@ -20,6 +20,8 @@ import (
 	"io"
 	"sort"
 	"time"
+
+	"github.com/go-steer/simian-agent/pkg/simian"
 )
 
 // ReasonUntrackedAfterRestart closes a fault that a previous controller
@@ -241,4 +243,46 @@ func ClosingEvents(rows []FaultRow, now time.Time) []Record {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].FaultUID < out[j].FaultUID })
 	return out
+}
+
+// ActiveFault rebuilds the lease of a fault the trail shows as still in the
+// cluster at now: applied, never closed, and with its deadline ahead. ok is
+// false for any other row, and for one whose record is too incomplete to say
+// what is running where — that one is left to ClosingEvents.
+//
+// A restarted controller adopts these (#172). Closing them on the record is
+// not enough: the fault is still live, and a controller that does not count
+// it applies another on top of it, past --max-concurrent-faults and past the
+// health gate of the namespace it is running in.
+func (r FaultRow) ActiveFault(now time.Time) (simian.ActiveFault, bool) {
+	if r.Outcome != OutcomeOpen || r.AppliedAt.IsZero() || r.EngineUID == "" || r.Engine == "" {
+		return simian.ActiveFault{}, false
+	}
+	deadline, err := time.Parse(time.RFC3339, r.Deadline)
+	if err != nil || !deadline.After(now) {
+		return simian.ActiveFault{}, false
+	}
+	var targets []simian.TargetRef
+	if b, err := json.Marshal(r.Targets); err != nil || json.Unmarshal(b, &targets) != nil || len(targets) == 0 {
+		return simian.ActiveFault{}, false
+	}
+	spec, _ := r.Spec.(map[string]any)
+	duration, _ := time.ParseDuration(r.Duration)
+	return simian.ActiveFault{
+		FaultUID:  r.FaultUID,
+		EngineUID: r.EngineUID,
+		Manifest: simian.FaultManifest{
+			UID:             r.FaultUID,
+			Source:          simian.ManifestSource(r.Source),
+			Engine:          simian.Engine(r.Engine),
+			ResourceKind:    r.Kind,
+			Spec:            spec,
+			Targets:         targets,
+			Duration:        duration,
+			BlastRadiusTier: simian.BlastRadiusTier(r.Tier),
+			PlanID:          r.PlanID,
+		},
+		AppliedAt: r.AppliedAt,
+		Deadline:  deadline,
+	}, true
 }

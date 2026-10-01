@@ -430,3 +430,29 @@ func TestAManifestRefusedOnItsSecondNamespaceLeavesTheFirstFree(t *testing.T) {
 		t.Fatalf("online-boutique was left reserved by a refused apply: %v", err)
 	}
 }
+
+// #172: a lease adopted from a previous process holds a slot like any other,
+// so a fault left running by a crash keeps the next one out.
+func TestAnAdoptedLeaseCountsAgainstTheBudget(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.MaxConcurrentFaults = 1
+	exec, registry := newBudgetExecutor(t, cfg, newHoldingDriver(0))
+
+	left := goodManifest()
+	left.UID = "f-left"
+	registry.Adopt(simian.ActiveFault{FaultUID: "f-left", EngineUID: "chaos-mesh|online-boutique|simian-f-left",
+		Manifest: left, AppliedAt: time.Now().Add(-time.Minute), Deadline: time.Now().Add(2 * time.Minute)})
+
+	next := goodManifest()
+	next.Targets[0].Namespace = "boutique-2"
+	_, err := exec.Apply(context.Background(), next)
+	if err == nil {
+		t.Fatal("a fault was admitted over a cap of 1 held by an adopted lease")
+	}
+	if ee := asExecutorError(t, err); ee.Reason != simian.ReasonBudgetExceeded {
+		t.Fatalf("reason = %q, want %q", ee.Reason, simian.ReasonBudgetExceeded)
+	}
+	if active, _ := exec.ListActive(context.Background(), "online-boutique"); len(active) != 1 {
+		t.Errorf("ListActive = %+v, want the adopted fault", active)
+	}
+}

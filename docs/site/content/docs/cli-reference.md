@@ -144,8 +144,8 @@ spec; the table truncates it. Lines that are not audit events are skipped, so a
 controller's whole log can be piped in.
 
 `simian serve --audit-file PATH` writes the file (`--audit-file-max-bytes`,
-default 100 MiB, sets the rotation point) and closes faults a previous process
-left open when it starts; the chart turns it on by default — see
+default 100 MiB, sets the rotation point). At start-up it adopts the faults a
+previous process left running and closes the ones it left open; the chart turns it on by default — see
 [Helm values]({{< relref "helm-values.md#audit-trail" >}}).
 
 ### Tearing down

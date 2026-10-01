@@ -94,14 +94,17 @@ func newServeCmd() *cobra.Command {
 			logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 			slog.SetDefault(logger)
 			var auditor simian.Auditor = audit.New(logger)
+			// Run once the lease registry exists, so what the previous
+			// process left running can be adopted into it (#172).
+			takeOverFaults := func(context.Context, simian.Auditor, func(audit.FaultRow) bool) {}
 			if auditFile != "" {
-				fileAuditor, closeFaults, err := openAuditFile(auditFile, auditFileMaxBytes, logger)
+				fileAuditor, takeOver, err := openAuditFile(auditFile, auditFileMaxBytes, logger)
 				if err != nil {
 					return err
 				}
 				defer func() { _ = fileAuditor.Close() }()
 				auditor = audit.Multi{auditor, fileAuditor}
-				closeFaults(ctx, auditor)
+				takeOverFaults = takeOver
 			}
 
 			// Background loops that emit audit events. Deferred after the
@@ -207,6 +210,17 @@ func newServeCmd() *cobra.Command {
 				execOpts = append(execOpts, executor.WithDefaultProbes(catalog.DefaultProbes))
 			}
 			exec := executor.New(execCfg, drivers, registry, auditor, elig, execOpts...)
+
+			// Before anything plans or applies: a fault still running from
+			// the previous process has to be counted from the first cycle.
+			takeOverFaults(ctx, auditor, func(r audit.FaultRow) bool {
+				af, ok := r.ActiveFault(time.Now().UTC())
+				if !ok || drivers[af.Manifest.Engine] == nil {
+					return false
+				}
+				registry.Adopt(af)
+				return true
+			})
 
 			reaper := &lease.Reaper{
 				Registry: registry,
@@ -491,10 +505,16 @@ func waitForWorkers(wg *sync.WaitGroup, limit time.Duration, logger *slog.Logger
 }
 
 // openAuditFile reads what a previous process left in the audit file, opens
-// it for appending, and returns a function that closes the faults that
-// process left open. The closing is deferred to the caller so the events go
-// through every sink, not just the file.
-func openAuditFile(path string, maxBytes int64, logger *slog.Logger) (*audit.FileAuditor, func(context.Context, simian.Auditor), error) {
+// it for appending, and returns a function that takes over the faults that
+// process left open. The taking over is deferred to the caller so the events
+// go through every sink, not just the file, and so the lease registry exists
+// by then.
+//
+// A fault still running is offered to adopt; one it takes gets a
+// lease.adopted event and is from then on this process's to count and clear.
+// Every other open fault — ended, or not adoptable — is closed on the record
+// as untracked-after-restart. A nil adopt closes everything.
+func openAuditFile(path string, maxBytes int64, logger *slog.Logger) (*audit.FileAuditor, func(context.Context, simian.Auditor, func(audit.FaultRow) bool), error) {
 	fa, err := audit.OpenFile(path, maxBytes, func(err error) {
 		logger.Error("simian serve: audit file", slog.String("error", err.Error()))
 	})
@@ -518,13 +538,34 @@ func openAuditFile(path string, maxBytes int64, logger *slog.Logger) (*audit.Fil
 		}
 		records = append(records, recs...)
 	}
-	closing := audit.ClosingEvents(audit.Faults(records), time.Now().UTC())
-	return fa, func(ctx context.Context, a simian.Auditor) {
+	rows := audit.Faults(records)
+	return fa, func(ctx context.Context, a simian.Auditor, adopt func(audit.FaultRow) bool) {
+		var left []audit.FaultRow
+		adopted := 0
+		for _, r := range rows {
+			if r.Outcome != audit.OutcomeOpen {
+				continue
+			}
+			if adopt == nil || !adopt(r) {
+				left = append(left, r)
+				continue
+			}
+			adopted++
+			a.Emit(ctx, simian.AuditEvent{
+				Event: audit.EventLeaseAdopted, FaultUID: r.FaultUID, PlanID: r.PlanID, ScenarioID: r.ScenarioID,
+				Mode: simian.ManifestSource(r.Source), Reason: audit.ReasonUntrackedAfterRestart,
+				Payload: map[string]any{"engine_uid": r.EngineUID, "deadline": r.Deadline},
+			})
+		}
+		closing := audit.ClosingEvents(left, time.Now().UTC())
 		for _, c := range closing {
 			a.Emit(ctx, simian.AuditEvent{
 				Event: c.Event, FaultUID: c.FaultUID, PlanID: c.PlanID, ScenarioID: c.ScenarioID,
 				Mode: simian.ManifestSource(c.Mode), Reason: c.Reason, Payload: c.Payload,
 			})
+		}
+		if adopted > 0 {
+			logger.Info("simian serve: adopted faults a previous process left running", slog.Int("faults", adopted))
 		}
 		if len(closing) > 0 {
 			logger.Info("simian serve: closed faults a previous process left open", slog.Int("faults", len(closing)))

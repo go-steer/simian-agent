@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/go-steer/simian-agent/pkg/audit"
+	"github.com/go-steer/simian-agent/pkg/lease"
 	"github.com/go-steer/simian-agent/pkg/simian"
 )
 
@@ -121,7 +122,7 @@ func TestServeClosesFaultsAPreviousProcessLeftOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openAuditFile: %v", err)
 	}
-	closeFaults(context.Background(), fa) // empty file: nothing to close
+	closeFaults(context.Background(), fa, nil) // empty file: nothing to close
 	fa.Emit(context.Background(), simian.AuditEvent{Event: audit.EventDriverApplied, FaultUID: "f-left",
 		Payload: map[string]any{"engine_uid": "chaos-mesh|bank|simian-x", "deadline": time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)}})
 	_ = fa.Close()
@@ -131,7 +132,7 @@ func TestServeClosesFaultsAPreviousProcessLeftOpen(t *testing.T) {
 		if err != nil {
 			t.Fatalf("openAuditFile: %v", err)
 		}
-		closeFaults(context.Background(), fa)
+		closeFaults(context.Background(), fa, nil)
 		_ = fa.Close()
 	}
 
@@ -146,5 +147,69 @@ func TestServeClosesFaultsAPreviousProcessLeftOpen(t *testing.T) {
 	}
 	if len(closing) != 1 || closing[0].FaultUID != "f-left" || closing[0].Reason != audit.ReasonUntrackedAfterRestart {
 		t.Errorf("closing events = %+v, want one for f-left", closing)
+	}
+}
+
+// #172: a fault the last process left running is adopted rather than only
+// closed on the record, so the new process counts it against the budget and
+// clears it at its deadline. One whose deadline has passed is closed as before.
+func TestServeAdoptsAFaultAPreviousProcessLeftRunning(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	fa, _, err := openAuditFile(path, 0, quietLogger())
+	if err != nil {
+		t.Fatalf("openAuditFile: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Minute).UTC().Truncate(time.Second)
+	for uid, d := range map[string]time.Time{"f-running": deadline, "f-ended": time.Now().Add(-time.Minute).UTC()} {
+		fa.Emit(context.Background(), simian.AuditEvent{Event: audit.EventDriverApplied, FaultUID: uid, Mode: simian.SourceAutonomous,
+			Payload: map[string]any{
+				"engine": "chaos-mesh", "kind": "PodChaos", "duration": "3m0s",
+				"targets":    []any{map[string]any{"namespace": "bank", "name": "ledgerwriter"}},
+				"spec":       map[string]any{"action": "pod-kill"},
+				"engine_uid": "chaos-mesh|bank|simian-" + uid, "deadline": d.Format(time.RFC3339),
+			}})
+	}
+	_ = fa.Close()
+
+	fa, takeOver, err := openAuditFile(path, 0, quietLogger())
+	if err != nil {
+		t.Fatalf("openAuditFile: %v", err)
+	}
+	registry := lease.NewRegistry("new-holder")
+	takeOver(context.Background(), fa, func(r audit.FaultRow) bool {
+		af, ok := r.ActiveFault(time.Now().UTC())
+		if ok {
+			registry.Adopt(af)
+		}
+		return ok
+	})
+	_ = fa.Close()
+
+	active := registry.List("bank")
+	if len(active) != 1 || active[0].FaultUID != "f-running" {
+		t.Fatalf("leases in bank = %+v, want f-running alone", active)
+	}
+	if af := active[0]; af.EngineUID != "chaos-mesh|bank|simian-f-running" || !af.Deadline.Equal(deadline) ||
+		af.Holder != "new-holder" || af.Manifest.ResourceKind != "PodChaos" {
+		t.Errorf("adopted lease = %+v", af)
+	}
+
+	f, _ := os.Open(path)
+	defer func() { _ = f.Close() }()
+	recs, _ := audit.ReadRecords(f)
+	got := map[string]string{}
+	for _, r := range recs {
+		if r.Event == audit.EventLeaseAdopted || r.Event == audit.EventLeaseExpired {
+			got[r.FaultUID] += r.Event + " "
+		}
+	}
+	if got["f-running"] != audit.EventLeaseAdopted+" " || got["f-ended"] != audit.EventLeaseExpired+" " {
+		t.Errorf("events = %v, want f-running adopted and f-ended closed", got)
+	}
+	// Adopted is not ended: the row stays open until this process clears it.
+	for _, r := range audit.Faults(recs) {
+		if r.FaultUID == "f-running" && r.Outcome != audit.OutcomeOpen {
+			t.Errorf("adopted fault reads as %s", r.Outcome)
+		}
 	}
 }
