@@ -272,6 +272,9 @@ func (rp *Reaper) sweepOrphans(ctx context.Context, now time.Time) {
 		return
 	}
 	namespaces, err := rp.Namespaces(ctx)
+	if err != nil && ctx.Err() != nil {
+		return // shutting down: not a failure of the scan (#171)
+	}
 	if err != nil {
 		// Failing to resolve arenas is not the same as there being none:
 		// say so, rather than logging a silent no-op every tick.
@@ -296,6 +299,13 @@ func (rp *Reaper) sweepOrphans(ctx context.Context, now time.Time) {
 					"engine":     string(d.engine),
 				},
 			})
+		}
+		if err != nil && ctx.Err() != nil {
+			// The controller is shutting down mid-sweep. serve waits for
+			// the reaper to return, so without this every graceful restart
+			// logs one "context canceled" failure per engine (#171). The
+			// next process sweeps at start-up anyway.
+			return
 		}
 		if err != nil {
 			rp.Auditor.Emit(ctx, simian.AuditEvent{
