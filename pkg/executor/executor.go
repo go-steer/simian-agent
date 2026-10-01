@@ -315,6 +315,13 @@ func (e *Executor) confirmInjected(ctx context.Context, driver simian.ChaosDrive
 		reason = string(simian.ReasonInjectionFailed)
 		payload["error"] = err.Error()
 	}
+	interrupted := err != nil && ctx.Err() != nil
+	if interrupted {
+		// Shut down mid-wait: the engine never answered either way, so
+		// there is no verdict to record.
+		reason = string(simian.ReasonInterrupted)
+		delete(payload, "passed")
+	}
 	e.auditor.Emit(ctx, simian.AuditEvent{
 		Event:    audit.EventFaultInjected,
 		FaultUID: m.UID,
@@ -323,6 +330,10 @@ func (e *Executor) confirmInjected(ctx context.Context, driver simian.ChaosDrive
 		Reason:   reason,
 		Payload:  payload,
 	})
+	if interrupted {
+		return simian.NewExecutorError(simian.StageDriver, simian.ReasonInterrupted,
+			"stopped before the engine confirmed the fault", err)
+	}
 	if err != nil {
 		return simian.NewExecutorError(simian.StageDriver, simian.ReasonInjectionFailed,
 			"engine did not inject the fault", err)
@@ -427,6 +438,11 @@ func (e *Executor) runProbes(ctx context.Context, m simian.FaultManifest, probes
 		if res.Err != nil && st.unrunnable != "" {
 			why = st.unrunnable
 		}
+		if !res.Passed && ctx.Err() != nil {
+			// Cut short by shutdown, not answered: no verdict either way.
+			why = simian.ReasonInterrupted
+			delete(payload, "passed")
+		}
 		reason := ""
 		if !res.Passed {
 			reason = string(why)
@@ -474,6 +490,10 @@ func (e *Executor) attachDefaultProbes(m *simian.FaultManifest) []string {
 // contaminate the next one while the caller — holding an error and no UID —
 // has no way to clear it. If the clear itself fails the lease is left in place
 // on purpose, so the reaper collects it at the deadline instead.
+// abandonClearTimeout bounds the clear abandon makes on a context detached
+// from the caller's, so a shutdown still waits for it but not indefinitely.
+const abandonClearTimeout = 10 * time.Second
+
 func (e *Executor) abandon(ctx context.Context, m simian.FaultManifest, engineUID string, cause error) {
 	reason := string(simian.ReasonProbeFailed)
 	var ee *simian.ExecutorError
@@ -485,7 +505,12 @@ func (e *Executor) abandon(ctx context.Context, m simian.FaultManifest, engineUI
 		"error":      cause.Error(),
 	}
 	if driver, ok := e.drivers[m.Engine]; ok {
-		if err := driver.Clear(ctx, engineUID); err != nil {
+		// Not ctx itself: on shutdown it is already cancelled, which is when
+		// this matters most. A delete on it fails at once and leaves the
+		// fault to outlive the process that applied it.
+		clearCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), abandonClearTimeout)
+		defer cancel()
+		if err := driver.Clear(clearCtx, engineUID); err != nil {
 			payload["clear_error"] = err.Error()
 			payload["left_to_reaper"] = true
 		} else {

@@ -34,10 +34,16 @@ type confirmingDriver struct {
 	observed string
 	err      error
 	calls    int
+	// during, if set, runs inside ConfirmInjected — a shutdown arriving
+	// while the engine is still being asked.
+	during func()
 }
 
 func (c *confirmingDriver) ConfirmInjected(context.Context, string) (string, error) {
 	c.calls++
+	if c.during != nil {
+		c.during()
+	}
 	return c.observed, c.err
 }
 
@@ -169,4 +175,55 @@ func TestVerifiedByNamesEveryCheckAndAdmitsToNone(t *testing.T) {
 			t.Error("fault.injected emitted by a driver that cannot confirm")
 		}
 	})
+}
+
+// Killing the controller mid-wait on the 2026-09-30 trial recorded the fault
+// as "injection-failed ... not injected after 30s" nineteen seconds in, and
+// then failed to delete it, because the rollback ran on the context the
+// shutdown had just cancelled (#158). A shutdown is not a verdict on the
+// fault, and the rollback is the one thing that has to outlive it.
+func TestAShutdownMidConfirmationIsRecordedAsInterruptedAndStillRolledBack(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d := &confirmingDriver{
+		observed: "AllInjected=False",
+		err:      errors.New("chaos-mesh: bank/simian-w9xdk: stopped waiting after 19s (context canceled)"),
+		during:   cancel,
+	}
+	exec, auditor, registry := newConfirmingExecutor(t, d, nil)
+	var clearCtxErr error
+	d.ClearFn = func(c context.Context, _ string) error {
+		clearCtxErr = c.Err()
+		return clearCtxErr
+	}
+
+	_, err := exec.Apply(ctx, goodManifest())
+	if ee := asExecutorError(t, err); ee.Reason != simian.ReasonInterrupted {
+		t.Errorf("Reason = %q, want %q", ee.Reason, simian.ReasonInterrupted)
+	}
+
+	injected, ok := auditor.FindEvent(audit.EventFaultInjected)
+	if !ok {
+		t.Fatal("no fault.injected event")
+	}
+	if injected.Reason != string(simian.ReasonInterrupted) {
+		t.Errorf("fault.injected reason = %q, want %q", injected.Reason, simian.ReasonInterrupted)
+	}
+	if _, has := injected.Payload["passed"]; has {
+		t.Errorf("fault.injected carries passed=%v; the engine never answered", injected.Payload["passed"])
+	}
+
+	if len(d.Cleared) != 1 {
+		t.Fatalf("driver.Cleared = %d, want 1", len(d.Cleared))
+	}
+	if clearCtxErr != nil {
+		t.Errorf("rollback ran on a context that was already done (%v); the delete would fail and the fault outlive the process", clearCtxErr)
+	}
+	if len(registry.List("")) != 0 {
+		t.Error("lease still registered after a successful rollback")
+	}
+	cleared, _ := auditor.FindEvent(audit.EventLeaseCleared)
+	if cleared.Reason != string(simian.ReasonInterrupted) || cleared.Payload["left_to_reaper"] != nil {
+		t.Errorf("lease.cleared = %q %v, want interrupted and actually cleared", cleared.Reason, cleared.Payload)
+	}
 }

@@ -16,6 +16,7 @@ package chaosmesh
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -215,5 +216,30 @@ func TestConfirmInjectedReportsAnObjectThatIsGone(t *testing.T) {
 	_, err := d.ConfirmInjected(context.Background(), engineUID("bank", "simian-gone", httpChaosGVR))
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("err = %v, want a not-found explanation", err)
+	}
+}
+
+// A caller that stops waiting — the controller shutting down — is not the
+// engine failing to inject. Reported as "not injected after 30s" it was both
+// wrong about the cause and about the time (#158).
+func TestConfirmInjectedSaysWhenTheCallerStoppedWaiting(t *testing.T) {
+	d, _ := newTestDriver(t)
+	d.confirmInterval = 10 * time.Millisecond
+	d.WithConfirmTimeout(time.Minute)
+	uid := createWithStatus(t, d, map[string]any{
+		"conditions": cond("Selected", "True", "AllInjected", "False"),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := d.ConfirmInjected(ctx, uid)
+	if err == nil {
+		t.Fatal("ConfirmInjected succeeded on a fault that never injected")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "stopped waiting") {
+		t.Errorf("err = %v, want it to say the caller stopped waiting", err)
+	}
+	if strings.Contains(err.Error(), "not injected after 1m0s") {
+		t.Errorf("err = %v claims the full timeout ran", err)
 	}
 }

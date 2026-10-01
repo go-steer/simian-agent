@@ -63,6 +63,12 @@ const (
 	// so.
 	ReasonInjectionFailed RejectionReason = "injection-failed"
 
+	// ReasonInterrupted means the process was told to stop while a check on
+	// an applied fault was still waiting. Nothing was learned about the
+	// fault, so it is not called a failed injection or a failed probe; it is
+	// rolled back all the same, because nobody is left to watch it.
+	ReasonInterrupted RejectionReason = "interrupted"
+
 	// ReasonPrecheckFailed means an SOT probe never passed, so the experiment
 	// would have started from a state its own verification cannot interpret —
 	// a workload that was already unreachable, or already slow. Rejected before

@@ -19,7 +19,9 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -94,5 +96,31 @@ func TestBuildEligibilityResolvesArenasInStaticMode(t *testing.T) {
 	flags[0] = "kube-system"
 	if got, _ := arenas(ctx); got[0] != "ns-a" {
 		t.Errorf("arena list followed a mutation of the flag slice: %v", got)
+	}
+}
+
+// The audit file used to close while the reaper and the autonomous loop were
+// still writing to it, so the last events of a shutdown were lost (#158).
+// Shutdown waits for them — but not forever on one that hangs.
+func TestWaitForWorkersWaitsForThemButNotForever(t *testing.T) {
+	var wg sync.WaitGroup
+	finished := false
+	wg.Go(func() {
+		time.Sleep(20 * time.Millisecond)
+		finished = true
+	})
+	waitForWorkers(&wg, time.Minute, quietLogger())
+	if !finished {
+		t.Error("returned before the worker finished")
+	}
+
+	var hung sync.WaitGroup
+	release := make(chan struct{})
+	defer close(release)
+	hung.Go(func() { <-release })
+	start := time.Now()
+	waitForWorkers(&hung, 30*time.Millisecond, quietLogger())
+	if waited := time.Since(start); waited > 5*time.Second {
+		t.Errorf("waited %s on a hung worker, want about the limit", waited)
 	}
 }
