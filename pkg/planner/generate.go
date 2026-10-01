@@ -262,6 +262,7 @@ Rules you MUST follow:
 8. NEVER target a workload tagged as "excluded" via topology.
 9. envoy-fault kinds (EnvoyHttpDelay, EnvoyHttpAbort) require the target workload to be flagged envoy=true in the topology snapshot. If the chosen target lacks envoy=true, pick a different workload OR a different fault kind.
 10. Choose each step's "duration" for its hypothesis: long enough for the effect to show up in probes, alerts and recovery (a fault that ends seconds after injection teaches little), and never longer than max_fault_duration in the cycle budget caps — a longer step is refused before it runs.
+11. Chaos Mesh IOChaos and DNSChaos cannot inject into a container listed under readonly_rootfs in the topology; they are refused before they run. IOChaos's "volumePath" must be exactly one of the target container's mounts (listed as container:path); with no mounts listed, do not choose IOChaos for that workload.
 
 Available fault catalog (kinds you may choose). Each entry shows engine + kind + api_version + tier; entries with a spec template include the canonical engine-native spec shape directly under the entry — copy and adapt.
 
@@ -341,6 +342,21 @@ func summarizeTopology(t *topology.TargetTopology) string {
 		fmt.Fprintf(&sb, "  %s/%s replicas=%d", w.Kind, w.Name, w.DesiredReplicas)
 		if w.EnvoyInjected {
 			sb.WriteString(" envoy=true")
+		}
+		var readOnly, mounts []string
+		for _, c := range w.Containers {
+			if c.ReadOnlyRootFS {
+				readOnly = append(readOnly, c.Name)
+			}
+			for _, mp := range c.MountPaths {
+				mounts = append(mounts, c.Name+":"+mp)
+			}
+		}
+		if len(readOnly) > 0 {
+			fmt.Fprintf(&sb, " readonly_rootfs=%s", strings.Join(readOnly, ","))
+		}
+		if len(mounts) > 0 {
+			fmt.Fprintf(&sb, " mounts=%s", strings.Join(mounts, ","))
 		}
 		if pods := t.PodStatus[w.Name]; len(pods) > 0 {
 			ready := 0

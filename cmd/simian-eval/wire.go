@@ -111,6 +111,7 @@ func buildPlane(cfg *rest.Config, o *options, auditor simian.Auditor, logger *sl
 	execOpts := []executor.Option{
 		executor.WithProber(prober),
 		executor.WithWorkloadSelectors(executor.KubernetesWorkloadSelectors{Client: clientset}),
+		executor.WithTargetPods(executor.KubernetesTargetPods{Client: clientset}),
 	}
 	if o.defaultProbes {
 		execOpts = append(execOpts, executor.WithDefaultProbes(catalog.DefaultProbes))

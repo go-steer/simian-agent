@@ -244,11 +244,7 @@ func workloadFromDeployment(d *appsv1.Deployment) Workload {
 		EnvoyInjected:   d.Spec.Template.Annotations[envoyInjectedAnnotation] == "true",
 	}
 	for _, c := range d.Spec.Template.Spec.Containers {
-		w.Containers = append(w.Containers, ContainerSummary{
-			Name:    c.Name,
-			Image:   c.Image,
-			EnvRefs: envRefsFromContainer(c),
-		})
+		w.Containers = append(w.Containers, containerSummary(c))
 	}
 	return w
 }
@@ -266,11 +262,7 @@ func workloadFromStatefulSet(s *appsv1.StatefulSet) Workload {
 		EnvoyInjected:   s.Spec.Template.Annotations[envoyInjectedAnnotation] == "true",
 	}
 	for _, c := range s.Spec.Template.Spec.Containers {
-		w.Containers = append(w.Containers, ContainerSummary{
-			Name:    c.Name,
-			Image:   c.Image,
-			EnvRefs: envRefsFromContainer(c),
-		})
+		w.Containers = append(w.Containers, containerSummary(c))
 	}
 	return w
 }
@@ -284,13 +276,23 @@ func workloadFromDaemonSet(d *appsv1.DaemonSet) Workload {
 		EnvoyInjected:   d.Spec.Template.Annotations[envoyInjectedAnnotation] == "true",
 	}
 	for _, c := range d.Spec.Template.Spec.Containers {
-		w.Containers = append(w.Containers, ContainerSummary{
-			Name:    c.Name,
-			Image:   c.Image,
-			EnvRefs: envRefsFromContainer(c),
-		})
+		w.Containers = append(w.Containers, containerSummary(c))
 	}
 	return w
+}
+
+func containerSummary(c corev1.Container) ContainerSummary {
+	out := ContainerSummary{
+		Name:    c.Name,
+		Image:   c.Image,
+		EnvRefs: envRefsFromContainer(c),
+		ReadOnlyRootFS: c.SecurityContext != nil && c.SecurityContext.ReadOnlyRootFilesystem != nil &&
+			*c.SecurityContext.ReadOnlyRootFilesystem,
+	}
+	for _, vm := range c.VolumeMounts {
+		out.MountPaths = append(out.MountPaths, vm.MountPath)
+	}
+	return out
 }
 
 func serviceSummary(s *corev1.Service) Service {

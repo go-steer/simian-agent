@@ -47,6 +47,9 @@ type Executor struct {
 	// workloads, if set, fills in the labels of targets that name a workload
 	// and carry none. See WithWorkloadSelectors.
 	workloads WorkloadSelectors
+	// pods, if set, lets a fault the engine cannot inject into its target
+	// containers be refused before it is applied. See WithTargetPods.
+	pods TargetPods
 
 	mu            sync.Mutex
 	lastApplyByNS map[string]time.Time
@@ -223,6 +226,10 @@ func (e *Executor) apply(ctx context.Context, m simian.FaultManifest) (string, e
 	// Nothing has touched the cluster yet, which is the point: a fault whose
 	// starting conditions do not hold is rejected outright rather than applied
 	// and rolled back.
+	if err := e.checkTargetCompat(ctx, m); err != nil {
+		e.rejected(ctx, m, err)
+		return "", err
+	}
 	if err := e.precheck(ctx, m); err != nil {
 		e.rejected(ctx, m, err)
 		return "", err

@@ -66,6 +66,11 @@ type ContainerSummary struct {
 	Name    string          `json:"name"`
 	Image   string          `json:"image"`
 	EnvRefs []EnvServiceRef `json:"env_refs"`
+	// ReadOnlyRootFS and MountPaths decide which faults an engine can inject
+	// here: Chaos Mesh IOChaos and DNSChaos write to the root filesystem, and
+	// IOChaos's volumePath must be one of the mount points.
+	ReadOnlyRootFS bool     `json:"read_only_root_fs,omitempty"`
+	MountPaths     []string `json:"mount_paths,omitempty"`
 }
 
 // EnvServiceRef is an env-var entry whose value parses as `<service>:<port>`

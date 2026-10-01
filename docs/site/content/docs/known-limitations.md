@@ -103,6 +103,12 @@ and a genuine blast radius on a shared cluster rather than a bounded one. The
 kind is deliberately not in the catalog: an engine that cannot produce a fault
 should not list it.
 
+## IOChaos and DNSChaos need a writable root filesystem
+
+Chaos Mesh IOChaos moves the target volume aside next to its mount point, and DNSChaos backs up `/etc/resolv.conf`. Both write to the container's root filesystem, so both fail against a container with `readOnlyRootFilesystem: true`, which Online Boutique sets on every service. IOChaos also needs `volumePath` to be one of the container's mount points exactly.
+
+Simian reads the target pods before applying either kind and refuses an incompatible one with `executor[precheck:target-incompatible]`, naming the pod, the container and the reason. Nothing is applied, so nothing is left behind a finalizer. The autonomous planner sees the same facts in its topology (`readonly_rootfs=<containers>`, `mounts=<container>:<path>`) and is told not to choose those kinds there. Targets without labels, or whose pods cannot be listed, are not judged, and the engine's own injection check catches them as before.
+
 ## Autonomous LLM bias toward chaos-mesh
 
 Without `--hypothesis-hint`, the LLM almost never picks the new `network-policy` or `envoy-fault` engines because chaos-mesh has 12+ catalog entries vs 1+2. Possible mitigations: (a) tier-policy filtering, (b) explicit per-engine "weight" in the catalog, (c) prompt rule that encourages cross-engine plans. Not blocking; the hypothesis-hint workaround is reliable.
