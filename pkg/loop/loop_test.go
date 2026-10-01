@@ -17,6 +17,7 @@ package loop
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -486,5 +487,106 @@ func TestRunOnce_BudgetRefusalsDoNotCountTowardsBackoff(t *testing.T) {
 	}
 	if got := exec.AppliedCount(); got != repeatedRefusalLimit+2 {
 		t.Errorf("executor asked %d times, want %d", got, repeatedRefusalLimit+2)
+	}
+}
+
+// busyExecutor holds the only fault slot until freeAt, with a lease that
+// ends at deadline.
+type busyExecutor struct {
+	recordingExecutor
+	freeAt   time.Time
+	deadline time.Time
+}
+
+func (b *busyExecutor) ListActive(_ context.Context, _ string) ([]simian.ActiveFault, error) {
+	if time.Now().After(b.freeAt) {
+		return nil, nil
+	}
+	return []simian.ActiveFault{{FaultUID: "f-boutique", Deadline: b.deadline}}, nil
+}
+
+type countingLLM struct {
+	mu    sync.Mutex
+	calls int
+	text  string
+}
+
+func (c *countingLLM) Name() string { return "counting" }
+func (c *countingLLM) Complete(context.Context, simian.CompletionRequest) (simian.CompletionResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	return simian.CompletionResponse{Text: c.text}, nil
+}
+
+func (a *recordingAuditor) find(event, reason string) (simian.AuditEvent, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, e := range a.events {
+		if e.Event == event && e.Reason == reason {
+			return e, true
+		}
+	}
+	return simian.AuditEvent{}, false
+}
+
+// On the 2026-09-30 trial every one of bank's 46 refusals cost a planning
+// call, made while boutique's fault held the only slot (#161).
+func TestANamespaceIsSkippedBeforePlanningWhenNoSlotCanOpen(t *testing.T) {
+	exec := &busyExecutor{freeAt: time.Now().Add(time.Hour), deadline: time.Now().Add(time.Hour)}
+	l, au := newLoopUnderTest(t, planJSON(1), exec, planner.Budget{MaxFaultsPerCycle: 1, MaxConcurrentFaults: 1})
+	llm := &countingLLM{text: planJSON(1)}
+	l.Generator = planner.NewGenerator(llm)
+	l.Namespaces = []string{"boutique", "bank"}
+	l.Interval = 5 * time.Minute
+
+	start := time.Now()
+	if _, _, err := l.RunOnce(context.Background(), "bank"); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if waited := time.Since(start); waited > 5*time.Second {
+		t.Errorf("waited %s for a slot held past the window; should skip at once", waited)
+	}
+	if llm.calls != 0 || exec.AppliedCount() != 0 {
+		t.Errorf("planner calls=%d applies=%d, want 0 each", llm.calls, exec.AppliedCount())
+	}
+	ev, ok := au.find(audit.EventCycleSkipped, "budget-full")
+	if !ok {
+		t.Fatal("no cycle.skipped reason=budget-full")
+	}
+	if ev.Payload["namespace"] != "bank" || ev.Payload["active_faults"] != 1 || ev.Payload["max_concurrent_faults"] != 1 {
+		t.Errorf("payload = %v", ev.Payload)
+	}
+}
+
+func TestANamespaceWaitsForASlotThatFreesWithinItsShareOfTheCycle(t *testing.T) {
+	exec := &busyExecutor{freeAt: time.Now().Add(60 * time.Millisecond), deadline: time.Now().Add(60 * time.Millisecond)}
+	l, au := newLoopUnderTest(t, planJSON(1), exec, planner.Budget{MaxFaultsPerCycle: 1, MaxConcurrentFaults: 1})
+	l.Namespaces = []string{"boutique", "bank"}
+	l.Interval = 10 * time.Second
+	l.slotPoll = 10 * time.Millisecond
+
+	if _, _, err := l.RunOnce(context.Background(), "bank"); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if exec.AppliedCount() != 1 {
+		t.Errorf("applies = %d, want 1 once boutique's fault ended", exec.AppliedCount())
+	}
+	if _, skipped := au.find(audit.EventCycleSkipped, "budget-full"); skipped {
+		t.Error("skipped as budget-full although the slot freed in time")
+	}
+}
+
+func TestEachCycleStartsWithTheNextNamespace(t *testing.T) {
+	l := &Loop{Namespaces: []string{"boutique", "bank", "shop"}}
+	for cycle, want := range [][]string{
+		{"boutique", "bank", "shop"},
+		{"bank", "shop", "boutique"},
+		{"shop", "boutique", "bank"},
+		{"boutique", "bank", "shop"},
+	} {
+		if got := l.cycleOrder(cycle); !reflect.DeepEqual(got, want) {
+			t.Errorf("cycle %d order = %v, want %v", cycle, got, want)
+		}
 	}
 }
