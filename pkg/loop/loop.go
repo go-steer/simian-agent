@@ -74,7 +74,13 @@ type Loop struct {
 
 	refusalMu sync.Mutex
 	refusals  map[string][]time.Time // step key → recent refusal times
+
+	// slotPoll is how often a namespace waiting for a fault slot looks
+	// again. Zero means defaultSlotPoll; tests shorten it.
+	slotPoll time.Duration
 }
+
+const defaultSlotPoll = 5 * time.Second
 
 // Run drives the loop on a ticker until ctx is done. Returns the context
 // error on shutdown.
@@ -89,20 +95,74 @@ func (l *Loop) Run(ctx context.Context) error {
 	defer t.Stop()
 	// Run an immediate first cycle on startup so operators don't wait a
 	// full interval to see anything.
-	for _, ns := range l.Namespaces {
-		l.runOneSafely(ctx, ns)
-	}
-	for {
+	for cycle := 0; ; cycle++ {
+		for _, ns := range l.cycleOrder(cycle) {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			l.runOneSafely(ctx, ns)
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-t.C:
-			for _, ns := range l.Namespaces {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				l.runOneSafely(ctx, ns)
+		}
+	}
+}
+
+// cycleOrder rotates which namespace goes first. Under a concurrency cap the
+// first namespace of a cycle takes the slot; always starting with the same one
+// left the others refused cycle after cycle (#161).
+func (l *Loop) cycleOrder(cycle int) []string {
+	n := len(l.Namespaces)
+	order := make([]string, 0, n)
+	for i := range n {
+		order = append(order, l.Namespaces[(cycle+i)%n])
+	}
+	return order
+}
+
+// waitForSlot holds a namespace's turn until the concurrency cap has room,
+// for at most the namespace's share of the cycle interval. It returns false,
+// with the active count, when no slot opened in time; the caller skips
+// without asking the planner for a plan the executor would refuse. A wait
+// that cannot succeed — every active fault runs past the window — ends at
+// once.
+func (l *Loop) waitForSlot(ctx context.Context) (ok bool, active int, waited time.Duration) {
+	limit := l.Budget.MaxConcurrentFaults
+	if limit <= 0 || l.Executor == nil {
+		return true, 0, 0
+	}
+	var window time.Duration
+	if l.Interval > 0 && len(l.Namespaces) > 0 {
+		window = l.Interval / time.Duration(len(l.Namespaces))
+	}
+	poll := l.slotPoll
+	if poll <= 0 {
+		poll = defaultSlotPoll
+	}
+	start := time.Now()
+	end := start.Add(window)
+	for {
+		faults, err := l.Executor.ListActive(ctx, "")
+		if err != nil || len(faults) < limit {
+			// An unreadable registry is the executor's call to make at apply.
+			return true, len(faults), time.Since(start)
+		}
+		freesInTime := false
+		for _, f := range faults {
+			if f.Deadline.IsZero() || f.Deadline.Before(end) {
+				freesInTime = true
+				break
 			}
+		}
+		if !freesInTime || !time.Now().Add(poll).Before(end) {
+			return false, len(faults), time.Since(start)
+		}
+		select {
+		case <-ctx.Done():
+			return false, len(faults), time.Since(start)
+		case <-time.After(poll):
 		}
 	}
 }
@@ -123,11 +183,29 @@ func (l *Loop) runOneSafely(ctx context.Context, ns string) {
 // RunOnce drives a single planning cycle for the given namespace. Returns
 // the generated plan, the slice of fault UIDs successfully applied, and an
 // error only when the cycle could not even start (catalog gather failure,
-// generator setup error). Health-gate failures and LLM unavailability are
-// treated as benign skips: the plan is empty, applied is nil, error is nil.
+// generator setup error). Health-gate failures, a full concurrency budget and
+// LLM unavailability are treated as benign skips: the plan is empty, applied
+// is nil, error is nil.
 func (l *Loop) RunOnce(ctx context.Context, ns string) (simian.AttackPlan, []string, error) {
 	if l.Auditor != nil {
 		l.Auditor.Emit(ctx, simian.AuditEvent{Event: audit.EventCycleStarted, Mode: simian.SourceAutonomous, Payload: map[string]any{"namespace": ns}})
+	}
+
+	if ok, active, waited := l.waitForSlot(ctx); !ok {
+		if l.Auditor != nil {
+			l.Auditor.Emit(ctx, simian.AuditEvent{
+				Event:  audit.EventCycleSkipped,
+				Mode:   simian.SourceAutonomous,
+				Reason: "budget-full",
+				Payload: map[string]any{
+					"namespace":             ns,
+					"active_faults":         active,
+					"max_concurrent_faults": l.Budget.MaxConcurrentFaults,
+					"waited":                waited.Truncate(time.Second).String(),
+				},
+			})
+		}
+		return simian.AttackPlan{}, nil, nil
 	}
 
 	if l.Health != nil {

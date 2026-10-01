@@ -489,6 +489,8 @@ Before each autonomous cycle, the loop checks:
 
 A failed gate skips the cycle (audit `cycle.health_gate_failed` + `cycle.skipped`) and moves on without applying anything.
 
+Before the gate, a namespace whose turn comes while `--max-concurrent-faults` is full waits for a slot, for at most its share of the cycle interval (interval ÷ arenas). If no slot opens in that time, or every active fault runs past it, the namespace is skipped with `cycle.skipped reason=budget-full` and the planner is not called. The arena that goes first rotates each cycle, so a cap of 1 does not always favour the same one.
+
 > **M3 v1 scope (2026-05-14):** The shipped health gate (`pkg/loop.BaselineHealthGate`) checks pod-Ready + no-active-faults via the topology snapshot. The metric-drift check is gated on `get_metrics` having a real backend; the M3 stub returns `{configured:false}`, so adding a metric-drift signal is deferred to whichever milestone wires Prometheus / Cloud Monitoring. The gate's interface accepts new checks without breaking callers.
 
 ### 6.5 Vulnerability ranking
