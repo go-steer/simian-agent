@@ -118,7 +118,7 @@ func TestParseSince(t *testing.T) {
 // closes it, in the same file, once.
 func TestServeClosesFaultsAPreviousProcessLeftOpen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
-	fa, closeFaults, err := openAuditFile(path, 0, quietLogger())
+	fa, _, closeFaults, err := openAuditFile(path, 0, quietLogger())
 	if err != nil {
 		t.Fatalf("openAuditFile: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestServeClosesFaultsAPreviousProcessLeftOpen(t *testing.T) {
 	_ = fa.Close()
 
 	for range 2 {
-		fa, closeFaults, err = openAuditFile(path, 0, quietLogger())
+		fa, _, closeFaults, err = openAuditFile(path, 0, quietLogger())
 		if err != nil {
 			t.Fatalf("openAuditFile: %v", err)
 		}
@@ -155,7 +155,7 @@ func TestServeClosesFaultsAPreviousProcessLeftOpen(t *testing.T) {
 // clears it at its deadline. One whose deadline has passed is closed as before.
 func TestServeAdoptsAFaultAPreviousProcessLeftRunning(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
-	fa, _, err := openAuditFile(path, 0, quietLogger())
+	fa, _, _, err := openAuditFile(path, 0, quietLogger())
 	if err != nil {
 		t.Fatalf("openAuditFile: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestServeAdoptsAFaultAPreviousProcessLeftRunning(t *testing.T) {
 	}
 	_ = fa.Close()
 
-	fa, takeOver, err := openAuditFile(path, 0, quietLogger())
+	fa, _, takeOver, err := openAuditFile(path, 0, quietLogger())
 	if err != nil {
 		t.Fatalf("openAuditFile: %v", err)
 	}

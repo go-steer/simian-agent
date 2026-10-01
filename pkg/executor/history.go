@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-steer/simian-agent/pkg/audit"
 	"github.com/go-steer/simian-agent/pkg/simian"
 )
 
@@ -69,10 +70,42 @@ func RefusalWorthRemembering(err error) bool {
 	return err != nil
 }
 
+// RefusalsFromAudit rebuilds the refusals an audit trail records since the
+// given time, oldest first, for a restarted controller to push back into its
+// history (#173). Without them a planner is told nothing was refused, and on
+// the 2026-10-01 trial it proposed the same incompatible IOChaos again right
+// after each restart.
+//
+// Only refusals before anything reached the cluster are rebuilt: what the
+// executor rejected and what the driver would not take. Budget refusals are
+// left out, as RefusalWorthRemembering leaves them out.
+func RefusalsFromAudit(rows []audit.FaultRow, since time.Time) []RefusedFault {
+	var out []RefusedFault
+	for _, r := range rows {
+		if r.Outcome != audit.OutcomeRefused && r.Outcome != audit.OutcomeDriverFailed {
+			continue
+		}
+		if r.Reason == string(simian.ReasonBudgetExceeded) || r.EndedAt.Before(since) {
+			continue
+		}
+		m, ok := r.Manifest()
+		if !ok {
+			continue
+		}
+		out = append(out, RefusedFault{
+			FaultUID: r.FaultUID, Manifest: m, RefusedAt: r.EndedAt,
+			Reason: simian.RejectionReason(r.Reason), Error: r.Error,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].RefusedAt.Before(out[j].RefusedAt) })
+	return out
+}
+
 // History is a bounded, in-memory record of recently-applied faults, and a
 // second ring of recently-refused ones. Safe for concurrent use. Lost on
 // process restart — that's intentional for v1 (R-FAULT-05's durable history
-// is the SimianLease CR design, deferred).
+// is the SimianLease CR design, deferred) — except that serve pushes the
+// refusals back from its audit file at start-up; see RefusalsFromAudit.
 type History struct {
 	mu       sync.RWMutex
 	capacity int

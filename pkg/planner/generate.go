@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -192,6 +194,9 @@ func parseAttackPlan(raw []byte, in GenerateInput) (simian.AttackPlan, error) {
 		}
 		if s.Manifest.Spec == nil {
 			return simian.AttackPlan{}, fmt.Errorf("step %d: spec is required", s.Order)
+		}
+		if err := checkTargetCompat(s.Manifest, in.Topology); err != nil {
+			return simian.AttackPlan{}, fmt.Errorf("step %d: %w", s.Order, err)
 		}
 	}
 
@@ -464,4 +469,90 @@ func renderLabels(labels map[string]string) string {
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, ",")
+}
+
+// checkTargetCompat rejects a step the topology already shows cannot be
+// injected: IOChaos or DNSChaos into a container with a read-only root
+// filesystem, or IOChaos at a volumePath that is not one of the container's
+// mounts. Rule 11 says as much, and the executor refuses it anyway; caught
+// here, it costs a corrective retry instead of the namespace's cycle. On the
+// 2026-10-01 trial the planner chose IOChaos on a read-only redis-cart four
+// times in an hour (#173).
+//
+// Only workloads the step demonstrably targets are judged — by name, or by a
+// label selector their pod template satisfies.
+func checkTargetCompat(m simian.FaultManifest, topo *topology.TargetTopology) error {
+	if topo == nil || !executor.WritesRootFS(m.Engine, m.ResourceKind) {
+		return nil
+	}
+	var only []string
+	if raw, ok := m.Spec["containerNames"].([]any); ok {
+		for _, v := range raw {
+			if s, ok := v.(string); ok {
+				only = append(only, s)
+			}
+		}
+	}
+	volumePath, _ := m.Spec["volumePath"].(string)
+	for _, w := range topo.Workloads {
+		if !stepTargets(m, w) {
+			continue
+		}
+		for _, c := range w.Containers {
+			if len(only) > 0 && !slices.Contains(only, c.Name) {
+				continue
+			}
+			if c.ReadOnlyRootFS {
+				return fmt.Errorf("%s cannot inject into %s: container %q is readonly_rootfs (rule 11); choose another kind or workload",
+					m.ResourceKind, w.Name, c.Name)
+			}
+			if m.ResourceKind == "IOChaos" && volumePath != "" && !mountsAt(c, volumePath) {
+				return fmt.Errorf("IOChaos volumePath %q is not a mount of %s container %q (mounts: %v; rule 11)",
+					volumePath, w.Name, c.Name, c.MountPaths)
+			}
+		}
+	}
+	return nil
+}
+
+// stepTargets reports whether the step names the workload, or selects its
+// pods by labels.
+func stepTargets(m simian.FaultManifest, w topology.Workload) bool {
+	for _, t := range m.Targets {
+		if t.Name == w.Name || (len(t.Labels) > 0 && labelsMatch(t.Labels, w.Labels)) {
+			return true
+		}
+	}
+	sel, _ := m.Spec["selector"].(map[string]any)
+	ls, _ := sel["labelSelectors"].(map[string]any)
+	if len(ls) == 0 {
+		return false
+	}
+	want := make(map[string]string, len(ls))
+	for k, v := range ls {
+		s, ok := v.(string)
+		if !ok {
+			return false
+		}
+		want[k] = s
+	}
+	return labelsMatch(want, w.Labels)
+}
+
+func mountsAt(c topology.ContainerSummary, p string) bool {
+	for _, mp := range c.MountPaths {
+		if path.Clean(mp) == path.Clean(p) {
+			return true
+		}
+	}
+	return false
+}
+
+func labelsMatch(want, have map[string]string) bool {
+	for k, v := range want {
+		if have[k] != v {
+			return false
+		}
+	}
+	return true
 }

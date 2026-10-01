@@ -352,3 +352,48 @@ func TestThePlannerSeesWhichContainersAreReadOnlyAndWhatTheyMount(t *testing.T) 
 		t.Error("system prompt does not explain readonly_rootfs")
 	}
 }
+
+// #173: the planner kept choosing IOChaos on a read-only redis-cart despite
+// rule 11. A step the topology already rules out fails validation, so the
+// corrective retry fixes it instead of the executor refusing it.
+func TestAStepTheTopologyRulesOutFailsValidation(t *testing.T) {
+	in := sampleInput()
+	in.Topology.Workloads = append(in.Topology.Workloads,
+		topology.Workload{Kind: "Deployment", Name: "redis-cart", Labels: map[string]string{"app": "redis-cart"},
+			Containers: []topology.ContainerSummary{{Name: "redis", ReadOnlyRootFS: true, MountPaths: []string{"/data"}}}},
+		topology.Workload{Kind: "Deployment", Name: "ledger-db", Labels: map[string]string{"app": "ledger-db"},
+			Containers: []topology.ContainerSummary{{Name: "postgres", MountPaths: []string{"/var/lib/postgresql/data/"}}}},
+	)
+	step := func(kind, target, spec string) string {
+		return strings.NewReplacer(
+			`"resource_kind": "PodChaos"`, `"resource_kind": "`+kind+`"`,
+			`"name": "cartservice"`, `"name": "`+target+`"`,
+			`"spec": {"action": "pod-kill", "mode": "one"}`, `"spec": `+spec,
+		).Replace(wellFormedPlanJSON())
+	}
+	for name, tc := range map[string]struct {
+		plan string
+		want string // "" = accepted
+	}{
+		"IOChaos on a read-only container, by name": {
+			step("IOChaos", "redis-cart", `{"action": "latency", "volumePath": "/data"}`), `container "redis" is readonly_rootfs`},
+		"DNSChaos on a read-only container, by label selector": {
+			step("DNSChaos", "frontend-x", `{"action": "error", "selector": {"labelSelectors": {"app": "redis-cart"}}}`), `container "redis" is readonly_rootfs`},
+		"IOChaos at a path that is not a mount": {
+			step("IOChaos", "ledger-db", `{"action": "latency", "volumePath": "/var/lib"}`), `is not a mount of ledger-db`},
+		"IOChaos at a mount, written without the trailing slash": {
+			step("IOChaos", "ledger-db", `{"action": "latency", "volumePath": "/var/lib/postgresql/data"}`), ""},
+		"PodChaos on a read-only container": {
+			step("PodChaos", "redis-cart", `{"action": "pod-kill"}`), ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseAttackPlan([]byte(tc.plan), in)
+			switch {
+			case tc.want == "" && err != nil:
+				t.Errorf("rejected: %v", err)
+			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+				t.Errorf("err = %v, want it to mention %q", err, tc.want)
+			}
+		})
+	}
+}
