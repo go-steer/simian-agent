@@ -15,7 +15,9 @@
 package loop
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -588,5 +590,82 @@ func TestEachCycleStartsWithTheNextNamespace(t *testing.T) {
 		if got := l.cycleOrder(cycle); !reflect.DeepEqual(got, want) {
 			t.Errorf("cycle %d order = %v, want %v", cycle, got, want)
 		}
+	}
+}
+
+// #173: the history a restarted controller rebuilds from the audit trail
+// counts towards the repeated-refusal limit, so a step refused before the
+// restart is not submitted again straight after it.
+func TestRefusalsFromBeforeARestartCountTowardsTheLimit(t *testing.T) {
+	var plan simian.AttackPlan
+	if err := json.Unmarshal([]byte(planJSON(1)), &plan); err != nil {
+		t.Fatal(err)
+	}
+	refused := make([]executor.RefusedFault, 0, repeatedRefusalLimit+1)
+	for i := range repeatedRefusalLimit {
+		refused = append(refused, executor.RefusedFault{Manifest: plan.Steps[0].Manifest,
+			RefusedAt: time.Now().Add(-time.Duration(i+1) * time.Minute), Reason: simian.ReasonTargetIncompatible})
+	}
+	// Newest first, as the executor lists them; a budget refusal never counts.
+	refused = append(refused, executor.RefusedFault{Manifest: plan.Steps[0].Manifest, RefusedAt: time.Now().Add(-time.Hour / 2), Reason: simian.ReasonBudgetExceeded})
+
+	exec := &recordingExecutor{}
+	l, au := newLoopUnderTest(t, planJSON(1), exec, planner.Budget{
+		MaxFaultsPerCycle: 5, MaxConcurrentFaults: 5, MaxSeverityPerCycle: simian.TierNamespace,
+	})
+	l.Recents = fakeRefusals{refused: refused}
+	l.seedRefusals()
+	if n := l.recentRefusals(stepKey(plan.Steps[0].Manifest)); n != repeatedRefusalLimit {
+		t.Fatalf("seeded refusals = %d, want %d", n, repeatedRefusalLimit)
+	}
+	if _, _, err := l.RunOnce(context.Background(), "boutique"); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if got := exec.AppliedCount(); got != 0 {
+		t.Errorf("executor asked %d times for a step refused %d times before the restart", got, repeatedRefusalLimit)
+	}
+	if _, ok := au.find(audit.EventStepSkipped, "repeated-refusal"); !ok {
+		t.Error("no step.skipped repeated-refusal")
+	}
+}
+
+// The seeded history only holds the limit if a refusal read back from the
+// audit trail keys the same as the step the planner sent. It is recorded at
+// executor.received, before narrowing; anything lost in that round trip
+// would silently reset the count on every restart.
+func TestARefusalReadBackFromTheAuditTrailKeysAsTheStepDid(t *testing.T) {
+	var plan simian.AttackPlan
+	raw := `{"hypothesis":"x","steps":[{"order":1,"manifest":{"engine":"chaos-mesh","api_version":"chaos-mesh.org/v1alpha1","resource_kind":"IOChaos",` +
+		`"spec":{"action":"latency","delay":"150ms","percent":100,"path":"/data/**","volumePath":"/data","selector":{"labelSelectors":{"app":"redis-cart"},"namespaces":["boutique"]}},` +
+		`"targets":[{"namespace":"boutique","name":"redis-cart"}],"duration":"3m","blast_radius_tier":"namespace"}}]}`
+	if err := json.Unmarshal([]byte(raw), &plan); err != nil {
+		t.Fatal(err)
+	}
+	m := plan.Steps[0].Manifest
+	m.UID, m.Source = "f-1", simian.SourceAutonomous
+
+	// Through the file and back, as a restart reads it.
+	var buf bytes.Buffer
+	for _, e := range []simian.AuditEvent{
+		{Event: audit.EventExecutorReceived, FaultUID: m.UID, Mode: m.Source, Payload: m.AuditRecord()},
+		{Event: audit.EventExecutorRejected, FaultUID: m.UID, Mode: m.Source, Reason: string(simian.ReasonTargetIncompatible),
+			Payload: map[string]any{"error": "read-only root filesystem"}},
+	} {
+		line, _ := json.Marshal(audit.Record{TS: time.Now(), Event: e.Event, FaultUID: e.FaultUID, Mode: string(e.Mode), Reason: e.Reason, Payload: e.Payload})
+		buf.Write(append(line, '\n'))
+	}
+	recs, err := audit.ReadRecords(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := executor.RefusalsFromAudit(audit.Faults(recs), time.Now().Add(-time.Hour))
+	if len(refused) != 1 {
+		t.Fatalf("refusals = %+v, want one", refused)
+	}
+	if got, want := stepKey(refused[0].Manifest), stepKey(plan.Steps[0].Manifest); got != want {
+		t.Errorf("read back keys as\n%s\nwant\n%s", got, want)
+	}
+	if refused[0].Reason != simian.ReasonTargetIncompatible || refused[0].Error != "read-only root filesystem" {
+		t.Errorf("refusal = %+v", refused[0])
 	}
 }

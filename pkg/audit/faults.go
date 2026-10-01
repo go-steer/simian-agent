@@ -262,27 +262,38 @@ func (r FaultRow) ActiveFault(now time.Time) (simian.ActiveFault, bool) {
 	if err != nil || !deadline.After(now) {
 		return simian.ActiveFault{}, false
 	}
-	var targets []simian.TargetRef
-	if b, err := json.Marshal(r.Targets); err != nil || json.Unmarshal(b, &targets) != nil || len(targets) == 0 {
+	m, ok := r.Manifest()
+	if !ok {
 		return simian.ActiveFault{}, false
 	}
-	spec, _ := r.Spec.(map[string]any)
-	duration, _ := time.ParseDuration(r.Duration)
 	return simian.ActiveFault{
 		FaultUID:  r.FaultUID,
 		EngineUID: r.EngineUID,
-		Manifest: simian.FaultManifest{
-			UID:             r.FaultUID,
-			Source:          simian.ManifestSource(r.Source),
-			Engine:          simian.Engine(r.Engine),
-			ResourceKind:    r.Kind,
-			Spec:            spec,
-			Targets:         targets,
-			Duration:        duration,
-			BlastRadiusTier: simian.BlastRadiusTier(r.Tier),
-			PlanID:          r.PlanID,
-		},
+		Manifest:  m,
 		AppliedAt: r.AppliedAt,
 		Deadline:  deadline,
+	}, true
+}
+
+// Manifest rebuilds the fault as the trail records it: as applied if it was,
+// as received otherwise. ok is false when the record does not say which
+// engine or kind it was, or what it targeted.
+func (r FaultRow) Manifest() (simian.FaultManifest, bool) {
+	var targets []simian.TargetRef
+	if b, err := json.Marshal(r.Targets); err != nil || json.Unmarshal(b, &targets) != nil || len(targets) == 0 || r.Kind == "" {
+		return simian.FaultManifest{}, false
+	}
+	spec, _ := r.Spec.(map[string]any)
+	duration, _ := time.ParseDuration(r.Duration)
+	return simian.FaultManifest{
+		UID:             r.FaultUID,
+		Source:          simian.ManifestSource(r.Source),
+		Engine:          simian.Engine(r.Engine),
+		ResourceKind:    r.Kind,
+		Spec:            spec,
+		Targets:         targets,
+		Duration:        duration,
+		BlastRadiusTier: simian.BlastRadiusTier(r.Tier),
+		PlanID:          r.PlanID,
 	}, true
 }

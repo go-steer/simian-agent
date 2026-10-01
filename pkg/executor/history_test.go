@@ -15,9 +15,11 @@
 package executor
 
 import (
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/go-steer/simian-agent/pkg/audit"
 	"github.com/go-steer/simian-agent/pkg/simian"
 )
 
@@ -151,5 +153,32 @@ func TestHistory_ListFindsAFaultByItsSecondTargetNamespace(t *testing.T) {
 	}
 	if got := h.List("ns-c", 0); len(got) != 0 {
 		t.Errorf("List(\"ns-c\") = %d, want 0", len(got))
+	}
+}
+
+// #173: what a restart carries over is the refusals that say something about
+// the fault, inside the window, oldest first.
+func TestRefusalsFromAuditKeepsWhatIsWorthRemembering(t *testing.T) {
+	t0 := time.Date(2026, 10, 1, 17, 0, 0, 0, time.UTC)
+	row := func(uid, outcome, reason string, minute int) audit.FaultRow {
+		return audit.FaultRow{FaultUID: uid, Outcome: outcome, Reason: reason, EndedAt: t0.Add(time.Duration(minute) * time.Minute),
+			Engine: "chaos-mesh", Kind: "IOChaos", Targets: []any{map[string]any{"namespace": "boutique", "name": "redis-cart"}}}
+	}
+	got := RefusalsFromAudit([]audit.FaultRow{
+		row("late", audit.OutcomeRefused, "target-incompatible", 30),
+		row("early", audit.OutcomeDriverFailed, "driver-failed", 10),
+		row("budget", audit.OutcomeRefused, "budget-exceeded", 20),
+		row("stale", audit.OutcomeRefused, "tier-not-permitted", -90),
+		row("ran", audit.OutcomeExpired, "deadline-reached", 20),
+	}, t0.Add(-time.Hour))
+	var uids []string
+	for _, rf := range got {
+		uids = append(uids, rf.FaultUID)
+	}
+	if want := []string{"early", "late"}; !slices.Equal(uids, want) {
+		t.Fatalf("carried over %v, want %v", uids, want)
+	}
+	if got[1].Reason != simian.ReasonTargetIncompatible || got[1].Manifest.Targets[0].Name != "redis-cart" {
+		t.Errorf("late = %+v", got[1])
 	}
 }

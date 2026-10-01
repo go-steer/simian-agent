@@ -66,11 +66,18 @@ func (k KubernetesTargetPods) Pods(ctx context.Context, namespace string, select
 // container's root filesystem to inject.
 var rootFSWriters = map[string]bool{"IOChaos": true, "DNSChaos": true}
 
+// WritesRootFS reports whether the engine writes into the target container's
+// root filesystem to inject this kind, so cannot inject it into one mounted
+// read-only.
+func WritesRootFS(engine simian.Engine, kind string) bool {
+	return engine == simian.EngineChaosMesh && rootFSWriters[kind]
+}
+
 // checkTargetCompat refuses a fault whose engine cannot inject it into the
 // containers it targets. Only what can be read is judged: a target without
 // labels, or whose pods cannot be listed, is left to the injection check.
 func (e *Executor) checkTargetCompat(ctx context.Context, m simian.FaultManifest) error {
-	if e.pods == nil || m.Engine != simian.EngineChaosMesh || !rootFSWriters[m.ResourceKind] {
+	if e.pods == nil || !WritesRootFS(m.Engine, m.ResourceKind) {
 		return nil
 	}
 	containers := specStrings(m.Spec, "containerNames")

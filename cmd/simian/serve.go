@@ -97,14 +97,16 @@ func newServeCmd() *cobra.Command {
 			// Run once the lease registry exists, so what the previous
 			// process left running can be adopted into it (#172).
 			takeOverFaults := func(context.Context, simian.Auditor, func(audit.FaultRow) bool) {}
+			var pastFaults []audit.FaultRow
 			if auditFile != "" {
-				fileAuditor, takeOver, err := openAuditFile(auditFile, auditFileMaxBytes, logger)
+				fileAuditor, rows, takeOver, err := openAuditFile(auditFile, auditFileMaxBytes, logger)
 				if err != nil {
 					return err
 				}
 				defer func() { _ = fileAuditor.Close() }()
 				auditor = audit.Multi{auditor, fileAuditor}
 				takeOverFaults = takeOver
+				pastFaults = rows
 			}
 
 			// Background loops that emit audit events. Deferred after the
@@ -187,6 +189,11 @@ func newServeCmd() *cobra.Command {
 			}
 			registry := lease.NewRegistry(holderID)
 			history := executor.NewHistory(recentFaultsCapacity)
+			// What the last process was refused, so the planner is told and
+			// the loop's repeated-refusal limit holds across a restart (#173).
+			for _, rf := range executor.RefusalsFromAudit(pastFaults, time.Now().Add(-refusalMemory)) {
+				history.PushRefused(rf)
+			}
 			// Efficacy gate: a fault with Settle probes is not reported as
 			// applied until they pass, and one with SOT probes is not applied
 			// at all until they do. The k8s prober shares the chaos driver's
@@ -488,6 +495,11 @@ func buildLLM(ctx context.Context, id, model string) (simian.LLMProvider, error)
 // before SIGKILL.
 const shutdownWait = 15 * time.Second
 
+// refusalMemory is how far back a restarted controller looks for refusals to
+// carry over. Bounded so one refused under a policy or build since changed
+// is not held against a planner indefinitely.
+const refusalMemory = 24 * time.Hour
+
 // waitForWorkers waits for wg, giving up after limit so a wedged loop cannot
 // hold the process past its grace period.
 func waitForWorkers(wg *sync.WaitGroup, limit time.Duration, logger *slog.Logger) {
@@ -505,7 +517,8 @@ func waitForWorkers(wg *sync.WaitGroup, limit time.Duration, logger *slog.Logger
 }
 
 // openAuditFile reads what a previous process left in the audit file, opens
-// it for appending, and returns a function that takes over the faults that
+// it for appending, and returns what the file records of each fault and a
+// function that takes over the faults that
 // process left open. The taking over is deferred to the caller so the events
 // go through every sink, not just the file, and so the lease registry exists
 // by then.
@@ -514,12 +527,12 @@ func waitForWorkers(wg *sync.WaitGroup, limit time.Duration, logger *slog.Logger
 // lease.adopted event and is from then on this process's to count and clear.
 // Every other open fault — ended, or not adoptable — is closed on the record
 // as untracked-after-restart. A nil adopt closes everything.
-func openAuditFile(path string, maxBytes int64, logger *slog.Logger) (*audit.FileAuditor, func(context.Context, simian.Auditor, func(audit.FaultRow) bool), error) {
+func openAuditFile(path string, maxBytes int64, logger *slog.Logger) (*audit.FileAuditor, []audit.FaultRow, func(context.Context, simian.Auditor, func(audit.FaultRow) bool), error) {
 	fa, err := audit.OpenFile(path, maxBytes, func(err error) {
 		logger.Error("simian serve: audit file", slog.String("error", err.Error()))
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	var records []audit.Record
 	for _, p := range fa.Paths() {
@@ -529,7 +542,7 @@ func openAuditFile(path string, maxBytes int64, logger *slog.Logger) (*audit.Fil
 		}
 		if err != nil {
 			_ = fa.Close()
-			return nil, nil, fmt.Errorf("audit file: %w", err)
+			return nil, nil, nil, fmt.Errorf("audit file: %w", err)
 		}
 		recs, err := audit.ReadRecords(f)
 		_ = f.Close()
@@ -539,7 +552,7 @@ func openAuditFile(path string, maxBytes int64, logger *slog.Logger) (*audit.Fil
 		records = append(records, recs...)
 	}
 	rows := audit.Faults(records)
-	return fa, func(ctx context.Context, a simian.Auditor, adopt func(audit.FaultRow) bool) {
+	return fa, rows, func(ctx context.Context, a simian.Auditor, adopt func(audit.FaultRow) bool) {
 		var left []audit.FaultRow
 		adopted := 0
 		for _, r := range rows {

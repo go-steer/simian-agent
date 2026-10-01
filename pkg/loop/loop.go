@@ -91,6 +91,7 @@ func (l *Loop) Run(ctx context.Context) error {
 	if len(l.Namespaces) == 0 {
 		return fmt.Errorf("loop: at least one namespace is required")
 	}
+	l.seedRefusals()
 	t := time.NewTicker(l.Interval)
 	defer t.Stop()
 	// Run an immediate first cycle on startup so operators don't wait a
@@ -513,6 +514,32 @@ func (l *Loop) recentRefusals(key string) int {
 	}
 	l.refusals[key] = times[i:]
 	return len(times) - i
+}
+
+// seedRefusals counts the refusals already in the executor's history
+// against their steps. A restarted controller's history is seeded from the
+// audit trail, so without this the limit would start from zero after every
+// restart, and a planner that ignores what it is told could repeat the same
+// refused step right away (#173).
+func (l *Loop) seedRefusals() {
+	rl, ok := l.Recents.(RefusalLookup)
+	if !ok {
+		return
+	}
+	refused := rl.Refused("", 0) // newest first
+	l.refusalMu.Lock()
+	defer l.refusalMu.Unlock()
+	for i := len(refused) - 1; i >= 0; i-- {
+		rf := refused[i]
+		key := stepKey(rf.Manifest)
+		if key == "" || rf.Reason == simian.ReasonBudgetExceeded {
+			continue
+		}
+		if l.refusals == nil {
+			l.refusals = map[string][]time.Time{}
+		}
+		l.refusals[key] = append(l.refusals[key], rf.RefusedAt)
+	}
 }
 
 // noteOutcome records a refusal against the step, or forgets its refusals if
