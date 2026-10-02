@@ -54,7 +54,9 @@ const stderrTail = 2000
 // that timed out is gone. Without this, a subject that shells out to something
 // slow makes its own timeout meaningless — the harness waits for the
 // grandchild instead, still holding a fault in a live cluster.
-const waitDelay = 5 * time.Second
+//
+// A variable only so tests need not wait the full delay.
+var waitDelay = 5 * time.Second
 
 // Exec runs a subject as a child process and reads a JSON report off stdout.
 //
@@ -162,6 +164,14 @@ func (c child) run(ctx context.Context) ([]byte, error) {
 	cmd.Stderr = &capped{buf: &stderr, limit: maxCaptured}
 
 	err := cmd.Run()
+	// The subject exited 0 and something it started still held a pipe when
+	// the delay ran out. Its own output is complete; only the straggler's is
+	// lost. On 2026-10-02 the straggler was a kubectl exec closing its
+	// websocket, and failing the run threw away a report the agent had
+	// already written.
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil
+	}
 	// The context is checked before the exit status. A killed process exits
 	// non-zero, and reporting "exited 1" for a subject that ran out of time
 	// sends whoever reads it looking for a bug in the subject.

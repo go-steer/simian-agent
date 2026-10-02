@@ -269,3 +269,24 @@ func TestCapturedOutputIsBounded(t *testing.T) {
 		t.Errorf("buffered %d bytes after a second write, want 10", got)
 	}
 }
+
+// A subject that answered and exited 0 has answered, even if something it
+// started still holds its output open: a kubectl exec closing its websocket
+// did, and the report it had written was thrown away.
+func TestASubjectThatAnsweredIsNotFailedByAStragglerHoldingItsPipes(t *testing.T) {
+	old := waitDelay
+	waitDelay = 200 * time.Millisecond
+	t.Cleanup(func() { waitDelay = old })
+	s := sh(t, `(sleep 5) & echo '{"findings":[{"kind":"Straggler","resource_name":"x"}]}'`, time.Minute)
+	start := time.Now()
+	r, err := s.Investigate(context.Background(), "p")
+	if err != nil {
+		t.Fatalf("Investigate: %v", err)
+	}
+	if len(r.Findings) != 1 || r.Findings[0].Kind != "Straggler" {
+		t.Errorf("findings = %+v", r.Findings)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("Investigate waited %s for the straggler", elapsed)
+	}
+}

@@ -574,6 +574,27 @@ Adapters:
   is a function of the cluster, and for an agent it is not. The interesting
   question about a `0.00` is which tools it called and what they returned, and
   that evidence exists exactly once.
+
+  Where the agent's tools run matters as much as which tools it has. The agent
+  reads the cluster through `lookout mcp`, and lookout's network probes come
+  from wherever its process runs. From a workstation every probe of a Service
+  name or ClusterIP fails even when the Service is healthy, and the agent has
+  taken those failures as evidence for causes it invented.
+  `dev/tools/eval-sre-agent` therefore runs the agent's lookout in a pod
+  (`simian-vantage/lookout`, a read-only ServiceAccount) by default, through a
+  `kubectl exec -i` wrapper handed to the agent as `SRE_LOOKOUT_BIN` — the
+  vantage a deployed agent has. The pod is left in place between runs;
+  `SIMIAN_SRE_AGENT_VANTAGE=workstation` restores the old behaviour for
+  comparing against earlier runs.
+
+  A neutral pod is not the caller's pod, and for the dataplane pack that is
+  most of the difference. On 2026-10-02 the in-cluster vantage left
+  `latency-not-saturation` and `partition-one-way` exactly where the
+  workstation runs had them (recall 0.50, root_cause 0.00): the probes now
+  told the truth — the upstream answers fine from a neutral pod, because the
+  one-way partition only blocks the edge — and the agent concluded the network
+  was not the problem. Separating those faults takes a probe from inside the
+  calling pod, which lookout deliberately never makes.
 * **`noop:`** ✅ — the null subject: reports nothing, ever. The zero-score floor
   a scorecard is read against, and the cheapest way to find out whether a pack
   actually manifests before an agent is pointed at it.
