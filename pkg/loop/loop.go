@@ -103,6 +103,15 @@ func (l *Loop) Run(ctx context.Context) error {
 			}
 			l.runOneSafely(ctx, ns)
 		}
+		// A cycle can outrun its interval: each namespace may wait up to its
+		// share for a slot, and planning takes time on top. The tick that
+		// fired meanwhile is stale. Starting on it began a cycle straight
+		// after the last fault was applied, which only found every slot
+		// taken and skipped each namespace as budget-full.
+		select {
+		case <-t.C:
+		default:
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -257,6 +266,14 @@ func (l *Loop) RunOnce(ctx context.Context, ns string) (simian.AttackPlan, []str
 	}
 
 	plan, err := l.Generator.Generate(ctx, in)
+	if err != nil && ctx.Err() != nil {
+		// Shut down mid-call. The LLM did not fail; say what happened.
+		if l.Auditor != nil {
+			l.Auditor.Emit(ctx, simian.AuditEvent{Event: audit.EventCycleSkipped, Mode: simian.SourceAutonomous,
+				Reason: string(simian.ReasonInterrupted), Payload: map[string]any{"namespace": ns}})
+		}
+		return simian.AttackPlan{}, nil, nil
+	}
 	if err != nil {
 		if l.Auditor != nil {
 			l.Auditor.Emit(ctx, simian.AuditEvent{
