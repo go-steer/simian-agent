@@ -116,7 +116,7 @@ func planJSON(stepCount int) string {
 		if i > 1 {
 			out += ","
 		}
-		out += `{"order":` + itoa(i) + `,"manifest":{"engine":"chaos-mesh","api_version":"chaos-mesh.org/v1alpha1","resource_kind":"PodChaos","spec":{"action":"pod-kill"},"targets":[{"namespace":"boutique"}],"duration":"30s","blast_radius_tier":"namespace"}}`
+		out += `{"duration_rationale":"long enough to watch recovery","order":` + itoa(i) + `,"manifest":{"engine":"chaos-mesh","api_version":"chaos-mesh.org/v1alpha1","resource_kind":"PodChaos","spec":{"action":"pod-kill"},"targets":[{"namespace":"boutique"}],"duration":"30s","blast_radius_tier":"namespace"}}`
 	}
 	out += `]}`
 	return out
@@ -213,6 +213,9 @@ func TestRunOnce_PlanGeneratedCarriesTheSteps(t *testing.T) {
 	if step["order"] != 2 || fault["kind"] != "PodChaos" || fault["spec"].(map[string]any)["action"] != "pod-kill" {
 		t.Errorf("step = %v", step)
 	}
+	if step["duration_rationale"] != "long enough to watch recovery" {
+		t.Errorf("step duration_rationale = %v, want the planner's reason (#179)", step["duration_rationale"])
+	}
 	if targets, _ := fault["targets"].([]any); len(targets) != 1 || targets[0].(map[string]any)["namespace"] != "boutique" {
 		t.Errorf("step targets = %v", fault["targets"])
 	}
@@ -283,8 +286,8 @@ func TestRunOnce_SeverityCapSkipsHigherTier(t *testing.T) {
 	plan := `{
 		"hypothesis":"x",
 		"steps":[
-			{"order":1,"manifest":{"engine":"chaos-mesh","api_version":"v","resource_kind":"PodChaos","spec":{"a":1},"targets":[{"namespace":"boutique"}],"duration":"30s","blast_radius_tier":"namespace"}},
-			{"order":2,"manifest":{"engine":"chaos-mesh","api_version":"v","resource_kind":"KernelChaos","spec":{"a":1},"targets":[{"namespace":"boutique"}],"duration":"30s","blast_radius_tier":"node"}}
+			{"duration_rationale":"long enough to watch recovery","order":1,"manifest":{"engine":"chaos-mesh","api_version":"v","resource_kind":"PodChaos","spec":{"a":1},"targets":[{"namespace":"boutique"}],"duration":"30s","blast_radius_tier":"namespace"}},
+			{"duration_rationale":"long enough to watch recovery","order":2,"manifest":{"engine":"chaos-mesh","api_version":"v","resource_kind":"KernelChaos","spec":{"a":1},"targets":[{"namespace":"boutique"}],"duration":"30s","blast_radius_tier":"node"}}
 		]
 	}`
 	exec := &recordingExecutor{}
@@ -308,9 +311,9 @@ func TestRunOnce_ConcurrencyOneSerializes(t *testing.T) {
 	plan := `{
 		"hypothesis":"x",
 		"steps":[
-			{"order":1,"manifest":{"engine":"chaos-mesh","api_version":"v","resource_kind":"PodChaos","spec":{"a":1},"targets":[{"namespace":"boutique"}],"duration":"30s","blast_radius_tier":"namespace"}},
-			{"order":2,"manifest":{"engine":"chaos-mesh","api_version":"v","resource_kind":"NetworkChaos","spec":{"a":1},"targets":[{"namespace":"boutique"}],"duration":"30s","blast_radius_tier":"namespace"}},
-			{"order":3,"manifest":{"engine":"chaos-mesh","api_version":"v","resource_kind":"StressChaos","spec":{"a":1},"targets":[{"namespace":"boutique"}],"duration":"30s","blast_radius_tier":"namespace"}}
+			{"duration_rationale":"long enough to watch recovery","order":1,"manifest":{"engine":"chaos-mesh","api_version":"v","resource_kind":"PodChaos","spec":{"a":1},"targets":[{"namespace":"boutique"}],"duration":"30s","blast_radius_tier":"namespace"}},
+			{"duration_rationale":"long enough to watch recovery","order":2,"manifest":{"engine":"chaos-mesh","api_version":"v","resource_kind":"NetworkChaos","spec":{"a":1},"targets":[{"namespace":"boutique"}],"duration":"30s","blast_radius_tier":"namespace"}},
+			{"duration_rationale":"long enough to watch recovery","order":3,"manifest":{"engine":"chaos-mesh","api_version":"v","resource_kind":"StressChaos","spec":{"a":1},"targets":[{"namespace":"boutique"}],"duration":"30s","blast_radius_tier":"namespace"}}
 		]
 	}`
 	l, _ := newLoopUnderTest(t, plan, exec, planner.Budget{
@@ -636,7 +639,7 @@ func TestRefusalsFromBeforeARestartCountTowardsTheLimit(t *testing.T) {
 // would silently reset the count on every restart.
 func TestARefusalReadBackFromTheAuditTrailKeysAsTheStepDid(t *testing.T) {
 	var plan simian.AttackPlan
-	raw := `{"hypothesis":"x","steps":[{"order":1,"manifest":{"engine":"chaos-mesh","api_version":"chaos-mesh.org/v1alpha1","resource_kind":"IOChaos",` +
+	raw := `{"hypothesis":"x","steps":[{"duration_rationale":"long enough to watch recovery","order":1,"manifest":{"engine":"chaos-mesh","api_version":"chaos-mesh.org/v1alpha1","resource_kind":"IOChaos",` +
 		`"spec":{"action":"latency","delay":"150ms","percent":100,"path":"/data/**","volumePath":"/data","selector":{"labelSelectors":{"app":"redis-cart"},"namespaces":["boutique"]}},` +
 		`"targets":[{"namespace":"boutique","name":"redis-cart"}],"duration":"3m","blast_radius_tier":"namespace"}}]}`
 	if err := json.Unmarshal([]byte(raw), &plan); err != nil {
