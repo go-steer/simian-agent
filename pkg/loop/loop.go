@@ -488,6 +488,9 @@ func planStepRecords(steps []simian.PlanStep) []any {
 			"rationale": s.Rationale,
 			"fault":     s.Manifest.AuditRecord(),
 		}
+		if s.DurationRationale != "" {
+			rec["duration_rationale"] = s.DurationRationale
+		}
 		if len(s.DependsOn) > 0 {
 			rec["depends_on"] = s.DependsOn
 		}

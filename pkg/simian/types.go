@@ -387,7 +387,12 @@ type PlanStep struct {
 	Order     int           `json:"order"`
 	Manifest  FaultManifest `json:"manifest"`
 	Rationale string        `json:"rationale"`
-	DependsOn []int         `json:"depends_on,omitempty"`
+	// DurationRationale is the planner's reason for the step's duration:
+	// what the hypothesis has to observe, and for how long. Asked for
+	// because without it the planner picked one duration for every kind
+	// of fault (#179).
+	DurationRationale string `json:"duration_rationale,omitempty"`
+	DependsOn         []int  `json:"depends_on,omitempty"`
 }
 
 // PlanBudget is the LLM-declared budget for an AttackPlan; the executor

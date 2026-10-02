@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-steer/simian-agent/pkg/executor"
 	"github.com/go-steer/simian-agent/pkg/llm/stub"
 	"github.com/go-steer/simian-agent/pkg/simian"
 	"github.com/go-steer/simian-agent/pkg/topology"
@@ -54,6 +55,7 @@ func wellFormedPlanJSON() string {
   "hypothesis": "killing one cartservice pod will not break the frontend",
   "steps": [{
     "order": 1,
+    "duration_rationale": "long enough to watch recovery",
     "rationale": "exercise pod-restart resilience",
     "manifest": {
       "engine": "chaos-mesh",
@@ -135,8 +137,8 @@ func TestGenerate_RejectsCycle(t *testing.T) {
 	cyclic := `{
   "hypothesis": "x",
   "steps": [
-    {"order":1,"depends_on":[2],"manifest":{"engine":"chaos-mesh","api_version":"v","resource_kind":"PodChaos","spec":{"x":1},"targets":[{"namespace":"boutique"}],"duration":"30s"}},
-    {"order":2,"depends_on":[1],"manifest":{"engine":"chaos-mesh","api_version":"v","resource_kind":"PodChaos","spec":{"x":1},"targets":[{"namespace":"boutique"}],"duration":"30s"}}
+    {"duration_rationale":"long enough to watch recovery","order":1,"depends_on":[2],"manifest":{"engine":"chaos-mesh","api_version":"v","resource_kind":"PodChaos","spec":{"x":1},"targets":[{"namespace":"boutique"}],"duration":"30s"}},
+    {"duration_rationale":"long enough to watch recovery","order":2,"depends_on":[1],"manifest":{"engine":"chaos-mesh","api_version":"v","resource_kind":"PodChaos","spec":{"x":1},"targets":[{"namespace":"boutique"}],"duration":"30s"}}
   ]
 }`
 	llm := stub.New("stub")
@@ -182,7 +184,8 @@ func TestGenerate_SetsDefaultNamespaceOnTargets(t *testing.T) {
 	planJSON := `{
   "hypothesis": "x",
   "steps": [{
-    "order":1,
+    "order": 1,
+    "duration_rationale": "long enough to watch recovery",
     "manifest": {
       "engine":"chaos-mesh","api_version":"v","resource_kind":"PodChaos",
       "spec": {"action":"pod-kill"}, "targets":[{"namespace":""}],
@@ -395,5 +398,32 @@ func TestAStepTheTopologyRulesOutFailsValidation(t *testing.T) {
 				t.Errorf("err = %v, want it to mention %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// #179: with the ceiling known, the planner gave nearly every fault 3m. It
+// has to say why each duration fits its hypothesis, sees the durations it
+// already used, and is told one-shot and sustained faults differ.
+func TestThePlannerJustifiesEachDurationAndSeesThoseItUsed(t *testing.T) {
+	missing := strings.Replace(wellFormedPlanJSON(), `"duration_rationale": "long enough to watch recovery",`, ``, 1)
+	if _, err := parseAttackPlan([]byte(missing), sampleInput()); err == nil || !strings.Contains(err.Error(), "duration_rationale is required") {
+		t.Errorf("a step with no duration_rationale: err = %v", err)
+	}
+	plan, err := parseAttackPlan([]byte(wellFormedPlanJSON()), sampleInput())
+	if err != nil || plan.Steps[0].DurationRationale != "long enough to watch recovery" {
+		t.Fatalf("parseAttackPlan = %+v, %v", plan.Steps, err)
+	}
+
+	in := sampleInput()
+	in.RecentFaults = []executor.RecentFault{{FaultUID: "f-1", AppliedAt: time.Now(), Manifest: simian.FaultManifest{
+		ResourceKind: "NetworkChaos", Duration: 3 * time.Minute, Targets: []simian.TargetRef{{Namespace: "boutique", Name: "frontend"}}}}}
+	if user := buildPlanUserPrompt(in); !strings.Contains(user, "NetworkChaos on boutique/frontend for 3m0s applied") {
+		t.Errorf("recent fault line does not carry its duration:\n%s", user)
+	}
+	system := buildPlanSystemPrompt(nil)
+	for _, want := range []string{`"duration_rationale"`, "one-shot action", "Do not copy the durations of recent faults"} {
+		if !strings.Contains(system, want) {
+			t.Errorf("system prompt lacks %q", want)
+		}
 	}
 }

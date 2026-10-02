@@ -195,6 +195,9 @@ func parseAttackPlan(raw []byte, in GenerateInput) (simian.AttackPlan, error) {
 		if s.Manifest.Spec == nil {
 			return simian.AttackPlan{}, fmt.Errorf("step %d: spec is required", s.Order)
 		}
+		if strings.TrimSpace(s.DurationRationale) == "" {
+			return simian.AttackPlan{}, fmt.Errorf("step %d: duration_rationale is required (rule 10): say what the %s duration lets the hypothesis observe", s.Order, s.Manifest.Duration)
+		}
 		if err := checkTargetCompat(s.Manifest, in.Topology); err != nil {
 			return simian.AttackPlan{}, fmt.Errorf("step %d: %w", s.Order, err)
 		}
@@ -236,6 +239,7 @@ Your response MUST be a single JSON object matching this schema (no markdown, no
     {
       "order": 1,                  // 1-indexed; unique within the plan
       "rationale": "...",          // why this step, why now
+      "duration_rationale": "...", // required; see rule 10
       "depends_on": [],            // optional list of prior step Orders this depends on
       "manifest": {
         "engine":        "<engine from catalog>",
@@ -266,7 +270,7 @@ Rules you MUST follow:
 7. Engine-native spec MUST be populated. Where a catalog entry's spec template lists "action MUST be one of …", picking outside that list causes the cluster to reject the manifest at apply time (driver.failed).
 8. NEVER target a workload tagged as "excluded" via topology.
 9. envoy-fault kinds (EnvoyHttpDelay, EnvoyHttpAbort) require the target workload to be flagged envoy=true in the topology snapshot. If the chosen target lacks envoy=true, pick a different workload OR a different fault kind.
-10. Choose each step's "duration" for its hypothesis: long enough for the effect to show up in probes, alerts and recovery (a fault that ends seconds after injection teaches little), and never longer than max_fault_duration in the cycle budget caps — a longer step is refused before it runs.
+10. Choose each step's "duration" for its own hypothesis, and say why in "duration_rationale": what must be observed, and how long that takes. Faults differ, so durations should too. A one-shot action (PodChaos pod-kill or container-kill) acts once at injection; its duration is only the window for watching recovery, so size it to how long the workload takes to come back. A sustained fault (latency, loss, partition, IO delay, DNS errors, stress, an HTTP abort) acts for the whole duration; size it to how long the effect must persist to show up in probes and alerts, and to test whether it degrades further over time. Do not copy the durations of recent faults by default. Never exceed max_fault_duration in the cycle budget caps — a longer step is refused before it runs.
 11. Chaos Mesh IOChaos and DNSChaos cannot inject into a container listed under readonly_rootfs in the topology; they are refused before they run. IOChaos's "volumePath" must be exactly one of the target container's mounts (listed as container:path); with no mounts listed, do not choose IOChaos for that workload.
 
 Available fault catalog (kinds you may choose). Each entry shows engine + kind + api_version + tier; entries with a spec template include the canonical engine-native spec shape directly under the entry — copy and adapt.
@@ -324,8 +328,8 @@ func buildPlanUserPrompt(in GenerateInput) string {
 			if !rf.ClearedAt.IsZero() {
 				cleared = "cleared " + rf.ClearedAt.Format(time.RFC3339) + " (" + rf.ClearReason + ")"
 			}
-			fmt.Fprintf(&sb, "  %s on %s/%s applied %s, %s\n",
-				rf.Manifest.ResourceKind, ns, name, rf.AppliedAt.Format(time.RFC3339), cleared)
+			fmt.Fprintf(&sb, "  %s on %s/%s for %s applied %s, %s\n",
+				rf.Manifest.ResourceKind, ns, name, rf.Manifest.Duration, rf.AppliedAt.Format(time.RFC3339), cleared)
 		}
 		sb.WriteString("\n")
 	}
