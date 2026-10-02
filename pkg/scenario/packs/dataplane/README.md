@@ -235,8 +235,8 @@ Run on GKE against `sre-agent` — a multi-agent SRE orchestrator with a
 seventeen-tool Kubernetes surface, delegating to reliability and config
 auditors. It is not an object-status reader: on `dns-blackhole-partial` it
 called `k8s_net_probe` against `upstream.flow-search.svc.cluster.local` and
-found the lookup failing, which is the measurement that scenario exists to
-require.
+found the lookup failing — though, as it turned out, for the wrong reason (see
+[Where the probes came from](#where-the-probes-came-from)).
 
 | | lookout | sre-agent run 1 | sre-agent run 2 |
 | --- | --- | --- | --- |
@@ -326,6 +326,56 @@ above:
   symptom correctly. Now listed beside `ReadinessProbeFailed` in all five;
   re-scoring the same artifacts moved that scenario to 0.50 and moved nothing
   else.
+
+### Where the probes came from
+
+Both runs above probed from the wrong place. The agent's lookout ran on the
+workstation that launched it, and lookout probes from wherever its process
+runs, so every probe of a Service name failed — `nxdomain` from the
+workstation's resolver, healthy Service or not. The `dns-blackhole-partial`
+lookup "found failing" above is that, not the fault: it would have failed in
+the control too. The probe tool was used and could not have helped.
+
+What a probe *can* see depends on where it runs, and for this pack that is not
+one answer but two. Measured on 2026-09-24 by probing each live fault from a
+neutral in-cluster pod and from inside the caller pod (`runs/vantage/`, no
+model calls):
+
+| | neutral pod | caller pod | separable without the caller's view |
+| --- | --- | --- | --- |
+| `latency-not-saturation` | TCP connect 3.0s | the same | yes |
+| `stress-real` | HTTP ~3.7s, connect fast; CPU at its limit | the same | yes |
+| `abort-503-not-a-bug` | HTTP 503 | the same | yes |
+| `partition-one-way` | all healthy | connect and GET time out | **no** |
+| `dns-blackhole-partial` | all healthy | lookup fails (SERVFAIL) | **no** |
+| `dataplane-healthy` | all healthy | all healthy | — |
+
+Two of the five are faults *of the caller's path*, and from anywhere else the
+callee is simply fine. A neutral probe there does not merely fail to help — it
+is evidence against the network, and an agent that weighs it correctly will
+look elsewhere.
+
+`dev/tools/eval-sre-agent` has run the agent's lookout in a neutral pod since
+2026-10-02. Read scores from then on with this ceiling in mind:
+
+- **`partition-one-way` and `dns-blackhole-partial` are out of reach for a
+  read-only agent.** lookout never execs into or spawns a pod, by design, and
+  the agent withholds anything that writes, so no tool it has can take the
+  caller's view. A 0.00 root cause there measures the toolset's vantage, not
+  the agent's reasoning — unless the report names the cause anyway, which would
+  be worth reading closely. Whether to offer an opt-in caller-pod probe is
+  lookout's question, not this pack's.
+- **The other three are in reach**, and a 0.00 on them is the agent's. On
+  2026-10-02, with the neutral vantage, `latency-not-saturation` still scored
+  root_cause 0.00 — the 3s connect was there to be measured and the report
+  blamed a config/image mismatch instead. `partition-one-way` also stayed at
+  0.00, concluding from the healthy neutral probe that "the upstream answers
+  its own health check normally … not a network outage", which is the ceiling
+  above doing exactly what it says.
+
+Re-running the whole pack against an agent with the same toolset will not move
+the two out-of-reach rows; the three in reach are where a change to the agent
+shows.
 
 ## Scores from here are not comparable with the other packs
 
