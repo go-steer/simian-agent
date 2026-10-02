@@ -43,7 +43,7 @@ func (d *listingDriver) ListLive(_ context.Context, namespaces []string, _ time.
 func TestAdoptLiveTakesOverWhatTheRegistryDoesNotHold(t *testing.T) {
 	now := time.Now().UTC()
 	live := func(uid, ns string) simian.ActiveFault {
-		return simian.ActiveFault{FaultUID: uid, EngineUID: ns + "/simian-" + uid, Deadline: now.Add(2 * time.Minute),
+		return simian.ActiveFault{FaultUID: uid, EngineUID: ns + "/simian-" + uid, AppliedAt: now.Add(-time.Minute), Deadline: now.Add(2 * time.Minute),
 			Manifest: simian.FaultManifest{UID: uid, Engine: simian.EngineChaosMesh, Targets: []simian.TargetRef{{Namespace: ns}}}}
 	}
 	r := NewRegistry("new-holder")
@@ -67,6 +67,9 @@ func TestAdoptLiveTakesOverWhatTheRegistryDoesNotHold(t *testing.T) {
 	got := r.List("boutique")
 	if len(got) != 1 || got[0].FaultUID != "f-lost" || got[0].Holder != "new-holder" {
 		t.Errorf("leases in boutique = %+v, want f-lost held here", got)
+	}
+	if len(got) == 1 && got[0].Manifest.Duration != 3*time.Minute {
+		t.Errorf("adopted duration = %s, want the 3m from applied to deadline", got[0].Manifest.Duration)
 	}
 	var adopted, failed int
 	for _, e := range aud.events {

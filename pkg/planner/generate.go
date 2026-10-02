@@ -328,8 +328,12 @@ func buildPlanUserPrompt(in GenerateInput) string {
 			if !rf.ClearedAt.IsZero() {
 				cleared = "cleared " + rf.ClearedAt.Format(time.RFC3339) + " (" + rf.ClearReason + ")"
 			}
-			fmt.Fprintf(&sb, "  %s on %s/%s for %s applied %s, %s\n",
-				rf.Manifest.ResourceKind, ns, name, rf.Manifest.Duration, rf.AppliedAt.Format(time.RFC3339), cleared)
+			duration := ""
+			if rf.Manifest.Duration > 0 {
+				duration = " for " + rf.Manifest.Duration.String()
+			}
+			fmt.Fprintf(&sb, "  %s on %s/%s%s applied %s, %s\n",
+				rf.Manifest.ResourceKind, ns, name, duration, rf.AppliedAt.Format(time.RFC3339), cleared)
 		}
 		sb.WriteString("\n")
 	}

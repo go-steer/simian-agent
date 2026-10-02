@@ -64,6 +64,11 @@ func AdoptLive(ctx context.Context, registry *Registry, drivers map[simian.Engin
 			if _, held := registry.Get(af.FaultUID); held || af.FaultUID == "" {
 				continue
 			}
+			// An object records its deadline, not how long it was asked
+			// for; without this the planner reads the fault as "for 0s".
+			if af.Manifest.Duration <= 0 && !af.AppliedAt.IsZero() && af.Deadline.After(af.AppliedAt) {
+				af.Manifest.Duration = af.Deadline.Sub(af.AppliedAt)
+			}
 			registry.Adopt(af)
 			adopted++
 			if auditor != nil {
