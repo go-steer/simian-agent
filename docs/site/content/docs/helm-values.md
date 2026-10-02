@@ -110,8 +110,11 @@ still before its deadline is adopted (`lease.adopted`, reason
 `untracked-after-restart`): it counts against `--max-concurrent-faults` and the
 health gate, and is cleared at its deadline as if this process had applied it.
 Every other one gets a `lease.expired` event with the same reason, so a restart
-no longer leaves faults with no end on record. Without the file, a fault left
-running by a crash is invisible to the new process's budget until it ends. Read
+no longer leaves faults with no end on record. It then lists the faults still
+running in the arenas from the objects the drivers left (`lease.adopted`,
+`found_in: cluster`) and adopts any the file did not cover — all of them when
+the file was lost with an emptyDir. A fault with no object of its own
+(`envoy-fault`) can only be adopted from the file. Read
 the trail back with [`simian audit export`]({{< relref "cli-reference.md#exporting-the-audit-trail" >}}).
 
 On GKE the controller's stdout already reaches Cloud Logging, so the audit

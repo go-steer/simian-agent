@@ -228,6 +228,13 @@ func newServeCmd() *cobra.Command {
 				registry.Adopt(af)
 				return true
 			})
+			// Then whatever is still running that the file did not cover: it
+			// is lost with an emptyDir when the pod is rescheduled (#177).
+			if arenas, err := arenaNamespaces(ctx); err != nil {
+				logger.Warn("simian serve: cannot resolve arenas to adopt live faults from", slog.String("error", err.Error()))
+			} else if n := lease.AdoptLive(ctx, registry, drivers, arenas, auditor, time.Now().UTC()); n > 0 {
+				logger.Info("simian serve: adopted live faults found in the cluster", slog.Int("faults", n))
+			}
 
 			reaper := &lease.Reaper{
 				Registry: registry,
@@ -567,7 +574,7 @@ func openAuditFile(path string, maxBytes int64, logger *slog.Logger) (*audit.Fil
 			a.Emit(ctx, simian.AuditEvent{
 				Event: audit.EventLeaseAdopted, FaultUID: r.FaultUID, PlanID: r.PlanID, ScenarioID: r.ScenarioID,
 				Mode: simian.ManifestSource(r.Source), Reason: audit.ReasonUntrackedAfterRestart,
-				Payload: map[string]any{"engine_uid": r.EngineUID, "deadline": r.Deadline},
+				Payload: map[string]any{"engine_uid": r.EngineUID, "deadline": r.Deadline, "found_in": "audit-file"},
 			})
 		}
 		closing := audit.ClosingEvents(left, time.Now().UTC())

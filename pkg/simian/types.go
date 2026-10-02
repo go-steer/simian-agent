@@ -291,6 +291,25 @@ func (m FaultManifest) TargetNamespaceMarks() (labels, annotations map[string]st
 	return labels, map[string]string{TargetNamespacesAnnotation: strings.Join(ns, ",")}
 }
 
+// ObjectTargets reads back the namespaces an object found by listing in
+// listedIn acts on, as targets: the ones its marks name, or listedIn itself
+// for an unmarked object, which is where every unmarking driver creates them.
+func ObjectTargets(labels, annotations map[string]string, listedIn string) []TargetRef {
+	var namespaces []string
+	if list := annotations[TargetNamespacesAnnotation]; list != "" {
+		namespaces = strings.Split(list, ",")
+	} else if ns := labels[TargetNamespaceLabel]; ns != "" {
+		namespaces = []string{ns}
+	} else {
+		namespaces = []string{listedIn}
+	}
+	out := make([]TargetRef, 0, len(namespaces))
+	for _, ns := range namespaces {
+		out = append(out, TargetRef{Namespace: ns})
+	}
+	return out
+}
+
 // ObjectActsOnNamespace reports whether an object carrying these marks is a
 // fault acting on ns.
 //

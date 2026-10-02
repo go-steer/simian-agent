@@ -67,6 +67,23 @@ type OrphanReaper interface {
 	ReapExpired(ctx context.Context, namespaces []string, now time.Time) (cleared []string, err error)
 }
 
+// LiveFaultLister is the other half of what a restarted controller needs from
+// a driver that leaves objects in the cluster: the faults still running, so
+// they can be adopted and counted against the budget (#177).
+//
+// The audit file can say the same, but only while it survives. With an
+// emptyDir, a rescheduled pod starts with no file, and a fault the last
+// process left running was invisible to --max-concurrent-faults and the
+// health gate until it ended.
+type LiveFaultLister interface {
+	// ListLive returns the faults in the given namespaces whose deadline is
+	// after now, as leases. Only what the object records is filled in: the
+	// fault UID, engine UID, deadline, applied time, engine, and the
+	// namespaces it acts on; Kind where the object says. Objects being
+	// deleted, and objects with no deadline to adopt them until, are left out.
+	ListLive(ctx context.Context, namespaces []string, now time.Time) ([]ActiveFault, error)
+}
+
 // InjectionConfirmer is an optional ChaosDriver capability: the driver can ask
 // its engine whether a fault it applied actually took effect.
 //

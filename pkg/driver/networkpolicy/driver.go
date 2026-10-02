@@ -372,3 +372,44 @@ func decodeEngineUID(s string) (string, string, error) {
 	}
 	return s[:idx], s[idx+1:], nil
 }
+
+// ListLive implements simian.LiveFaultLister: the Simian-managed policies in
+// namespaces whose deadline is after now. One without an expiry annotation is
+// left out; there is no deadline to hold its lease until.
+func (d *Driver) ListLive(ctx context.Context, namespaces []string, now time.Time) ([]simian.ActiveFault, error) {
+	var (
+		out  []simian.ActiveFault
+		errs []error
+	)
+	for _, ns := range namespaces {
+		list, err := d.clientset.NetworkingV1().NetworkPolicies(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: ManagedLabel + "=true",
+		})
+		if err != nil {
+			if !apierrors.IsNotFound(err) {
+				errs = append(errs, fmt.Errorf("network-policy list live: %s: %w", ns, err))
+			}
+			continue
+		}
+		for i := range list.Items {
+			np := &list.Items[i]
+			faultUID := np.Labels[FaultUIDLabel]
+			expiry, ok := parseExpiry(np.Annotations)
+			if np.DeletionTimestamp != nil || faultUID == "" || !ok || !expiry.After(now) {
+				continue
+			}
+			out = append(out, simian.ActiveFault{
+				FaultUID:  faultUID,
+				EngineUID: engineUID(ns, np.Name),
+				Manifest: simian.FaultManifest{
+					UID:     faultUID,
+					Engine:  simian.EngineNetworkPolicy,
+					Targets: simian.ObjectTargets(np.Labels, np.Annotations, ns),
+				},
+				AppliedAt: np.CreationTimestamp.UTC(),
+				Deadline:  expiry,
+			})
+		}
+	}
+	return out, errors.Join(errs...)
+}
