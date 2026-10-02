@@ -99,12 +99,13 @@ otherwise looks exactly like a planner that produced nothing.
 | `audit.file.enabled` | `true` | Also append audit events to a JSON-lines file (`--audit-file`). Stdout logging is unaffected. |
 | `audit.file.path` | `/var/lib/simian/audit.jsonl` | Its directory is the mount point for the audit volume. |
 | `audit.file.maxBytes` | `104857600` | Past this the file rotates to `<path>.1`; two generations are kept. |
-| `audit.file.persistence.enabled` | `false` | Put the file on a PVC (`simian-audit`, kept on uninstall) instead of an emptyDir. Switches the Deployment to `strategy: Recreate`. Recommended overlay: `true`. |
+| `audit.file.persistence.enabled` | `true` | Keep the file on a PVC (`simian-audit`, kept on uninstall) rather than an emptyDir, and switch the Deployment to `strategy: Recreate`. Needs a default StorageClass, or `storageClass` below. Default since chart 0.1.10. |
 | `audit.file.persistence.size` | `1Gi` | |
 | `audit.file.persistence.storageClass` | `""` | Empty uses the cluster default. |
 
-An emptyDir survives container restarts but not the pod being deleted or
-rescheduled; persistence keeps the trail past both. At start-up the controller
+With persistence off, the file is on an emptyDir, which survives container
+restarts but not the pod being deleted or rescheduled; persistence keeps the
+trail past both. At start-up the controller
 reads the file for faults the previous process applied and never ended. A fault
 still before its deadline is adopted (`lease.adopted`, reason
 `untracked-after-restart`): it counts against `--max-concurrent-faults` and the

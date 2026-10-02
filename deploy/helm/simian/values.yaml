@@ -3,7 +3,7 @@
 image:
   # Published by .github/workflows/release.yml on each `v*` tag push.
   repository: ghcr.io/go-steer/simian-agent
-  # Empty default falls back to .Chart.AppVersion ("0.1.9-dev") in the
+  # Empty default falls back to .Chart.AppVersion ("0.1.10-dev") in the
   # Deployment template, so chart bumps automatically pick up the matching
   # image tag without flipping this field.
   tag: ""
@@ -113,17 +113,20 @@ autonomous:
 # process applied and never ended (lease.expired, reason
 # untracked-after-restart). Read it back with `simian audit export`.
 #
-# Without persistence the file lives on an emptyDir: it survives container
-# restarts but not the pod being deleted or rescheduled. Turn persistence on
-# for a trail that outlasts the pod. On GKE, stdout already reaches Cloud
-# Logging as well.
+# Persistence is on by default: the file is the record of what Simian did to
+# the cluster, and on an emptyDir it is lost whenever the pod is deleted or
+# rescheduled. The PVC (simian-audit) needs a default StorageClass, or set
+# storageClass, and is kept on uninstall. A restarted controller no longer
+# needs the file to stay within its fault budget (it adopts live faults from
+# the cluster), so turning persistence off loses the history, not the safety.
+# On GKE, stdout already reaches Cloud Logging as well.
 audit:
   file:
     enabled: true
     path: /var/lib/simian/audit.jsonl
     maxBytes: 104857600    # 100 MiB per generation; two generations kept
     persistence:
-      enabled: false
+      enabled: true
       size: 1Gi
       storageClass: ""     # empty: the cluster default
 

@@ -115,17 +115,19 @@ reject_arg "baked-defaults" "$out" "--permitted-tiers=node"
 echo "▸ the audit file is on by default, on a volume the controller can write"
 # readOnlyRootFilesystem: an --audit-file with no volume under it fails at
 # start-up, so the arg and the mount have to arrive together.
+# On a PVC by default since chart 0.1.10: on an emptyDir the record of what
+# Simian did is lost whenever the pod is rescheduled.
 out="$(render sim-audit)"
 expect_arg "audit-default" "$out" "--audit-file=/var/lib/simian/audit.jsonl"
-if ! grep -qF "mountPath: /var/lib/simian" <<<"$out" || ! grep -qF "emptyDir: {}" <<<"$out"; then
-  echo "✗ audit-default: expected an emptyDir mounted at /var/lib/simian" >&2
+if ! grep -qF "mountPath: /var/lib/simian" <<<"$out" || ! grep -qF "claimName: simian-audit" <<<"$out" || ! grep -qF "type: Recreate" <<<"$out"; then
+  echo "✗ audit-default: expected the simian-audit claim mounted at /var/lib/simian and a Recreate strategy" >&2
   fail=1
 fi
 out="$(render sim-audit-off --set audit.file.enabled=false)"
 reject_arg "audit-off" "$out" "--audit-file="
-out="$(render sim-audit-pvc --set audit.file.persistence.enabled=true)"
-if ! grep -qF "claimName: simian-audit" <<<"$out" || ! grep -qF "type: Recreate" <<<"$out"; then
-  echo "✗ audit-pvc: expected the simian-audit claim and a Recreate strategy" >&2
+out="$(render sim-audit-emptydir --set audit.file.persistence.enabled=false)"
+if ! grep -qF "mountPath: /var/lib/simian" <<<"$out" || ! grep -qF "emptyDir: {}" <<<"$out" || grep -qF "claimName: simian-audit" <<<"$out"; then
+  echo "✗ audit-emptydir: expected an emptyDir mounted at /var/lib/simian and no claim" >&2
   fail=1
 fi
 
