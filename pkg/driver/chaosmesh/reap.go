@@ -25,6 +25,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/go-steer/simian-agent/pkg/simian"
 )
 
 // ExpiryAnnotation carries a fault's deadline on the object Apply creates,
@@ -176,4 +178,60 @@ func deadlineOf(obj *unstructured.Unstructured) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return created.Add(dur), true
+}
+
+// ListLive implements simian.LiveFaultLister: the Simian-managed Chaos Mesh
+// objects in namespaces whose deadline is after now.
+func (d *Driver) ListLive(ctx context.Context, namespaces []string, now time.Time) ([]simian.ActiveFault, error) {
+	version, resources, err := d.faultResources()
+	if err != nil {
+		return nil, fmt.Errorf("chaos-mesh list live: %w", err)
+	}
+	gv, err := schema.ParseGroupVersion(version)
+	if err != nil && version != "" {
+		return nil, fmt.Errorf("chaos-mesh list live: %w", err)
+	}
+	var (
+		out  []simian.ActiveFault
+		errs []error
+	)
+	for _, r := range resources {
+		if !r.Namespaced {
+			continue
+		}
+		gvr := gv.WithResource(r.Name)
+		for _, ns := range namespaces {
+			list, err := d.dyn.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{
+				LabelSelector: "simian.chaos/managed=true",
+			})
+			if err != nil {
+				if !apierrors.IsNotFound(err) {
+					errs = append(errs, fmt.Errorf("chaos-mesh list live: %s in %s: %w", r.Name, ns, err))
+				}
+				continue
+			}
+			for i := range list.Items {
+				obj := &list.Items[i]
+				faultUID := obj.GetLabels()["simian.chaos/fault-uid"]
+				deadline, ok := deadlineOf(obj)
+				if obj.GetDeletionTimestamp() != nil || faultUID == "" || !ok || !deadline.After(now) {
+					continue
+				}
+				out = append(out, simian.ActiveFault{
+					FaultUID:  faultUID,
+					EngineUID: engineUID(ns, obj.GetName(), gvr),
+					Manifest: simian.FaultManifest{
+						UID:          faultUID,
+						Engine:       simian.EngineChaosMesh,
+						APIVersion:   obj.GetAPIVersion(),
+						ResourceKind: r.Kind,
+						Targets:      simian.ObjectTargets(obj.GetLabels(), obj.GetAnnotations(), ns),
+					},
+					AppliedAt: obj.GetCreationTimestamp().UTC(),
+					Deadline:  deadline,
+				})
+			}
+		}
+	}
+	return out, errors.Join(errs...)
 }

@@ -219,3 +219,48 @@ func TestAnObjectStuckDeletingIsReportedOnceWithWhatHoldsIt(t *testing.T) {
 		t.Errorf("still remembering %v after it went away", d.stuckReported)
 	}
 }
+
+var _ simian.LiveFaultLister = (*Driver)(nil)
+
+// #177: the Chaos Mesh objects still running, as leases a restarted
+// controller adopts, acting where their marks say.
+func TestListLiveReportsOnlyManagedObjectsStillRunning(t *testing.T) {
+	d, _ := newTestDriver(t)
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	ours := func(uid string) map[string]string {
+		return map[string]string{"simian.chaos/managed": "true", "simian.chaos/fault-uid": uid}
+	}
+	expiresAt := func(t time.Time, extra ...string) map[string]string {
+		m := map[string]string{ExpiryAnnotation: t.Format(time.RFC3339)}
+		for i := 0; i+1 < len(extra); i += 2 {
+			m[extra[i]] = extra[i+1]
+		}
+		return m
+	}
+	seedChaos(t, d, "bank", "running", ours("f-running"), expiresAt(now.Add(5*time.Minute), simian.TargetNamespacesAnnotation, "bank,shop"), now.Add(-time.Minute), "")
+	seedChaos(t, d, "bank", "old-running", ours("f-old"), nil, now.Add(-5*time.Minute), "10m")
+	seedChaos(t, d, "bank", "expired", ours("f-expired"), expiresAt(now.Add(-time.Minute)), now.Add(-time.Hour), "")
+	seedChaos(t, d, "bank", "no-deadline", ours("f-none"), nil, now.Add(-time.Hour), "")
+	seedChaos(t, d, "bank", "no-uid", map[string]string{"simian.chaos/managed": "true"}, expiresAt(now.Add(time.Minute)), now, "")
+	seedChaos(t, d, "bank", "not-ours", nil, expiresAt(now.Add(time.Minute)), now, "")
+
+	live, err := d.ListLive(context.Background(), []string{"bank"}, now)
+	if err != nil {
+		t.Fatalf("ListLive: %v", err)
+	}
+	byUID := map[string]simian.ActiveFault{}
+	for _, af := range live {
+		byUID[af.FaultUID] = af
+	}
+	if len(byUID) != 2 || byUID["f-running"].FaultUID == "" || byUID["f-old"].FaultUID == "" {
+		t.Fatalf("live = %+v, want f-running and f-old", live)
+	}
+	r := byUID["f-running"]
+	if r.EngineUID != engineUID("bank", "running", httpChaosGVR) || r.Manifest.ResourceKind != "HTTPChaos" ||
+		!r.Deadline.Equal(now.Add(5*time.Minute)) || len(r.Manifest.Targets) != 2 || r.Manifest.Targets[1].Namespace != "shop" {
+		t.Errorf("f-running = %+v", r)
+	}
+	if !byUID["f-old"].Deadline.Equal(now.Add(5 * time.Minute)) {
+		t.Errorf("f-old deadline = %v, want creation plus duration", byUID["f-old"].Deadline)
+	}
+}

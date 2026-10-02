@@ -381,3 +381,33 @@ func containsType(types []networkingv1.PolicyType, want networkingv1.PolicyType)
 	}
 	return false
 }
+
+var _ simian.LiveFaultLister = (*Driver)(nil)
+
+// #177: the policies still running, as leases a restarted controller adopts.
+func TestListLiveReportsOnlyPoliciesStillRunning(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	policy := func(name string, ann, labels map[string]string) *networkingv1.NetworkPolicy {
+		return &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "arena-a", Annotations: ann, Labels: labels}}
+	}
+	ours := func(uid string) map[string]string { return map[string]string{ManagedLabel: "true", FaultUIDLabel: uid} }
+	at := func(t time.Time) map[string]string {
+		return map[string]string{ExpiryAnnotation: t.Format(time.RFC3339)}
+	}
+	cs := fake.NewSimpleClientset(
+		policy("running", at(now.Add(time.Minute)), ours("f-running")),
+		policy("expired", at(now.Add(-time.Minute)), ours("f-expired")),
+		policy("unstamped", nil, ours("f-unstamped")),
+		policy("no-uid", at(now.Add(time.Minute)), map[string]string{ManagedLabel: "true"}),
+		policy("not-ours", at(now.Add(time.Minute)), nil),
+	)
+	live, err := New(cs, "").ListLive(context.Background(), []string{"arena-a"}, now)
+	if err != nil {
+		t.Fatalf("ListLive: %v", err)
+	}
+	if len(live) != 1 || live[0].FaultUID != "f-running" || live[0].EngineUID != "arena-a/running" ||
+		live[0].Manifest.Engine != simian.EngineNetworkPolicy || live[0].Manifest.Targets[0].Namespace != "arena-a" ||
+		!live[0].Deadline.Equal(now.Add(time.Minute)) {
+		t.Errorf("live = %+v, want f-running alone", live)
+	}
+}

@@ -843,3 +843,34 @@ func TestApplyReplicaDefaultAgreesWithTheGate(t *testing.T) {
 		})
 	}
 }
+
+var _ simian.LiveFaultLister = (*Driver)(nil)
+
+// #177: a restarted controller adopts what is still running from the objects
+// themselves. A bundle is one fault, so one lease.
+func TestListLiveReportsOneLeasePerRunningBundle(t *testing.T) {
+	d := newTestDriver()
+	uid, err := d.Apply(context.Background(), manifest(KindUnboundClaim, nil))
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if n := len(getBundle(t, d, uid)); n < 2 {
+		t.Fatalf("bundle has %d objects; this test needs more than one", n)
+	}
+	live, err := d.ListLive(context.Background(), []string{testNS}, time.Date(2026, 9, 4, 12, 1, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("ListLive: %v", err)
+	}
+	if len(live) != 1 {
+		t.Fatalf("live = %+v, want one lease for the bundle", live)
+	}
+	af := live[0]
+	if af.EngineUID != uid || af.FaultUID != "01K4ZQ8XABCDEF" || af.Manifest.Engine != simian.EngineKubeState ||
+		!af.Deadline.Equal(time.Date(2026, 9, 4, 12, 5, 0, 0, time.UTC)) ||
+		len(af.Manifest.Targets) != 1 || af.Manifest.Targets[0].Namespace != testNS {
+		t.Errorf("lease = %+v", af)
+	}
+	if after, _ := d.ListLive(context.Background(), []string{testNS}, time.Date(2026, 9, 4, 12, 6, 0, 0, time.UTC)); len(after) != 0 {
+		t.Errorf("a bundle past its deadline was reported live: %+v", after)
+	}
+}

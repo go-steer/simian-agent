@@ -717,3 +717,50 @@ func decodeEngineUID(s string) (string, string, error) {
 	}
 	return s[:idx], s[idx+1:], nil
 }
+
+// ListLive implements simian.LiveFaultLister: one lease per bundle of
+// Simian-managed objects in namespaces whose deadline is after now. The
+// objects deliberately do not say which fault kind they are (see
+// ExpiryAnnotation), so neither does the lease.
+func (d *Driver) ListLive(ctx context.Context, namespaces []string, now time.Time) ([]simian.ActiveFault, error) {
+	var (
+		out  []simian.ActiveFault
+		seen = map[string]bool{}
+		errs []error
+	)
+	for _, ns := range namespaces {
+		for _, r := range managedResources {
+			found, err := r.list(ctx, d.clientset, ns, ManagedLabel+"=true")
+			if err != nil {
+				if !apierrors.IsNotFound(err) {
+					errs = append(errs, fmt.Errorf("kube-state list live: %s in %s: %w", r.plural, ns, err))
+				}
+				continue
+			}
+			for _, obj := range found {
+				faultUID := obj.Labels[FaultUIDLabel]
+				expiry, ok := parseExpiry(obj.Annotations)
+				if obj.DeletionTimestamp != nil || faultUID == "" || !ok || !expiry.After(now) {
+					continue
+				}
+				uid := engineUID(ns, bundleNameOf(obj))
+				if seen[uid] {
+					continue
+				}
+				seen[uid] = true
+				out = append(out, simian.ActiveFault{
+					FaultUID:  faultUID,
+					EngineUID: uid,
+					Manifest: simian.FaultManifest{
+						UID:     faultUID,
+						Engine:  simian.EngineKubeState,
+						Targets: simian.ObjectTargets(obj.Labels, obj.Annotations, ns),
+					},
+					AppliedAt: obj.CreationTimestamp.UTC(),
+					Deadline:  expiry,
+				})
+			}
+		}
+	}
+	return out, errors.Join(errs...)
+}
