@@ -15,7 +15,7 @@ helm upgrade --install simian deploy/helm/simian -n simian-system --create-names
 
 # Pin a specific published tag.
 helm upgrade --install simian deploy/helm/simian -n simian-system \
-    --set image.tag=0.1.9-dev
+    --set image.tag=0.1.10-dev
 
 # Enable the M3 in-controller SUT path (required for `simian sut deploy --use-controller`).
 helm upgrade --install simian deploy/helm/simian -n simian-system \
