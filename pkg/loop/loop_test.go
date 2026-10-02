@@ -770,3 +770,42 @@ func TestACycleThatOverrunsItsIntervalWaitsForTheNextTick(t *testing.T) {
 type auditFunc func(simian.AuditEvent)
 
 func (f auditFunc) Emit(_ context.Context, e simian.AuditEvent) { f(e) }
+
+// #178: a fault backed out after it was applied is read back as submitted,
+// not as the driver got it after narrowing and label resolution, so it keys
+// as the step the planner sent.
+func TestABackedOutFaultReadBackKeysAsTheStepDid(t *testing.T) {
+	var plan simian.AttackPlan
+	if err := json.Unmarshal([]byte(planJSON(1)), &plan); err != nil {
+		t.Fatal(err)
+	}
+	m := plan.Steps[0].Manifest
+	m.UID, m.Source = "f-1", simian.SourceAutonomous
+	applied := m
+	applied.Targets = []simian.TargetRef{{Namespace: "boutique", Labels: map[string]string{"app": "cartservice"}}}
+	applied.Spec = map[string]any{"action": "pod-kill", "mode": "one", "selector": map[string]any{"namespaces": []any{"boutique"}}}
+	appliedRec := applied.AuditRecord()
+	appliedRec["engine_uid"], appliedRec["deadline"] = "boutique/simian-x", time.Now().Add(time.Minute).UTC().Format(time.RFC3339)
+
+	var buf bytes.Buffer
+	for _, r := range []audit.Record{
+		{Event: audit.EventExecutorReceived, Payload: m.AuditRecord()},
+		{Event: audit.EventDriverApplied, Payload: appliedRec},
+		{Event: audit.EventLeaseCleared, Reason: string(simian.ReasonInjectionFailed), Payload: map[string]any{"error": "AllInjected=False"}},
+	} {
+		r.TS, r.FaultUID, r.Mode = time.Now(), m.UID, string(m.Source)
+		line, _ := json.Marshal(r)
+		buf.Write(append(line, '\n'))
+	}
+	recs, err := audit.ReadRecords(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := executor.RefusalsFromAudit(audit.Faults(recs), time.Now().Add(-time.Hour))
+	if len(refused) != 1 {
+		t.Fatalf("refusals = %+v, want the backed-out fault", refused)
+	}
+	if got, want := stepKey(refused[0].Manifest), stepKey(plan.Steps[0].Manifest); got != want {
+		t.Errorf("read back keys as\n%s\nwant\n%s", got, want)
+	}
+}

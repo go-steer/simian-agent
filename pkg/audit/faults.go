@@ -89,6 +89,11 @@ type FaultRow struct {
 	Injected *bool `json:"injected,omitempty"`
 	Efficacy *bool `json:"efficacy,omitempty"`
 
+	// requested is the fault as executor.received recorded it, before
+	// narrowing and label resolution rewrote it for the driver. Not
+	// exported: the row reports what reached the cluster.
+	requested *FaultRow
+
 	Outcome string    `json:"outcome"`
 	Reason  string    `json:"reason,omitempty"`
 	EndedAt time.Time `json:"ended_at,omitzero"`
@@ -134,6 +139,9 @@ func apply(row *FaultRow, r Record) {
 	case EventExecutorReceived:
 		row.ReceivedAt = r.TS
 		describe(row, r.Payload)
+		req := &FaultRow{FaultUID: row.FaultUID, PlanID: row.PlanID, Source: row.Source}
+		describe(req, r.Payload)
+		row.requested = req
 	case EventDriverApplied:
 		row.AppliedAt = r.TS
 		// What reached the cluster wins over what was asked for: narrowing
@@ -273,6 +281,18 @@ func (r FaultRow) ActiveFault(now time.Time) (simian.ActiveFault, bool) {
 		AppliedAt: r.AppliedAt,
 		Deadline:  deadline,
 	}, true
+}
+
+// RequestedManifest rebuilds the fault as it was submitted, before the
+// executor narrowed it — what a caller that keys on the submitted step needs.
+// Falls back to Manifest when the trail has no executor.received for it.
+func (r FaultRow) RequestedManifest() (simian.FaultManifest, bool) {
+	if r.requested == nil {
+		return r.Manifest()
+	}
+	req := *r.requested
+	req.PlanID, req.Source = r.PlanID, r.Source
+	return req.Manifest()
 }
 
 // Manifest rebuilds the fault as the trail records it: as applied if it was,

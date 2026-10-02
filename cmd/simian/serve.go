@@ -189,9 +189,13 @@ func newServeCmd() *cobra.Command {
 			}
 			registry := lease.NewRegistry(holderID)
 			history := executor.NewHistory(recentFaultsCapacity)
-			// What the last process was refused, so the planner is told and
-			// the loop's repeated-refusal limit holds across a restart (#173).
-			for _, rf := range executor.RefusalsFromAudit(pastFaults, time.Now().Add(-refusalMemory)) {
+			// What the last process ran and was refused, so the planner is
+			// told and the loop's repeated-refusal limit holds across a
+			// restart (#173, #178).
+			for _, rf := range executor.RecentFromAudit(pastFaults, time.Now().Add(-historyMemory), time.Now()) {
+				history.Push(rf)
+			}
+			for _, rf := range executor.RefusalsFromAudit(pastFaults, time.Now().Add(-historyMemory)) {
 				history.PushRefused(rf)
 			}
 			// Efficacy gate: a fault with Settle probes is not reported as
@@ -234,6 +238,13 @@ func newServeCmd() *cobra.Command {
 				logger.Warn("simian serve: cannot resolve arenas to adopt live faults from", slog.String("error", err.Error()))
 			} else if n := lease.AdoptLive(ctx, registry, drivers, arenas, auditor, time.Now().UTC()); n > 0 {
 				logger.Info("simian serve: adopted live faults found in the cluster", slog.Int("faults", n))
+			}
+			// A fault adopted from the cluster alone is in no history yet;
+			// the planner should still see it running (#178).
+			for _, af := range registry.List("") {
+				if !history.Has(af.FaultUID) {
+					history.Push(executor.RecentFault{FaultUID: af.FaultUID, Manifest: af.Manifest, AppliedAt: af.AppliedAt})
+				}
 			}
 
 			reaper := &lease.Reaper{
@@ -502,10 +513,10 @@ func buildLLM(ctx context.Context, id, model string) (simian.LLMProvider, error)
 // before SIGKILL.
 const shutdownWait = 15 * time.Second
 
-// refusalMemory is how far back a restarted controller looks for refusals to
-// carry over. Bounded so one refused under a policy or build since changed
-// is not held against a planner indefinitely.
-const refusalMemory = 24 * time.Hour
+// historyMemory is how far back a restarted controller looks for faults and
+// refusals to carry over. Bounded so one refused under a policy or build
+// since changed is not held against a planner indefinitely.
+const historyMemory = 24 * time.Hour
 
 // waitForWorkers waits for wg, giving up after limit so a wedged loop cannot
 // hold the process past its grace period.

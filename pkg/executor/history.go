@@ -76,19 +76,23 @@ func RefusalWorthRemembering(err error) bool {
 // the 2026-10-01 trial it proposed the same incompatible IOChaos again right
 // after each restart.
 //
-// Only refusals before anything reached the cluster are rebuilt: what the
-// executor rejected and what the driver would not take. Budget refusals are
-// left out, as RefusalWorthRemembering leaves them out.
+// Rebuilt: what the executor rejected, what the driver would not take, and
+// what was applied and then backed out because it did not take or could not
+// be verified (#178). Budget refusals are left out, as
+// RefusalWorthRemembering leaves them out, and so is a fault interrupted by
+// shutdown, which says nothing about the fault.
 func RefusalsFromAudit(rows []audit.FaultRow, since time.Time) []RefusedFault {
 	var out []RefusedFault
 	for _, r := range rows {
-		if r.Outcome != audit.OutcomeRefused && r.Outcome != audit.OutcomeDriverFailed {
+		if r.Outcome != audit.OutcomeRefused && r.Outcome != audit.OutcomeDriverFailed && !backedOut(r) {
 			continue
 		}
 		if r.Reason == string(simian.ReasonBudgetExceeded) || r.EndedAt.Before(since) {
 			continue
 		}
-		m, ok := r.Manifest()
+		// As submitted, the way Apply records a refusal: the loop keys its
+		// repeated-refusal limit on the step it sent, not the narrowed spec.
+		m, ok := r.RequestedManifest()
 		if !ok {
 			continue
 		}
@@ -98,6 +102,54 @@ func RefusalsFromAudit(rows []audit.FaultRow, since time.Time) []RefusedFault {
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].RefusedAt.Before(out[j].RefusedAt) })
+	return out
+}
+
+// backedOutReasons are the lease.cleared reasons abandon records for a fault
+// that was applied and did not hold up: the engine did not inject it, or the
+// gate could not see it work.
+var backedOutReasons = map[string]bool{
+	string(simian.ReasonInjectionFailed):    true,
+	string(simian.ReasonProbeFailed):        true,
+	string(simian.ReasonCannotGate):         true,
+	string(simian.ReasonProbeNotConfigured): true,
+}
+
+func backedOut(r audit.FaultRow) bool {
+	return r.Outcome == audit.OutcomeCleared && backedOutReasons[r.Reason]
+}
+
+// RecentFromAudit rebuilds the faults an audit trail records as applied
+// since the given time, oldest first, for a restarted controller to push back
+// into its history (#178). Without them the planner's "recent faults" starts
+// empty after every restart, and it can repeat the fault it ran a minute ago
+// on the same target, or plan over one still running.
+//
+// A fault backed out after it was applied is a refusal, not a recent fault,
+// as Apply records it. One the trail leaves open is still running if its
+// deadline is after now — a restart adopts it — and otherwise ended there.
+func RecentFromAudit(rows []audit.FaultRow, since, now time.Time) []RecentFault {
+	var out []RecentFault
+	for _, r := range rows {
+		if r.AppliedAt.IsZero() || r.AppliedAt.Before(since) || backedOut(r) {
+			continue
+		}
+		m, ok := r.Manifest()
+		if !ok {
+			continue
+		}
+		rf := RecentFault{FaultUID: r.FaultUID, Manifest: m, AppliedAt: r.AppliedAt}
+		switch {
+		case r.Outcome != audit.OutcomeOpen:
+			rf.ClearedAt, rf.ClearReason = r.EndedAt, r.Reason
+		default:
+			if d, err := time.Parse(time.RFC3339, r.Deadline); err == nil && !d.After(now) {
+				rf.ClearedAt, rf.ClearReason = d, audit.ReasonUntrackedAfterRestart
+			}
+		}
+		out = append(out, rf)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].AppliedAt.Before(out[j].AppliedAt) })
 	return out
 }
 
@@ -177,6 +229,14 @@ func (h *History) Push(rf RecentFault) {
 	}
 	h.items = append(h.items, rf)
 	h.byUID[rf.FaultUID] = len(h.items) - 1
+}
+
+// Has reports whether the fault is among the recent faults.
+func (h *History) Has(faultUID string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	_, ok := h.byUID[faultUID]
+	return ok
 }
 
 // UpdateCleared marks the fault with the given UID as cleared. No-op if
