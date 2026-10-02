@@ -420,6 +420,10 @@ func TestThePlannerJustifiesEachDurationAndSeesThoseItUsed(t *testing.T) {
 	if user := buildPlanUserPrompt(in); !strings.Contains(user, "NetworkChaos on boutique/frontend for 3m0s applied") {
 		t.Errorf("recent fault line does not carry its duration:\n%s", user)
 	}
+	in.RecentFaults[0].Manifest.Duration = 0 // unknown, as for a lease rebuilt without one
+	if user := buildPlanUserPrompt(in); !strings.Contains(user, "NetworkChaos on boutique/frontend applied") {
+		t.Errorf("an unknown duration is printed rather than left out:\n%s", user)
+	}
 	system := buildPlanSystemPrompt(nil)
 	for _, want := range []string{`"duration_rationale"`, "one-shot action", "Do not copy the durations of recent faults"} {
 		if !strings.Contains(system, want) {
