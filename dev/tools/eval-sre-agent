@@ -107,8 +107,114 @@ kubecontext="$(kubectl --kubeconfig "$kubeconfig" config current-context)"
 : "${GOOGLE_CLOUD_LOCATION:?set GOOGLE_CLOUD_LOCATION (e.g. . ~/scripts/gemini.sh)}"
 
 out="${SIMIAN_EVAL_OUT:-runs/sre-agent-$(date -u +%Y%m%d-%H%M%S)}"
+mkdir -p "$out"
 
-echo "▸ k8s-sre-agent → $out (agent: $agent, its lookout: $lookout)" >&2
+# Where the agent's lookout runs, and so where its network probes come from.
+#
+# lookout probes from wherever its process is, by design: it never spawns a pod
+# to probe from, and says to run it in-cluster when that view is wanted. Run on
+# this workstation, every probe of a Service name or ClusterIP fails even when
+# the Service is healthy, and nothing in the output says why. On the dataplane
+# pack the agent took those failures as evidence for causes it made up.
+#
+# in-cluster (the default) runs lookout in a pod, the vantage a deployed agent
+# has: the agent still spawns "lookout mcp", but SRE_LOOKOUT_BIN is a wrapper
+# that runs it there with kubectl exec. The pod reads the cluster as its own
+# ServiceAccount, read-only. workstation keeps the old behaviour, for comparing
+# against runs made before this existed.
+vantage="${SIMIAN_SRE_AGENT_VANTAGE:-in-cluster}"
+case "$vantage" in
+  in-cluster)
+    vantage_ns=simian-vantage
+    static="$PWD/bin/lookout-$lookout_version-static"
+    if [[ ! -x "$static" ]]; then
+      # Static, because the pod's image is busybox and has no libc to link
+      # against; the workstation build above is cgo.
+      echo "▸ building a static k8s-lookout $lookout_version for the vantage pod" >&2
+      tmp_static="$(mktemp -d)"
+      CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOBIN="$tmp_static" \
+        go install "github.com/go-steer/k8s-lookout/cmd/lookout@$lookout_version"
+      mv "$tmp_static/lookout" "$static"
+      rm -rf "$tmp_static"
+    fi
+    echo "▸ starting the in-cluster vantage pod ($vantage_ns/lookout)" >&2
+    kubectl --kubeconfig "$kubeconfig" apply -f - >/dev/null <<YAML
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: $vantage_ns
+  labels: {app.kubernetes.io/part-of: simian-eval}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: lookout, namespace: $vantage_ns}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simian-vantage-lookout
+  labels: {app.kubernetes.io/part-of: simian-eval}
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: [get, list, watch]
+- nonResourceURLs: ["*"]
+  verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: simian-vantage-lookout
+  labels: {app.kubernetes.io/part-of: simian-eval}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: simian-vantage-lookout}
+subjects:
+- {kind: ServiceAccount, name: lookout, namespace: $vantage_ns}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lookout
+  namespace: $vantage_ns
+  labels: {app.kubernetes.io/part-of: simian-eval}
+spec:
+  serviceAccountName: lookout
+  terminationGracePeriodSeconds: 1
+  securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534}
+  containers:
+  - name: lookout
+    image: busybox:1.36
+    command: [sleep, infinity]
+    securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+YAML
+    kubectl --kubeconfig "$kubeconfig" -n "$vantage_ns" wait --for=condition=Ready pod/lookout --timeout=180s >/dev/null
+    kubectl --kubeconfig "$kubeconfig" -n "$vantage_ns" cp "$static" lookout:/tmp/lookout
+    kubectl --kubeconfig "$kubeconfig" -n "$vantage_ns" exec lookout -- chmod 0755 /tmp/lookout
+
+    # The agent starts lookout from an empty environment plus KUBECONFIG, so
+    # the wrapper names everything else it needs: PATH and HOME for kubectl's
+    # GKE auth plugin. It uses the KUBECONFIG the agent hands it, which is
+    # the one the agent verified, so the agent's one-cluster pin holds.
+    #
+    # kubectl's stderr goes to a file, not to the agent's. kubectl exec can
+    # outlive the agent by a few seconds while its websocket closes, and
+    # holding the agent's stderr — the harness's pipe — that long made the
+    # harness give up on a subject that had already written its report.
+    lookout="$PWD/$out/lookout-in-cluster"
+    cat > "$lookout" <<WRAPPER
+#!/bin/bash
+export PATH="$PATH" HOME="$HOME"
+exec "$(command -v kubectl)" -n $vantage_ns exec -i lookout -- /tmp/lookout "\$@" 2>>"$PWD/$out/lookout-in-cluster.log"
+WRAPPER
+    chmod 0755 "$lookout"
+    ;;
+  workstation) ;;
+  *)
+    echo "ERROR: SIMIAN_SRE_AGENT_VANTAGE must be in-cluster or workstation, not $vantage" >&2
+    exit 1
+    ;;
+esac
+
+echo "▸ k8s-sre-agent → $out (agent: $agent, its lookout: $lookout, vantage: $vantage)" >&2
 
 # --subject-timeout 12m: the agent's own default is 8 minutes per namespace and
 #   the adapter takes a margin off whatever it is given, so this leaves the
