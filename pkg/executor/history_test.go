@@ -182,3 +182,85 @@ func TestRefusalsFromAuditKeepsWhatIsWorthRemembering(t *testing.T) {
 		t.Errorf("late = %+v", got[1])
 	}
 }
+
+// #178: a restart carries over what the last process ran, so the planner's
+// recent faults do not start empty, and shows what is still running as such.
+func TestRecentFromAuditRebuildsWhatRan(t *testing.T) {
+	t0 := time.Date(2026, 10, 2, 8, 0, 0, 0, time.UTC)
+	now := t0.Add(30 * time.Minute)
+	row := func(uid, outcome, reason string, appliedMin, deadlineMin int) audit.FaultRow {
+		r := audit.FaultRow{FaultUID: uid, Outcome: outcome, Reason: reason, Engine: "chaos-mesh", Kind: "PodChaos",
+			Targets:  []any{map[string]any{"namespace": "bank", "name": "userservice"}},
+			Deadline: t0.Add(time.Duration(deadlineMin) * time.Minute).Format(time.RFC3339)}
+		if appliedMin >= -1000 {
+			r.AppliedAt = t0.Add(time.Duration(appliedMin) * time.Minute)
+		}
+		if outcome != audit.OutcomeOpen {
+			r.EndedAt = t0.Add(time.Duration(deadlineMin) * time.Minute)
+		}
+		return r
+	}
+	got := RecentFromAudit([]audit.FaultRow{
+		row("running", audit.OutcomeOpen, "", 28, 31),
+		row("ran", audit.OutcomeExpired, "deadline-reached", 10, 13),
+		row("left-open", audit.OutcomeOpen, "", 20, 23),
+		row("backed-out", audit.OutcomeCleared, "injection-failed", 5, 6),
+		row("refused", audit.OutcomeRefused, "target-incompatible", -2000, 0),
+		row("old", audit.OutcomeExpired, "deadline-reached", -120, -117),
+	}, t0.Add(-time.Hour), now)
+
+	byUID := map[string]RecentFault{}
+	var order []string
+	for _, rf := range got {
+		byUID[rf.FaultUID] = rf
+		order = append(order, rf.FaultUID)
+	}
+	if want := []string{"ran", "left-open", "running"}; !slices.Equal(order, want) {
+		t.Fatalf("carried over %v, want %v (oldest first)", order, want)
+	}
+	if rf := byUID["ran"]; rf.ClearReason != "deadline-reached" || !rf.ClearedAt.Equal(t0.Add(13*time.Minute)) || rf.Manifest.Targets[0].Name != "userservice" {
+		t.Errorf("ran = %+v", rf)
+	}
+	if rf := byUID["running"]; !rf.ClearedAt.IsZero() {
+		t.Errorf("a fault before its deadline reads as cleared: %+v", rf)
+	}
+	if rf := byUID["left-open"]; rf.ClearReason != audit.ReasonUntrackedAfterRestart || !rf.ClearedAt.Equal(t0.Add(23*time.Minute)) {
+		t.Errorf("left-open = %+v, want ended at its deadline", rf)
+	}
+
+	h := NewHistory(10)
+	for _, rf := range got {
+		h.Push(rf)
+	}
+	if !h.Has("running") || h.Has("backed-out") {
+		t.Error("Has disagrees with what was pushed")
+	}
+}
+
+// #178: a fault applied and then backed out because it did not take is
+// carried over as a refusal; one interrupted by shutdown is not.
+func TestRefusalsFromAuditIncludesWhatWasBackedOut(t *testing.T) {
+	t0 := time.Date(2026, 10, 2, 8, 0, 0, 0, time.UTC)
+	row := func(uid, reason string) audit.FaultRow {
+		return audit.FaultRow{FaultUID: uid, Outcome: audit.OutcomeCleared, Reason: reason, EndedAt: t0, AppliedAt: t0,
+			Error: "AllInjected=False", Engine: "chaos-mesh", Kind: "IOChaos",
+			Targets: []any{map[string]any{"namespace": "boutique", "name": "redis-cart"}}}
+	}
+	got := RefusalsFromAudit([]audit.FaultRow{
+		row("not-injected", "injection-failed"),
+		row("no-effect", "probe-failed"),
+		row("interrupted", "interrupted"),
+		row("cleared-by-hand", "explicit-clear"),
+	}, t0.Add(-time.Hour))
+	var uids []string
+	for _, rf := range got {
+		uids = append(uids, rf.FaultUID)
+	}
+	slices.Sort(uids)
+	if want := []string{"no-effect", "not-injected"}; !slices.Equal(uids, want) {
+		t.Fatalf("carried over %v, want %v", uids, want)
+	}
+	if got[0].Error != "AllInjected=False" {
+		t.Errorf("refusal error = %q", got[0].Error)
+	}
+}
