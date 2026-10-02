@@ -587,14 +587,12 @@ Adapters:
   `SIMIAN_SRE_AGENT_VANTAGE=workstation` restores the old behaviour for
   comparing against earlier runs.
 
-  A neutral pod is not the caller's pod, and for the dataplane pack that is
-  most of the difference. On 2026-10-02 the in-cluster vantage left
-  `latency-not-saturation` and `partition-one-way` exactly where the
-  workstation runs had them (recall 0.50, root_cause 0.00): the probes now
-  told the truth — the upstream answers fine from a neutral pod, because the
-  one-way partition only blocks the edge — and the agent concluded the network
-  was not the problem. Separating those faults takes a probe from inside the
-  calling pod, which lookout deliberately never makes.
+  A neutral pod is not the caller's pod. For two of the dataplane pack's five
+  faults — `partition-one-way` and `dns-blackhole-partial` — that is the whole
+  difference: from anywhere but the caller the callee is healthy, and only a
+  probe from inside the calling pod, which lookout deliberately never makes,
+  sees the fault. The other three are visible from a neutral pod. The pack's
+  README has the measurement and how to read scores against that ceiling.
 * **`noop:`** ✅ — the null subject: reports nothing, ever. The zero-score floor
   a scorecard is read against, and the cheapest way to find out whether a pack
   actually manifests before an agent is pointed at it.
