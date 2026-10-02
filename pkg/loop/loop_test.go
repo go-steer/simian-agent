@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"errors"
 	"reflect"
 	"strings"
@@ -669,3 +670,103 @@ func TestARefusalReadBackFromTheAuditTrailKeysAsTheStepDid(t *testing.T) {
 		t.Errorf("refusal = %+v", refused[0])
 	}
 }
+
+// blockingLLM answers once ctx is done, as a provider call cut off by
+// shutdown does.
+type blockingLLM struct{ entered chan struct{} }
+
+func (b blockingLLM) Name() string { return "blocking" }
+func (b blockingLLM) Complete(ctx context.Context, _ simian.CompletionRequest) (simian.CompletionResponse, error) {
+	close(b.entered)
+	<-ctx.Done()
+	return simian.CompletionResponse{}, fmt.Errorf("doRequest: %w", ctx.Err())
+}
+
+// A shutdown mid-planning is not the LLM being unavailable. On the
+// 2026-10-02 trial a rollout recorded it as llm-unavailable.
+func TestAShutdownMidPlanningIsRecordedAsInterrupted(t *testing.T) {
+	l, au := newLoopUnderTest(t, planJSON(1), &recordingExecutor{}, planner.Budget{
+		MaxFaultsPerCycle: 5, MaxConcurrentFaults: 5, MaxSeverityPerCycle: simian.TierNamespace,
+	})
+	llm := blockingLLM{entered: make(chan struct{})}
+	l.Generator = planner.NewGenerator(llm)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { <-llm.entered; cancel() }()
+	if _, _, err := l.RunOnce(ctx, "boutique"); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if _, ok := au.find(audit.EventCycleSkipped, string(simian.ReasonInterrupted)); !ok {
+		t.Error("no cycle.skipped interrupted")
+	}
+	if _, ok := au.find(audit.EventCycleSkipped, "llm-unavailable"); ok {
+		t.Error("a shutdown was recorded as llm-unavailable")
+	}
+	au.mu.Lock()
+	defer au.mu.Unlock()
+	for _, e := range au.events {
+		if e.Event == audit.EventLLMUnavailable {
+			t.Errorf("a shutdown was recorded as %s: %+v", e.Event, e)
+		}
+	}
+}
+
+// slowFirstLLM takes longer than the loop's interval on its first call only.
+type slowFirstLLM struct {
+	mu    sync.Mutex
+	calls int
+	delay time.Duration
+	text  string
+}
+
+func (s *slowFirstLLM) Name() string { return "slow-first" }
+func (s *slowFirstLLM) Complete(context.Context, simian.CompletionRequest) (simian.CompletionResponse, error) {
+	s.mu.Lock()
+	s.calls++
+	first := s.calls == 1
+	s.mu.Unlock()
+	if first {
+		time.Sleep(s.delay)
+	}
+	return simian.CompletionResponse{Text: s.text}, nil
+}
+
+// A cycle that outruns its interval does not start the next one the moment
+// it ends, on the tick that fired meanwhile; it waits for the next tick.
+func TestACycleThatOverrunsItsIntervalWaitsForTheNextTick(t *testing.T) {
+	const interval = 200 * time.Millisecond
+	l, au := newLoopUnderTest(t, planJSON(1), &recordingExecutor{}, planner.Budget{
+		MaxFaultsPerCycle: 5, MaxConcurrentFaults: 5, MaxSeverityPerCycle: simian.TierNamespace,
+	})
+	l.Interval = interval
+	l.Generator = planner.NewGenerator(&slowFirstLLM{delay: interval + interval/2, text: planJSON(1)})
+	var (
+		mu     sync.Mutex
+		starts []time.Time
+	)
+	l.Auditor = auditFunc(func(e simian.AuditEvent) {
+		au.Emit(context.Background(), e)
+		if e.Event == audit.EventCycleStarted {
+			mu.Lock()
+			starts = append(starts, time.Now())
+			mu.Unlock()
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*interval)
+	defer cancel()
+	_ = l.Run(ctx)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(starts) < 2 {
+		t.Fatalf("cycles started = %d, want 2", len(starts))
+	}
+	// The first cycle ends at 1.5 intervals; the stale tick at 1 is dropped
+	// and the next cycle starts on the tick at 2.
+	if gap := starts[1].Sub(starts[0]); gap < 2*interval-interval/4 {
+		t.Errorf("second cycle started %s after the first, want about %s", gap, 2*interval)
+	}
+}
+
+type auditFunc func(simian.AuditEvent)
+
+func (f auditFunc) Emit(_ context.Context, e simian.AuditEvent) { f(e) }
