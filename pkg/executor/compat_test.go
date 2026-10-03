@@ -23,6 +23,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/go-steer/simian-agent/internal/testutil"
@@ -135,5 +136,62 @@ func TestOnlyTheNamedContainersAndKindsAreJudged(t *testing.T) {
 	if _, err := exec.Apply(context.Background(), compatManifest("PodChaos", "frontend",
 		map[string]any{"action": "pod-kill", "mode": "one"})); err != nil {
 		t.Errorf("PodChaos refused on a read-only root filesystem it never touches: %v", err)
+	}
+}
+
+func probedPod(name string, liveness, readiness *corev1.Probe, ports ...corev1.ContainerPort) *corev1.Pod {
+	p := compatPod(name, false)
+	p.Spec.Containers[0].LivenessProbe = liveness
+	p.Spec.Containers[0].ReadinessProbe = readiness
+	p.Spec.Containers[0].Ports = ports
+	return p
+}
+
+func httpProbe(port intstr.IntOrString, path string) *corev1.Probe {
+	return &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Port: port, Path: path}}}
+}
+
+// On the 2026-10-03 soak an HTTPChaos abort on GET :8080/* hit bank's
+// frontend liveness probe, the kubelet restarted the container, Chaos Mesh's
+// proxy died with it, and its redirect rules left port 8080 a black hole
+// long after the fault ended.
+func TestAnHTTPChaosThatWouldFailALivenessProbeIsRefused(t *testing.T) {
+	ready := httpProbe(intstr.FromInt(8080), "/ready")
+	named := httpProbe(intstr.FromString("http"), "/healthz")
+	exec, driver := newCompatExecutor(t,
+		probedPod("frontend", ready, ready),
+		probedPod("named", named, nil, corev1.ContainerPort{Name: "http", ContainerPort: 9000}),
+		probedPod("readiness-only", nil, ready),
+	)
+	for name, tc := range map[string]struct {
+		app     string
+		spec    map[string]any
+		refused bool
+	}{
+		"abort on every path of the probe's port": {"frontend", map[string]any{"abort": true, "port": float64(8080), "path": "/*", "target": "Request"}, true},
+		"no path selector at all":                 {"frontend", map[string]any{"abort": true, "port": float64(8080), "target": "Request"}, true},
+		"named probe port resolved":               {"named", map[string]any{"abort": true, "port": float64(9000), "path": "/health*", "target": "Request"}, true},
+		"a path the probe does not use":           {"frontend", map[string]any{"abort": true, "port": float64(8080), "path": "/api/*", "target": "Request"}, false},
+		"another port":                            {"frontend", map[string]any{"abort": true, "port": float64(9090), "path": "/*", "target": "Request"}, false},
+		"POST only: probes are GETs":              {"frontend", map[string]any{"abort": true, "port": float64(8080), "method": "POST", "target": "Request"}, false},
+		"readiness alone restarts nothing":        {"readiness-only", map[string]any{"abort": true, "port": float64(8080), "path": "/*", "target": "Request"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := len(driver.Applied)
+			_, err := exec.Apply(context.Background(), compatManifest("HTTPChaos", tc.app, tc.spec))
+			if tc.refused {
+				ee := asExecutorError(t, err)
+				if ee.Reason != simian.ReasonTargetIncompatible || !strings.Contains(err.Error(), "liveness probe") {
+					t.Fatalf("err = %v, want target-incompatible naming the liveness probe", err)
+				}
+				if len(driver.Applied) != before {
+					t.Error("the driver was called for a refused fault")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+		})
 	}
 }

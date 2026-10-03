@@ -18,11 +18,14 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"regexp"
 	"slices"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/go-steer/simian-agent/pkg/simian"
@@ -74,10 +77,17 @@ func WritesRootFS(engine simian.Engine, kind string) bool {
 }
 
 // checkTargetCompat refuses a fault whose engine cannot inject it into the
-// containers it targets. Only what can be read is judged: a target without
-// labels, or whose pods cannot be listed, is left to the injection check.
+// containers it targets, or cannot take it back out. Only what can be read is
+// judged: a target without labels, or whose pods cannot be listed, is left to
+// the injection check.
 func (e *Executor) checkTargetCompat(ctx context.Context, m simian.FaultManifest) error {
-	if e.pods == nil || !WritesRootFS(m.Engine, m.ResourceKind) {
+	if e.pods == nil || m.Engine != simian.EngineChaosMesh {
+		return nil
+	}
+	if m.ResourceKind == "HTTPChaos" {
+		return e.checkHTTPChaosProbes(ctx, m)
+	}
+	if !WritesRootFS(m.Engine, m.ResourceKind) {
 		return nil
 	}
 	containers := specStrings(m.Spec, "containerNames")
@@ -131,4 +141,101 @@ func specStrings(spec map[string]any, key string) []string {
 		}
 	}
 	return out
+}
+
+// checkHTTPChaosProbes refuses an HTTPChaos that would hit a target
+// container's liveness or startup probe.
+//
+// HTTPChaos works through a proxy Chaos Mesh runs in the pod's network
+// namespace, with redirect rules in front of it. A fault on the probe's path
+// fails the probe, the kubelet restarts the container, and the proxy dies with
+// it while the redirect rules stay: the port is a black hole that outlives the
+// fault, and every restart fails the probe again. On the 2026-10-03 soak a
+// three-minute abort on bank's frontend left it down until the pod was
+// deleted by hand. A readiness probe is left alone — failing it is the
+// symptom such a fault is for, and it restarts nothing.
+func (e *Executor) checkHTTPChaosProbes(ctx context.Context, m simian.FaultManifest) error {
+	port, ok := specInt(m.Spec, "port")
+	if !ok {
+		return nil
+	}
+	method, _ := m.Spec["method"].(string)
+	if method != "" && !strings.EqualFold(method, "GET") {
+		return nil // kubelet HTTP probes are GETs
+	}
+	pathGlob, _ := m.Spec["path"].(string)
+	for _, t := range m.Targets {
+		if t.Namespace == "" || len(t.Labels) == 0 {
+			continue
+		}
+		pods, err := e.pods.Pods(ctx, t.Namespace, t.Labels)
+		if err != nil {
+			continue
+		}
+		for _, p := range pods {
+			for _, c := range p.Spec.Containers {
+				for _, rp := range []struct {
+					kind  string
+					probe *corev1.Probe
+				}{{"liveness", c.LivenessProbe}, {"startup", c.StartupProbe}} {
+					kind, probe := rp.kind, rp.probe
+					if probe == nil || probe.HTTPGet == nil || probePort(c, probe.HTTPGet.Port) != port || !ChaosPathMatches(pathGlob, probe.HTTPGet.Path) {
+						continue
+					}
+					return simian.NewExecutorError(simian.StagePrecheck, simian.ReasonTargetIncompatible,
+						fmt.Sprintf("%s/%s container %q has a %s probe on GET :%d%s, which this HTTPChaos would fail; the restart that follows kills Chaos Mesh's proxy and leaves the port unreachable after the fault ends — target a path the probe does not use",
+							p.Namespace, p.Name, c.Name, kind, port, probe.HTTPGet.Path), nil)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// probePort resolves a probe's port, named or numbered, against the
+// container's declared ports. 0 when a name does not resolve.
+func probePort(c corev1.Container, port intstr.IntOrString) int {
+	if port.Type == intstr.Int {
+		return port.IntValue()
+	}
+	for _, cp := range c.Ports {
+		if cp.Name == port.StrVal {
+			return int(cp.ContainerPort)
+		}
+	}
+	return 0
+}
+
+// ChaosPathMatches reports whether an HTTPChaos path selector matches a
+// request path. Exported for the planner, which rejects the same steps. An empty selector matches every path. "*" is matched across
+// "/" as well as within a segment: wider than Chaos Mesh may be, and on the
+// side of refusing a fault that would not have hit the probe rather than
+// running one that would.
+func ChaosPathMatches(glob, p string) bool {
+	if glob == "" {
+		return true
+	}
+	parts := strings.Split(glob, "*")
+	expr := "^"
+	for i, part := range parts {
+		if i > 0 {
+			expr += ".*"
+		}
+		expr += regexp.QuoteMeta(part)
+	}
+	re, err := regexp.Compile(expr + "$")
+	return err == nil && re.MatchString(p)
+}
+
+// specInt reads a number from a decoded spec, which JSON gives as float64.
+func specInt(spec map[string]any, key string) (int, bool) {
+	switch v := spec[key].(type) {
+	case float64:
+		return int(v), true
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	}
+	return 0, false
 }

@@ -71,6 +71,17 @@ type ContainerSummary struct {
 	// IOChaos's volumePath must be one of the mount points.
 	ReadOnlyRootFS bool     `json:"read_only_root_fs,omitempty"`
 	MountPaths     []string `json:"mount_paths,omitempty"`
+	// RestartProbes are the container's HTTP liveness and startup probes:
+	// failing one restarts the container, which takes Chaos Mesh's HTTPChaos
+	// proxy down with it and leaves the port unreachable after the fault.
+	RestartProbes []HTTPProbe `json:"restart_probes,omitempty"`
+}
+
+// HTTPProbe is the port and path a kubelet HTTP probe GETs, the port
+// resolved to a number when the probe names it.
+type HTTPProbe struct {
+	Port int32  `json:"port"`
+	Path string `json:"path"`
 }
 
 // EnvServiceRef is an env-var entry whose value parses as `<service>:<port>`
