@@ -46,6 +46,7 @@ helm upgrade --install chaos-mesh \
     -n chaos-mesh --create-namespace \
     --set chaosDaemon.runtime=containerd \
     --set chaosDaemon.socketPath=/run/containerd/containerd.sock \
+    --set dnsServer.create=true \
     --wait
 kubectl -n chaos-mesh get pods   # one chaos-daemon per node you will inject into
 ```
@@ -53,7 +54,9 @@ kubectl -n chaos-mesh get pods   # one chaos-daemon per node you will inject int
 2.8.4 is the version the kind e2e suite pins (`internal/kindcluster/install.go`)
 and the one the GKE trials ran. The two `chaosDaemon` flags matter: GKE nodes
 run containerd, and the Chaos Mesh chart defaults to Docker's runtime and
-socket. Never mark the `chaos-mesh` namespace eligible.
+socket. `dnsServer.create=true` installs the DNS server DNSChaos works through;
+without it a DNSChaos applies cleanly and changes nothing. Never mark the
+`chaos-mesh` namespace eligible.
 
 ### 2. Vertex AI access from the pod
 
@@ -113,8 +116,11 @@ baseline. Until the baseline exists its health gate fails every cycle with
 `no baseline cached for namespace`, and nothing is applied. The order is:
 
 ```bash
-# 1. The arena: namespace, eligibility annotation, chaos RBAC.
-bin/simian arena create --namespace payments
+# 1. The arena: namespace, eligibility annotation, chaos RBAC. Name any
+#    workload that must never be faulted — a load generator, say — so the
+#    planner and the executor leave it alone.
+bin/simian arena create payments \
+    --annotation simian.chaos/exclude-workloads=loadgenerator
 
 # 2. The workloads — your own manifests, or a built-in SUT.
 kubectl -n payments apply -f my-app/
@@ -125,7 +131,8 @@ bin/simian baseline establish --namespace payments
 ```
 
 For Online Boutique, `bin/simian sut deploy --namespace boutique --create-arena
---use-controller` does all three. Baselines are stored in a ConfigMap in the
+--use-controller` does all three; add the exclusion afterwards with
+`kubectl annotate ns boutique simian.chaos/exclude-workloads=loadgenerator`. Baselines are stored in a ConfigMap in the
 arena and survive controller restarts. The SUT path needs the controller to
 deploy into the arena: install with `sutInController.enabled=true` (the
 overlay does). Then turn the loop on:
