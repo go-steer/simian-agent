@@ -431,3 +431,29 @@ func TestThePlannerJustifiesEachDurationAndSeesThoseItUsed(t *testing.T) {
 		}
 	}
 }
+
+// The soak's unrecoverable fault: an HTTPChaos abort on GET :8080/* over a
+// liveness probe on :8080/ready. The planner sees the probe and a step that
+// covers it fails validation.
+func TestAnHTTPChaosOverARestartProbeFailsValidation(t *testing.T) {
+	in := sampleInput()
+	in.Topology.Workloads = append(in.Topology.Workloads, topology.Workload{Kind: "Deployment", Name: "frontend-bank",
+		Labels:     map[string]string{"app": "frontend-bank"},
+		Containers: []topology.ContainerSummary{{Name: "front", RestartProbes: []topology.HTTPProbe{{Port: 8080, Path: "/ready"}}}}})
+	if out := summarizeTopology(in.Topology); !strings.Contains(out, "restart_probes=front:8080/ready") {
+		t.Errorf("topology does not show the restart probe:\n%s", out)
+	}
+	step := func(spec string) string {
+		return strings.NewReplacer(
+			`"resource_kind": "PodChaos"`, `"resource_kind": "HTTPChaos"`,
+			`"name": "cartservice"`, `"name": "frontend-bank"`,
+			`"spec": {"action": "pod-kill", "mode": "one"}`, `"spec": `+spec,
+		).Replace(wellFormedPlanJSON())
+	}
+	if _, err := parseAttackPlan([]byte(step(`{"abort": true, "port": 8080, "path": "/*", "target": "Request"}`)), in); err == nil || !strings.Contains(err.Error(), "restart probe") {
+		t.Errorf("abort over the probe: err = %v, want a restart-probe rejection", err)
+	}
+	if _, err := parseAttackPlan([]byte(step(`{"abort": true, "port": 8080, "path": "/api/*", "target": "Request"}`)), in); err != nil {
+		t.Errorf("abort on a path the probe does not use was rejected: %v", err)
+	}
+}

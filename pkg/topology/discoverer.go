@@ -26,6 +26,7 @@ import (
 	netv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -291,6 +292,22 @@ func containerSummary(c corev1.Container) ContainerSummary {
 	}
 	for _, vm := range c.VolumeMounts {
 		out.MountPaths = append(out.MountPaths, vm.MountPath)
+	}
+	for _, probe := range []*corev1.Probe{c.LivenessProbe, c.StartupProbe} {
+		if probe == nil || probe.HTTPGet == nil {
+			continue
+		}
+		port := probe.HTTPGet.Port.IntVal // the numbered form; 0 for a name
+		if probe.HTTPGet.Port.Type == intstr.String {
+			for _, cp := range c.Ports {
+				if cp.Name == probe.HTTPGet.Port.StrVal {
+					port = cp.ContainerPort
+				}
+			}
+		}
+		if port != 0 {
+			out.RestartProbes = append(out.RestartProbes, HTTPProbe{Port: port, Path: probe.HTTPGet.Path})
+		}
 	}
 	return out
 }

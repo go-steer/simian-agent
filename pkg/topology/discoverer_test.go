@@ -16,6 +16,7 @@ package topology
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	netv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -325,5 +327,28 @@ func TestContainerSummaryRecordsTheRootFilesystemAndMounts(t *testing.T) {
 	}
 	if plain := containerSummary(corev1.Container{Name: "x"}); plain.ReadOnlyRootFS || len(plain.MountPaths) != 0 {
 		t.Errorf("summary of a plain container = %+v", plain)
+	}
+}
+
+// The planner is shown which probes restart a container, numbered, so it can
+// keep an HTTPChaos off them; readiness restarts nothing and is left out.
+func TestContainerSummaryRecordsTheProbesThatRestartIt(t *testing.T) {
+	get := func(port intstr.IntOrString, path string) *corev1.Probe {
+		return &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Port: port, Path: path}}}
+	}
+	got := containerSummary(corev1.Container{
+		Name:           "front",
+		Ports:          []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}},
+		LivenessProbe:  get(intstr.FromString("http"), "/ready"),
+		StartupProbe:   get(intstr.FromInt(9090), "/started"),
+		ReadinessProbe: get(intstr.FromInt(8080), "/ready"),
+	})
+	want := []HTTPProbe{{Port: 8080, Path: "/ready"}, {Port: 9090, Path: "/started"}}
+	if !reflect.DeepEqual(got.RestartProbes, want) {
+		t.Errorf("RestartProbes = %+v, want %+v", got.RestartProbes, want)
+	}
+	tcp := containerSummary(corev1.Container{LivenessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(5432)}}}})
+	if len(tcp.RestartProbes) != 0 {
+		t.Errorf("a TCP probe was recorded: %+v", tcp.RestartProbes)
 	}
 }
