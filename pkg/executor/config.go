@@ -51,6 +51,11 @@ type Config struct {
 
 	// ClusterDomains is the in-cluster DNS suffix list (e.g. cluster.local).
 	ClusterDomains []string
+
+	// RecoveryTimeout is how long CheckRecovery waits for a cleared fault's
+	// targets to be Ready before recording that they did not recover. 0
+	// uses DefaultRecoveryTimeout.
+	RecoveryTimeout time.Duration
 }
 
 // DefaultConfig returns the v1 default policy.

@@ -88,6 +88,10 @@ type FaultRow struct {
 	// the engine was not asked. Efficacy is the settle probes' verdict.
 	Injected *bool `json:"injected,omitempty"`
 	Efficacy *bool `json:"efficacy,omitempty"`
+	// Recovered says whether the workload was Ready again after the fault
+	// was cleared; nil when nobody checked.
+	Recovered *bool    `json:"recovered,omitempty"`
+	Unready   []string `json:"unready,omitempty"`
 
 	// requested is the fault as executor.received recorded it, before
 	// narrowing and label resolution rewrote it for the driver. Not
@@ -152,6 +156,17 @@ func apply(row *FaultRow, r Record) {
 	case EventFaultInjected:
 		if b, ok := r.Payload["passed"].(bool); ok {
 			row.Injected = &b
+		}
+	case EventFaultRecovered:
+		if b, ok := r.Payload["passed"].(bool); ok {
+			row.Recovered = &b
+		}
+		if u, ok := r.Payload["unready"].([]any); ok {
+			for _, v := range u {
+				if s, ok := v.(string); ok {
+					row.Unready = append(row.Unready, s)
+				}
+			}
 		}
 	case EventFaultEfficacy:
 		if b, ok := r.Payload["passed"].(bool); ok {

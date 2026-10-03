@@ -261,6 +261,9 @@ func newServeCmd() *cobra.Command {
 				Namespaces: arenaNamespaces,
 				OnExpire: func(af simian.ActiveFault, reason string) {
 					history.UpdateCleared(af.FaultUID, time.Now().UTC(), reason)
+					// Ending on time is not the workload recovering; check,
+					// and say so in the audit trail if it did not.
+					workers.Go(func() { exec.CheckRecovery(ctx, af) })
 				},
 			}
 			// Sweep before the first tick. If this process is the restart of
