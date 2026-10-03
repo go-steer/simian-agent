@@ -136,8 +136,12 @@ in the pod by running `simian audit export` there, as in the last line.
 
 One row per fault UID, folded from its events: source, kind, targets, the spec
 as it reached the cluster (after the safety stage narrowed it), whether the
-engine confirmed injection and the efficacy verdict, and how it ended —
-`refused`, `driver-failed`, `cleared`, `expired`, or `open` if nothing ended it.
+engine confirmed injection and the efficacy verdict, how it ended —
+`refused`, `driver-failed`, `cleared`, `expired`, or `open` if nothing ended it —
+and, for a Chaos Mesh fault that ran to its deadline, whether its target pods
+were Ready again within five minutes (`RECOVERED`; the JSON adds the pods still
+down and why). A fault can end on time and leave its workload broken; `no`
+there is the place to look first.
 `--since` takes a duration back from now or an RFC 3339 time and keeps faults
 first seen after it. `--format json` writes one object per line with the full
 spec; the table truncates it. Lines that are not audit events are skipped, so a

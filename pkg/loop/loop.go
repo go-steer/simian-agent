@@ -17,6 +17,7 @@ package loop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -271,6 +272,15 @@ func (l *Loop) RunOnce(ctx context.Context, ns string) (simian.AttackPlan, []str
 		if l.Auditor != nil {
 			l.Auditor.Emit(ctx, simian.AuditEvent{Event: audit.EventCycleSkipped, Mode: simian.SourceAutonomous,
 				Reason: string(simian.ReasonInterrupted), Payload: map[string]any{"namespace": ns}})
+		}
+		return simian.AttackPlan{}, nil, nil
+	}
+	if errors.Is(err, planner.ErrNoValidPlan) {
+		// The LLM answered; its plans did not pass validation. On the
+		// 2026-10-03 soak that was recorded as llm-unavailable.
+		if l.Auditor != nil {
+			l.Auditor.Emit(ctx, simian.AuditEvent{Event: audit.EventCycleSkipped, Mode: simian.SourceAutonomous,
+				Reason: "no-valid-plan", Payload: map[string]any{"namespace": ns, "error": err.Error()}})
 		}
 		return simian.AttackPlan{}, nil, nil
 	}

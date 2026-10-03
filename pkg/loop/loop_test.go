@@ -812,3 +812,21 @@ func TestABackedOutFaultReadBackKeysAsTheStepDid(t *testing.T) {
 		t.Errorf("read back keys as\n%s\nwant\n%s", got, want)
 	}
 }
+
+// The LLM answered every attempt and none of its plans validated: that is
+// not the LLM being unavailable. On the 2026-10-03 soak it was recorded as
+// such, after three IOChaos plans the topology ruled out.
+func TestPlansThatNeverValidateAreNotRecordedAsTheLLMBeingUnavailable(t *testing.T) {
+	l, au := newLoopUnderTest(t, `{"hypothesis":"x","steps":[]}`, &recordingExecutor{}, planner.Budget{
+		MaxFaultsPerCycle: 5, MaxConcurrentFaults: 5, MaxSeverityPerCycle: simian.TierNamespace,
+	})
+	if _, _, err := l.RunOnce(context.Background(), "boutique"); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if _, ok := au.find(audit.EventCycleSkipped, "no-valid-plan"); !ok {
+		t.Error("no cycle.skipped no-valid-plan")
+	}
+	if au.Has(audit.EventLLMUnavailable) {
+		t.Error("an invalid plan was recorded as the LLM being unavailable")
+	}
+}

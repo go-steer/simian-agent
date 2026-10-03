@@ -55,6 +55,11 @@ const (
 	// needs a passing efficacy record should not be satisfied by it.
 	EventFaultInjected = "fault.injected"
 
+	// EventFaultRecovered records whether a cleared fault's targets came
+	// back: Ready again within the recovery timeout, or still down and why.
+	// A fault can end on time and leave its workload broken.
+	EventFaultRecovered = "fault.recovered"
+
 	EventLeaseHeartbeat = "lease.heartbeat"
 	EventLeaseExpired   = "lease.expired"
 	EventLeaseCleared   = "lease.cleared"

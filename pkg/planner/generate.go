@@ -17,6 +17,7 @@ package planner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"slices"
@@ -31,6 +32,11 @@ import (
 	"github.com/go-steer/simian-agent/pkg/sut"
 	"github.com/go-steer/simian-agent/pkg/topology"
 )
+
+// ErrNoValidPlan is wrapped by Generate when the LLM answered every attempt
+// and none of its plans passed validation — not the same thing as the LLM
+// being unavailable, and recorded differently.
+var ErrNoValidPlan = errors.New("no valid plan")
 
 // Budget is the install-side per-cycle budget the autonomous loop enforces.
 // The LLM also emits a PlanBudget in its AttackPlan; the loop applies
@@ -135,7 +141,7 @@ func (g *Generator) Generate(ctx context.Context, in GenerateInput) (simian.Atta
 		user = user + "\n\nYour previous response failed validation: " + perr.Error() +
 			"\nReturn a JSON object that conforms to the AttackPlan schema described above."
 	}
-	return simian.AttackPlan{}, fmt.Errorf("generator: exhausted retries: %w", lastErr)
+	return simian.AttackPlan{}, fmt.Errorf("generator: exhausted retries: %w: %w", ErrNoValidPlan, lastErr)
 }
 
 // parseAttackPlan decodes the LLM's JSON, normalizes per-step durations,

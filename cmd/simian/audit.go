@@ -132,15 +132,15 @@ func writeFaultsJSON(w io.Writer, rows []audit.FaultRow) error {
 
 func writeFaultsTable(w io.Writer, rows []audit.FaultRow) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "FAULT\tSTARTED\tSOURCE\tKIND\tTARGETS\tOUTCOME\tREASON\tENDED\tINJECTED\tEFFICACY\tSPEC")
+	_, _ = fmt.Fprintln(tw, "FAULT\tSTARTED\tSOURCE\tKIND\tTARGETS\tOUTCOME\tREASON\tENDED\tINJECTED\tEFFICACY\tRECOVERED\tSPEC")
 	for _, r := range rows {
 		started := r.AppliedAt
 		if started.IsZero() {
 			started = r.ReceivedAt
 		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			r.FaultUID, stamp(started), dash(r.Source), dash(r.Kind), targetsCell(r.Targets),
-			r.Outcome, dash(r.Reason), stamp(r.EndedAt), verdict(r.Injected), verdict(r.Efficacy), specCell(r.Spec))
+			r.Outcome, dash(r.Reason), stamp(r.EndedAt), verdict(r.Injected), verdict(r.Efficacy), verdict(r.Recovered), specCell(r.Spec))
 	}
 	return tw.Flush()
 }

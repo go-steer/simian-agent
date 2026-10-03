@@ -171,3 +171,16 @@ func TestActiveFaultRebuildsOnlyAStillRunningFault(t *testing.T) {
 		t.Error("a fault with no recorded target was rebuilt; nothing could count it per namespace")
 	}
 }
+
+func TestFaultsRecordsWhetherTheWorkloadRecovered(t *testing.T) {
+	recs := applied("f-1", 0, at(10))
+	recs = append(recs,
+		Record{TS: at(10), Event: EventLeaseExpired, FaultUID: "f-1", Reason: "deadline-reached"},
+		Record{TS: at(15), Event: EventFaultRecovered, FaultUID: "f-1",
+			Payload: map[string]any{"passed": false, "unready": []any{"bank/frontend-a: container front CrashLoopBackOff, 6 restarts"}}},
+	)
+	r := Faults(recs)[0]
+	if r.Outcome != OutcomeExpired || r.Recovered == nil || *r.Recovered || len(r.Unready) != 1 {
+		t.Errorf("row = %+v, want expired and not recovered", r)
+	}
+}
