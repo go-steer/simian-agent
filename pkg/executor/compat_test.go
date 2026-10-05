@@ -195,3 +195,37 @@ func TestAnHTTPChaosThatWouldFailALivenessProbeIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// The 2026-10-04 soak: an HTTPChaos abort on paymentservice's port 50051,
+// which Online Boutique declares unnamed and probes with grpc. Twelve hours
+// unreachable, past a check that only looked at HTTP probes.
+func TestAnHTTPChaosOnAGRPCPortIsRefused(t *testing.T) {
+	grpcProbe := &corev1.Probe{ProbeHandler: corev1.ProbeHandler{GRPC: &corev1.GRPCAction{Port: 50051}}}
+	payment := probedPod("paymentservice", grpcProbe, grpcProbe, corev1.ContainerPort{ContainerPort: 50051})
+	named := probedPod("named-grpc", nil, nil, corev1.ContainerPort{Name: "grpc-api", ContainerPort: 9000})
+	exec, driver := newCompatExecutor(t, payment, named)
+	for name, tc := range map[string]struct {
+		app  string
+		spec map[string]any
+	}{
+		"the soak's fault":             {"paymentservice", map[string]any{"abort": true, "mode": "all", "path": "/*", "port": float64(50051), "target": "Request"}},
+		"POST, as gRPC requests are":   {"paymentservice", map[string]any{"abort": true, "port": float64(50051), "method": "POST", "target": "Request"}},
+		"a port named grpc, no probes": {"named-grpc", map[string]any{"delay": "200ms", "port": float64(9000), "target": "Request"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := len(driver.Applied)
+			_, err := exec.Apply(context.Background(), compatManifest("HTTPChaos", tc.app, tc.spec))
+			if ee := asExecutorError(t, err); ee.Reason != simian.ReasonTargetIncompatible || !strings.Contains(err.Error(), "serves gRPC") {
+				t.Fatalf("err = %v, want target-incompatible naming gRPC", err)
+			}
+			if len(driver.Applied) != before {
+				t.Error("the driver was called for a refused fault")
+			}
+		})
+	}
+	// Another port on the same pod is not gRPC.
+	if _, err := exec.Apply(context.Background(), compatManifest("HTTPChaos", "paymentservice",
+		map[string]any{"abort": true, "port": float64(8080), "path": "/*", "target": "Request"})); err != nil {
+		t.Errorf("HTTPChaos on a non-gRPC port was refused: %v", err)
+	}
+}

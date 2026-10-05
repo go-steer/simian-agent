@@ -17,7 +17,9 @@ package topology
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -309,6 +311,21 @@ func containerSummary(c corev1.Container) ContainerSummary {
 			out.RestartProbes = append(out.RestartProbes, HTTPProbe{Port: port, Path: probe.HTTPGet.Path})
 		}
 	}
+	grpc := map[int32]bool{}
+	for _, probe := range []*corev1.Probe{c.LivenessProbe, c.ReadinessProbe, c.StartupProbe} {
+		if probe != nil && probe.GRPC != nil {
+			grpc[probe.GRPC.Port] = true
+		}
+	}
+	for _, cp := range c.Ports {
+		if strings.HasPrefix(strings.ToLower(cp.Name), "grpc") {
+			grpc[cp.ContainerPort] = true
+		}
+	}
+	for p := range grpc {
+		out.GRPCPorts = append(out.GRPCPorts, p)
+	}
+	slices.Sort(out.GRPCPorts)
 	return out
 }
 
