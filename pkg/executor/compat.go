@@ -143,8 +143,8 @@ func specStrings(spec map[string]any, key string) []string {
 	return out
 }
 
-// checkHTTPChaosProbes refuses an HTTPChaos that would hit a target
-// container's liveness or startup probe.
+// checkHTTPChaosProbes refuses an HTTPChaos aimed at a gRPC port, or one that
+// would hit a target container's liveness or startup probe.
 //
 // HTTPChaos works through a proxy Chaos Mesh runs in the pod's network
 // namespace, with redirect rules in front of it. A fault on the probe's path
@@ -160,9 +160,7 @@ func (e *Executor) checkHTTPChaosProbes(ctx context.Context, m simian.FaultManif
 		return nil
 	}
 	method, _ := m.Spec["method"].(string)
-	if method != "" && !strings.EqualFold(method, "GET") {
-		return nil // kubelet HTTP probes are GETs
-	}
+	getsProbes := method == "" || strings.EqualFold(method, "GET") // kubelet HTTP probes are GETs
 	pathGlob, _ := m.Spec["path"].(string)
 	for _, t := range m.Targets {
 		if t.Namespace == "" || len(t.Labels) == 0 {
@@ -174,12 +172,17 @@ func (e *Executor) checkHTTPChaosProbes(ctx context.Context, m simian.FaultManif
 		}
 		for _, p := range pods {
 			for _, c := range p.Spec.Containers {
+				if GRPCPort(c, port) {
+					return simian.NewExecutorError(simian.StagePrecheck, simian.ReasonTargetIncompatible,
+						fmt.Sprintf("%s/%s container %q serves gRPC on port %d; Chaos Mesh's HTTPChaos proxy handles HTTP/1 only, so it fails the gRPC traffic and probes there, and a restart that follows leaves the port unreachable after the fault ends — use a NetworkChaos for this port",
+							p.Namespace, p.Name, c.Name, port), nil)
+				}
 				for _, rp := range []struct {
 					kind  string
 					probe *corev1.Probe
 				}{{"liveness", c.LivenessProbe}, {"startup", c.StartupProbe}} {
 					kind, probe := rp.kind, rp.probe
-					if probe == nil || probe.HTTPGet == nil || probePort(c, probe.HTTPGet.Port) != port || !ChaosPathMatches(pathGlob, probe.HTTPGet.Path) {
+					if !getsProbes || probe == nil || probe.HTTPGet == nil || probePort(c, probe.HTTPGet.Port) != port || !ChaosPathMatches(pathGlob, probe.HTTPGet.Path) {
 						continue
 					}
 					return simian.NewExecutorError(simian.StagePrecheck, simian.ReasonTargetIncompatible,
@@ -238,4 +241,24 @@ func specInt(spec map[string]any, key string) (int, bool) {
 		return int(v), true
 	}
 	return 0, false
+}
+
+// GRPCPort reports whether the container serves gRPC on port: a gRPC probe
+// of any kind is aimed at it, or the port is named grpc. Online Boutique
+// declares its ports unnamed and probes them with grpc, so the probe is the
+// signal that matters. On the 2026-10-04 soak an HTTPChaos on paymentservice's
+// gRPC port left it unreachable for twelve hours, past a check that looked
+// only at HTTP probes.
+func GRPCPort(c corev1.Container, port int) bool {
+	for _, probe := range []*corev1.Probe{c.LivenessProbe, c.ReadinessProbe, c.StartupProbe} {
+		if probe != nil && probe.GRPC != nil && int(probe.GRPC.Port) == port {
+			return true
+		}
+	}
+	for _, cp := range c.Ports {
+		if int(cp.ContainerPort) == port && strings.HasPrefix(strings.ToLower(cp.Name), "grpc") {
+			return true
+		}
+	}
+	return false
 }

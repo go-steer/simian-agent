@@ -277,7 +277,7 @@ Rules you MUST follow:
 8. NEVER target a workload tagged as "excluded" via topology.
 9. envoy-fault kinds (EnvoyHttpDelay, EnvoyHttpAbort) require the target workload to be flagged envoy=true in the topology snapshot. If the chosen target lacks envoy=true, pick a different workload OR a different fault kind.
 10. Choose each step's "duration" for its own hypothesis, and say why in "duration_rationale": what must be observed, and how long that takes. Faults differ, so durations should too. A one-shot action (PodChaos pod-kill or container-kill) acts once at injection; its duration is only the window for watching recovery, so size it to how long the workload takes to come back. A sustained fault (latency, loss, partition, IO delay, DNS errors, stress, an HTTP abort) acts for the whole duration; size it to how long the effect must persist to show up in probes and alerts, and to test whether it degrades further over time. Do not copy the durations of recent faults by default. Never exceed max_fault_duration in the cycle budget caps — a longer step is refused before it runs.
-11. Chaos Mesh IOChaos and DNSChaos cannot inject into a container listed under readonly_rootfs in the topology; they are refused before they run. IOChaos's "volumePath" must be exactly one of the target container's mounts (listed as container:path); with no mounts listed, do not choose IOChaos for that workload. An HTTPChaos must not cover a path listed under restart_probes (container:port/path) on that port: failing that probe restarts the container, which leaves the port unreachable after the fault ends; choose a path the probe does not use.
+11. Chaos Mesh IOChaos and DNSChaos cannot inject into a container listed under readonly_rootfs in the topology; they are refused before they run. IOChaos's "volumePath" must be exactly one of the target container's mounts (listed as container:path); with no mounts listed, do not choose IOChaos for that workload. An HTTPChaos must not cover a path listed under restart_probes (container:port/path) on that port: failing that probe restarts the container, which leaves the port unreachable after the fault ends; choose a path the probe does not use. Never aim an HTTPChaos at a port listed under grpc_ports (container:port): it cannot carry gRPC; use a NetworkChaos there.
 
 Available fault catalog (kinds you may choose). Each entry shows engine + kind + api_version + tier; entries with a spec template include the canonical engine-native spec shape directly under the entry — copy and adapt.
 
@@ -362,7 +362,7 @@ func summarizeTopology(t *topology.TargetTopology) string {
 		if w.EnvoyInjected {
 			sb.WriteString(" envoy=true")
 		}
-		var readOnly, mounts, probes []string
+		var readOnly, mounts, probes, grpcPorts []string
 		for _, c := range w.Containers {
 			if c.ReadOnlyRootFS {
 				readOnly = append(readOnly, c.Name)
@@ -373,6 +373,9 @@ func summarizeTopology(t *topology.TargetTopology) string {
 			for _, rp := range c.RestartProbes {
 				probes = append(probes, fmt.Sprintf("%s:%d%s", c.Name, rp.Port, rp.Path))
 			}
+			for _, gp := range c.GRPCPorts {
+				grpcPorts = append(grpcPorts, fmt.Sprintf("%s:%d", c.Name, gp))
+			}
 		}
 		if len(readOnly) > 0 {
 			fmt.Fprintf(&sb, " readonly_rootfs=%s", strings.Join(readOnly, ","))
@@ -382,6 +385,9 @@ func summarizeTopology(t *topology.TargetTopology) string {
 		}
 		if len(probes) > 0 {
 			fmt.Fprintf(&sb, " restart_probes=%s", strings.Join(probes, ","))
+		}
+		if len(grpcPorts) > 0 {
+			fmt.Fprintf(&sb, " grpc_ports=%s", strings.Join(grpcPorts, ","))
 		}
 		if pods := t.PodStatus[w.Name]; len(pods) > 0 {
 			ready := 0
@@ -589,17 +595,19 @@ func checkHTTPChaosProbes(m simian.FaultManifest, topo *topology.TargetTopology)
 	if !ok {
 		return nil
 	}
-	if method, _ := m.Spec["method"].(string); method != "" && !strings.EqualFold(method, "GET") {
-		return nil
-	}
+	method, _ := m.Spec["method"].(string)
+	getsProbes := method == "" || strings.EqualFold(method, "GET")
 	pathGlob, _ := m.Spec["path"].(string)
 	for _, w := range topo.Workloads {
 		if !stepTargets(m, w) {
 			continue
 		}
 		for _, c := range w.Containers {
+			if slices.Contains(c.GRPCPorts, int32(port)) {
+				return fmt.Errorf("HTTPChaos on port %d: %s container %q serves gRPC there (grpc_ports, rule 11); HTTPChaos cannot carry gRPC — use a NetworkChaos", int(port), w.Name, c.Name)
+			}
 			for _, rp := range c.RestartProbes {
-				if int(rp.Port) == int(port) && executor.ChaosPathMatches(pathGlob, rp.Path) {
+				if getsProbes && int(rp.Port) == int(port) && executor.ChaosPathMatches(pathGlob, rp.Path) {
 					return fmt.Errorf("HTTPChaos on port %d path %q covers %s container %q restart probe %d%s (rule 11); choose a path the probe does not use",
 						int(port), pathGlob, w.Name, c.Name, rp.Port, rp.Path)
 				}

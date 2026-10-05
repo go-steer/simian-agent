@@ -75,6 +75,9 @@ type ContainerSummary struct {
 	// failing one restarts the container, which takes Chaos Mesh's HTTPChaos
 	// proxy down with it and leaves the port unreachable after the fault.
 	RestartProbes []HTTPProbe `json:"restart_probes,omitempty"`
+	// GRPCPorts are the ports a gRPC probe is aimed at, or named grpc:
+	// Chaos Mesh's HTTPChaos proxy cannot carry that traffic.
+	GRPCPorts []int32 `json:"grpc_ports,omitempty"`
 }
 
 // HTTPProbe is the port and path a kubelet HTTP probe GETs, the port

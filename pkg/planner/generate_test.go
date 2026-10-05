@@ -457,3 +457,21 @@ func TestAnHTTPChaosOverARestartProbeFailsValidation(t *testing.T) {
 		t.Errorf("abort on a path the probe does not use was rejected: %v", err)
 	}
 }
+
+func TestAnHTTPChaosOnAGRPCPortFailsValidation(t *testing.T) {
+	in := sampleInput()
+	in.Topology.Workloads = append(in.Topology.Workloads, topology.Workload{Kind: "Deployment", Name: "paymentservice",
+		Labels:     map[string]string{"app": "paymentservice"},
+		Containers: []topology.ContainerSummary{{Name: "server", GRPCPorts: []int32{50051}}}})
+	if out := summarizeTopology(in.Topology); !strings.Contains(out, "grpc_ports=server:50051") {
+		t.Errorf("topology does not show the gRPC port:\n%s", out)
+	}
+	plan := strings.NewReplacer(
+		`"resource_kind": "PodChaos"`, `"resource_kind": "HTTPChaos"`,
+		`"name": "cartservice"`, `"name": "paymentservice"`,
+		`"spec": {"action": "pod-kill", "mode": "one"}`, `"spec": {"abort": true, "port": 50051, "method": "POST", "target": "Request"}`,
+	).Replace(wellFormedPlanJSON())
+	if _, err := parseAttackPlan([]byte(plan), in); err == nil || !strings.Contains(err.Error(), "serves gRPC") {
+		t.Errorf("err = %v, want a gRPC rejection", err)
+	}
+}

@@ -352,3 +352,16 @@ func TestContainerSummaryRecordsTheProbesThatRestartIt(t *testing.T) {
 		t.Errorf("a TCP probe was recorded: %+v", tcp.RestartProbes)
 	}
 }
+
+func TestContainerSummaryRecordsGRPCPorts(t *testing.T) {
+	grpcProbe := &corev1.Probe{ProbeHandler: corev1.ProbeHandler{GRPC: &corev1.GRPCAction{Port: 50051}}}
+	got := containerSummary(corev1.Container{
+		Name:           "server",
+		Ports:          []corev1.ContainerPort{{ContainerPort: 50051}, {Name: "grpc-admin", ContainerPort: 9000}, {Name: "http", ContainerPort: 8080}},
+		ReadinessProbe: grpcProbe,
+		LivenessProbe:  grpcProbe,
+	})
+	if want := []int32{9000, 50051}; !reflect.DeepEqual(got.GRPCPorts, want) {
+		t.Errorf("GRPCPorts = %v, want %v", got.GRPCPorts, want)
+	}
+}
