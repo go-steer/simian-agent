@@ -44,7 +44,7 @@ image:
   # silently change the running binary.
   # Must be at least the chart's appVersion: the chart renders flags
   # (e.g. --audit-file) an older binary refuses. verify-chart checks it.
-  tag: "0.1.10-dev"
+  tag: "0.1.11-dev"
   # IfNotPresent matches the chart default; explicit for clarity.
   pullPolicy: IfNotPresent
 
@@ -179,6 +179,13 @@ resources:
 # ============================================================
 # Hardening log — what is "baked" and as of when
 # ============================================================
+#
+# 2026-10-05 (chart 0.1.11-dev):
+#   - image pin moved to 0.1.11-dev: the fixes from the 0.1.10-dev soak.
+#     HTTPChaos is refused where it would fail a liveness/startup probe
+#     or aim at a gRPC port (both left workloads unreachable long after
+#     the fault ended), and every cleared Chaos Mesh fault is checked
+#     for its workload's recovery (fault.recovered).
 #
 # 2026-10-03 (chart 0.1.10-dev):
 #   - image pin moved to 0.1.10-dev: the fixes from the 2026-10-01 and
