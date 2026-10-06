@@ -44,7 +44,7 @@ image:
   # silently change the running binary.
   # Must be at least the chart's appVersion: the chart renders flags
   # (e.g. --audit-file) an older binary refuses. verify-chart checks it.
-  tag: "0.1.12"
+  tag: "0.1.13"
   # IfNotPresent matches the chart default; explicit for clarity.
   pullPolicy: IfNotPresent
 
@@ -178,6 +178,12 @@ resources:
 # ============================================================
 # Hardening log — what is "baked" and as of when
 # ============================================================
+#
+# 2026-10-06 (chart 0.1.13):
+#   - image pin moved to 0.1.13: a Chaos Mesh selector that names no
+#     pods is narrowed to the target workload's labels, or the fault is
+#     refused (#197). Before, a fault aimed at one workload with such a
+#     spec could hit any pod in the namespace, excluded ones included.
 #
 # 2026-10-06 (chart 0.1.12):
 #   - image pin moved to 0.1.12. The controller is unchanged from 0.1.11;
