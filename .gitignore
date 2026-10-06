@@ -55,3 +55,8 @@ runs/
 docs/site/public/
 docs/site/resources/
 docs/site/.hugo_build.lock
+
+# `go build ./cmd/simian` from the repo root writes the binary here; a
+# release commit once picked one up (82 MB, in v0.1.14).
+/simian
+/simian-eval
