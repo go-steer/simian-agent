@@ -1,7 +1,7 @@
 ---
 title: "Helm values reference"
 linkTitle: "Helm values"
-weight: 90
+weight: 45
 description: "Every Helm chart value, what it does, and the recommended setting."
 ---
 

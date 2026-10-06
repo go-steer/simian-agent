@@ -1,7 +1,7 @@
 ---
 title: "Efficacy probes"
 linkTitle: "Efficacy probes"
-weight: 75
+weight: 35
 description: "Probes gate Apply so a fault that silently did nothing is never reported as applied."
 ---
 

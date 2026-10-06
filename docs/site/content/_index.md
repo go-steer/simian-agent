@@ -39,14 +39,6 @@ Network chaos that the eBPF dataplane quietly drops fails its efficacy gate inst
 
 ## Install
 
-```bash
-# Build the binary
-make all
-
-# One-shot: create an arena, deploy Online Boutique, capture baseline
-bin/simian sut deploy --namespace boutique-1 --create-arena
-```
-
-See [Getting started](docs/getting-started/) for the first chaos fault, [Deploying with Helm](docs/deploy/) for the in-cluster install, or jump to the [Design doc](docs/design/) for the architecture.
+[Getting started](docs/getting-started/) goes from an empty project to Simian breaking Online Boutique, checking the damage and planning its own faults — on GKE in about 30 minutes, or on kind on your laptop in about 15. Then [Deploying with Helm](docs/deploy/) for your own workloads, or the [Design doc](docs/design/) for the architecture.
 
 {{% /blocks/section %}}

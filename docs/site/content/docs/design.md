@@ -1,7 +1,7 @@
 ---
 title: "Design"
 linkTitle: "Design"
-weight: 20
+weight: 70
 description: "Architecture: Fault Executor chokepoint, LLM Provider contract, chaos drivers, MCP surface."
 ---
 

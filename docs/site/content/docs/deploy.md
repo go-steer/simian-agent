@@ -1,7 +1,7 @@
 ---
 title: "Deploying with Helm"
 linkTitle: "Deploy"
-weight: 60
+weight: 20
 description: "How to install the controller in-cluster via the Helm chart."
 ---
 

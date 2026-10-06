@@ -1,7 +1,7 @@
 ---
 title: "Known limitations"
 linkTitle: "Known limitations"
-weight: 100
+weight: 50
 description: "Cluster-side gotchas, dataplane caveats, and feature limitations contributors should know about."
 ---
 

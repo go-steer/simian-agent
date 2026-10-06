@@ -1,7 +1,7 @@
 ---
 title: "Web UI design"
 linkTitle: "Web UI (design)"
-weight: 60
+weight: 120
 description: "Design doc for a single browser surface serving two purposes: live operator dashboard over `simian serve`, and the eval scorecard over run artifacts."
 ---
 
