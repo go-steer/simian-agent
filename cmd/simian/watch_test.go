@@ -103,3 +103,36 @@ func TestRenderSnapshotWithFaults(t *testing.T) {
 		}
 	}
 }
+
+// get_recent_faults has always wrapped its list; watch read it as a bare list
+// and failed every poll. Both shapes are accepted now.
+func TestWatchParsesTheToolsWrappedLists(t *testing.T) {
+	recent := `{"enabled":true,"recent":[{"fault_uid":"f-1","manifest":{"engine":"chaos-mesh","resource_kind":"PodChaos","targets":[{"namespace":"boutique","name":"cartservice"}]}}]}`
+	cycles := `{"enabled":true,"cycles":[{"namespace":"boutique","outcome":"skipped","reason":"health-gate","detail":"workload Deployment/adservice: 0/1 pods ready"},{"namespace":"boutique","outcome":"completed","hypothesis":"checkout survives a cartservice restart","steps":[{"order":1,"kind":"PodChaos","target":"cartservice","duration":"1m0s","duration_rationale":"recovery takes a minute"}],"applied":["f-1"]}]}`
+	snap, err := parseSnapshot("boutique", "null", recent, cycles)
+	if err != nil {
+		t.Fatalf("parseSnapshot: %v", err)
+	}
+	if len(snap.Recent) != 1 || snap.Recent[0].FaultUID != "f-1" || len(snap.Cycles) != 2 {
+		t.Fatalf("snapshot = %+v", snap)
+	}
+	if bare, err := parseSnapshot("boutique", "", `[{"fault_uid":"f-2"}]`, ""); err != nil || len(bare.Recent) != 1 {
+		t.Errorf("bare list: %+v, %v", bare, err)
+	}
+
+	var buf bytes.Buffer
+	renderSnapshot(&buf, snap)
+	out := buf.String()
+	for _, want := range []string{
+		"AUTONOMOUS CYCLES (2)",
+		"checkout survives a cartservice restart",
+		"1. PodChaos → cartservice for 1m0s",
+		"why that long: recovery takes a minute",
+		"skipped   health-gate: workload Deployment/adservice",
+		"completed PodChaos→cartservice (1 applied)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("watch output lacks %q:\n%s", want, out)
+		}
+	}
+}

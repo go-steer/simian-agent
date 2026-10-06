@@ -830,3 +830,36 @@ func TestPlansThatNeverValidateAreNotRecordedAsTheLLMBeingUnavailable(t *testing
 		t.Error("an invalid plan was recorded as the LLM being unavailable")
 	}
 }
+
+// The cycle view is built from the events the loop actually emits: a real
+// cycle and a gated one, read back through audit.CycleLog.
+func TestTheLoopsCyclesReadBackFromItsOwnEvents(t *testing.T) {
+	l, au := newLoopUnderTest(t, planJSON(1), &recordingExecutor{}, planner.Budget{
+		MaxFaultsPerCycle: 5, MaxConcurrentFaults: 5, MaxSeverityPerCycle: simian.TierNamespace,
+	})
+	log := audit.NewCycleLog(0)
+	l.Auditor = audit.Multi{au, log}
+	if _, _, err := l.RunOnce(context.Background(), "boutique"); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	l.Health = failingGate{reason: "workload Deployment/adservice: 0/1 pods ready"}
+	if _, _, err := l.RunOnce(context.Background(), "boutique"); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	rows := log.Recent("boutique", 0)
+	if len(rows) != 2 {
+		t.Fatalf("cycles = %+v, want 2", rows)
+	}
+	gated, ran := rows[0], rows[1]
+	if gated.Outcome != audit.CycleSkipped || gated.Reason != "health-gate" || gated.Detail != "workload Deployment/adservice: 0/1 pods ready" {
+		t.Errorf("gated cycle = %+v", gated)
+	}
+	if ran.Outcome != audit.CycleCompleted || ran.Hypothesis != "x" || len(ran.Steps) != 1 || ran.Steps[0].Kind != "PodChaos" ||
+		ran.Steps[0].DurationRationale == "" || len(ran.Applied) != 1 {
+		t.Errorf("completed cycle = %+v", ran)
+	}
+}
+
+type failingGate struct{ reason string }
+
+func (g failingGate) Check(context.Context, string) error { return errors.New(g.reason) }

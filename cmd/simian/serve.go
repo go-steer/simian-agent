@@ -98,16 +98,24 @@ func newServeCmd() *cobra.Command {
 			// process left running can be adopted into it (#172).
 			takeOverFaults := func(context.Context, simian.Auditor, func(audit.FaultRow) bool) {}
 			var pastFaults []audit.FaultRow
+			// What the loop decided, cycle by cycle, for get_recent_cycles
+			// and simian watch. Seeded from the audit file so a restart does
+			// not wipe it.
+			cycleLog := audit.NewCycleLog(0)
 			if auditFile != "" {
-				fileAuditor, rows, takeOver, err := openAuditFile(auditFile, auditFileMaxBytes, logger)
+				fileAuditor, records, takeOver, err := openAuditFile(auditFile, auditFileMaxBytes, logger)
 				if err != nil {
 					return err
 				}
 				defer func() { _ = fileAuditor.Close() }()
 				auditor = audit.Multi{auditor, fileAuditor}
 				takeOverFaults = takeOver
-				pastFaults = rows
+				pastFaults = audit.Faults(records)
+				for _, r := range records {
+					cycleLog.Add(r)
+				}
 			}
+			auditor = audit.Multi{auditor, cycleLog}
 
 			// Background loops that emit audit events. Deferred after the
 			// audit file's Close, so it runs first: stop them and let them
@@ -333,6 +341,7 @@ func newServeCmd() *cobra.Command {
 			srv := mcp.New(exec, drivers, translator, sutMgr, version,
 				mcp.WithTopology(disco2),
 				mcp.WithRecents(exec),
+				mcp.WithCycles(cycleLog),
 				mcp.WithBaselineEstablisher(establisher),
 			)
 
@@ -538,8 +547,7 @@ func waitForWorkers(wg *sync.WaitGroup, limit time.Duration, logger *slog.Logger
 }
 
 // openAuditFile reads what a previous process left in the audit file, opens
-// it for appending, and returns what the file records of each fault and a
-// function that takes over the faults that
+// it for appending, and returns the records it read and a function that takes over the faults that
 // process left open. The taking over is deferred to the caller so the events
 // go through every sink, not just the file, and so the lease registry exists
 // by then.
@@ -548,7 +556,7 @@ func waitForWorkers(wg *sync.WaitGroup, limit time.Duration, logger *slog.Logger
 // lease.adopted event and is from then on this process's to count and clear.
 // Every other open fault — ended, or not adoptable — is closed on the record
 // as untracked-after-restart. A nil adopt closes everything.
-func openAuditFile(path string, maxBytes int64, logger *slog.Logger) (*audit.FileAuditor, []audit.FaultRow, func(context.Context, simian.Auditor, func(audit.FaultRow) bool), error) {
+func openAuditFile(path string, maxBytes int64, logger *slog.Logger) (*audit.FileAuditor, []audit.Record, func(context.Context, simian.Auditor, func(audit.FaultRow) bool), error) {
 	fa, err := audit.OpenFile(path, maxBytes, func(err error) {
 		logger.Error("simian serve: audit file", slog.String("error", err.Error()))
 	})
@@ -573,7 +581,7 @@ func openAuditFile(path string, maxBytes int64, logger *slog.Logger) (*audit.Fil
 		records = append(records, recs...)
 	}
 	rows := audit.Faults(records)
-	return fa, rows, func(ctx context.Context, a simian.Auditor, adopt func(audit.FaultRow) bool) {
+	return fa, records, func(ctx context.Context, a simian.Auditor, adopt func(audit.FaultRow) bool) {
 		var left []audit.FaultRow
 		adopted := 0
 		for _, r := range rows {

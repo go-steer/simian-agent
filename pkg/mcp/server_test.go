@@ -23,6 +23,7 @@ import (
 
 	mcpsdk "github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/go-steer/simian-agent/pkg/audit"
 	"github.com/go-steer/simian-agent/pkg/executor"
 	"github.com/go-steer/simian-agent/pkg/simian"
 	"github.com/go-steer/simian-agent/pkg/sut"
@@ -117,6 +118,8 @@ func callTool(t *testing.T, s *Server, name string, args map[string]any) string 
 		res, err = s.handleGetMetrics(context.Background(), req)
 	case "get_recent_faults":
 		res, err = s.handleGetRecentFaults(context.Background(), req)
+	case "get_recent_cycles":
+		res, err = s.handleGetRecentCycles(context.Background(), req)
 	case "establish_baseline":
 		res, err = s.handleEstablishBaseline(context.Background(), req)
 	case "get_baseline":
@@ -276,5 +279,26 @@ func TestEstablishBaseline_NamespaceRequired(t *testing.T) {
 	}
 	if fe.called != 0 {
 		t.Errorf("establisher should not have been called; got called=%d", fe.called)
+	}
+}
+
+func TestGetRecentCycles(t *testing.T) {
+	off := callTool(t, newServer(t), "get_recent_cycles", map[string]any{"namespace": "ns"})
+	if off != `{"cycles":[],"enabled":false}` {
+		t.Errorf("no lookup: %s", off)
+	}
+	log := audit.NewCycleLog(0)
+	log.Add(audit.Record{TS: time.Now(), Event: audit.EventCycleStarted, Payload: map[string]any{"namespace": "ns"}})
+	log.Add(audit.Record{TS: time.Now(), Event: audit.EventCycleSkipped, Reason: "budget-full", Payload: map[string]any{"namespace": "ns"}})
+	got := callTool(t, newServer(t, WithCycles(log)), "get_recent_cycles", map[string]any{"namespace": "ns", "limit": float64(3)})
+	var parsed struct {
+		Enabled bool             `json:"enabled"`
+		Cycles  []audit.CycleRow `json:"cycles"`
+	}
+	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v; raw=%q", err, got)
+	}
+	if !parsed.Enabled || len(parsed.Cycles) != 1 || parsed.Cycles[0].Reason != "budget-full" {
+		t.Errorf("got %+v", parsed)
 	}
 }
