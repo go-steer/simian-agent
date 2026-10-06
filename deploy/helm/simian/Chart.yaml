@@ -3,7 +3,7 @@ name: simian
 description: Simian Agent — AI-native chaos engineering orchestrator (M1)
 type: application
 version: 0.1.11
-appVersion: "0.1.11-dev"
+appVersion: "0.1.11"
 keywords:
   - chaos-engineering
   - ai
