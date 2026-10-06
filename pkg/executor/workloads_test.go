@@ -25,7 +25,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/go-steer/simian-agent/internal/testutil"
 	"github.com/go-steer/simian-agent/pkg/audit"
+	"github.com/go-steer/simian-agent/pkg/lease"
 	"github.com/go-steer/simian-agent/pkg/simian"
 )
 
@@ -78,11 +80,14 @@ func TestLabelsTheManifestBringsAreLeftAlone(t *testing.T) {
 	}
 }
 
+// When the spec says which pods it means, a target whose workload cannot be
+// read is recorded and the fault goes ahead on the spec's own selector.
 func TestAWorkloadThatCannotBeResolvedIsRecordedNotFatal(t *testing.T) {
 	prober := &fakeProber{}
 	exec, _, auditor, _ := newProbedExecutor(t, prober, WithWorkloadSelectors(KubernetesWorkloadSelectors{Client: fake.NewClientset()}))
 
 	m := goodManifest()
+	m.Spec["selector"] = map[string]any{"labelSelectors": map[string]any{"app": "paymentservice"}}
 	m.Probes = []simian.ProbeSpec{sotProbe("reachable")}
 	if _, err := exec.Apply(context.Background(), m); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -129,5 +134,71 @@ func TestKubernetesWorkloadSelectors(t *testing.T) {
 		if err != nil || !maps.Equal(got, tc.want) {
 			t.Errorf("%s/%s = %v, %v; want %v", tc.kind, tc.name, got, err, tc.want)
 		}
+	}
+}
+
+// Getting-started validation, 2026-10-06: `simian chaos --workload
+// productcatalogservice --kind PodChaos --spec '{"action":"pod-kill","mode":"one"}'`
+// resolved the target's labels and left the selector naming only the
+// namespace, and Chaos Mesh killed a frontend pod.
+func TestASelectorThatNamesNoPodsIsNarrowedToTheTarget(t *testing.T) {
+	client := fake.NewClientset(deployment("online-boutique", "productcatalogservice",
+		&metav1.LabelSelector{MatchLabels: map[string]string{"app": "productcatalogservice"}}))
+	prober := &fakeProber{}
+	exec, driver, auditor, _ := newProbedExecutor(t, prober, WithWorkloadSelectors(KubernetesWorkloadSelectors{Client: client}))
+
+	m := goodManifest()
+	m.ResourceKind = "PodChaos"
+	m.Spec = map[string]any{"action": "pod-kill", "mode": "one"}
+	m.Targets = []simian.TargetRef{{Namespace: "online-boutique", Name: "productcatalogservice"}}
+	if _, err := exec.Apply(context.Background(), m); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	applied := driver.AppliedCopy()
+	sel, _ := applied[len(applied)-1].Spec["selector"].(map[string]any)
+	ls, _ := sel["labelSelectors"].(map[string]any)
+	if ls["app"] != "productcatalogservice" {
+		t.Fatalf("the driver got selector %v, want it narrowed to app=productcatalogservice", sel)
+	}
+	validated, _ := auditor.FindEvent(audit.EventExecutorValidated)
+	if got, _ := validated.Payload["selector_labels_from_targets"].(map[string]string); got["app"] != "productcatalogservice" {
+		t.Errorf("validated payload = %v, want the narrowing recorded", validated.Payload)
+	}
+}
+
+func TestASelectorThatNamesNoPodsIsRefusedWhenItsTargetCannotBeResolved(t *testing.T) {
+	prober := &fakeProber{}
+	exec, driver, _, _ := newProbedExecutor(t, prober, WithWorkloadSelectors(KubernetesWorkloadSelectors{Client: fake.NewClientset()}))
+	m := goodManifest() // NetworkChaos, selector-less, targets paymentservice by name
+	before := len(driver.AppliedCopy())
+	_, err := exec.Apply(context.Background(), m)
+	if err == nil || !strings.Contains(err.Error(), "every pod in the namespace") {
+		t.Fatalf("err = %v, want a refusal that names the namespace-wide reach", err)
+	}
+	if len(driver.AppliedCopy()) != before {
+		t.Error("the driver was called")
+	}
+}
+
+// A fault aimed at a namespace and no workload in it is a legitimate choice —
+// a random pod — but not where it would reach excluded workloads.
+func TestANamespaceWideSelectorIsRefusedWhereThereAreExclusions(t *testing.T) {
+	m := goodManifest()
+	m.ResourceKind = "PodChaos"
+	m.Spec = map[string]any{"action": "pod-kill", "mode": "one"}
+	m.Targets = []simian.TargetRef{{Namespace: "online-boutique"}}
+
+	open := New(DefaultConfig(), map[simian.Engine]simian.ChaosDriver{simian.EngineChaosMesh: &testutil.FakeDriver{EngineName: simian.EngineChaosMesh}},
+		lease.NewRegistry("h"), &testutil.FakeAuditor{}, &StaticEligibility{Eligible: map[string]bool{"online-boutique": true}})
+	if _, err := open.Apply(context.Background(), m); err != nil {
+		t.Fatalf("no exclusions: Apply: %v", err)
+	}
+
+	guarded := New(DefaultConfig(), map[simian.Engine]simian.ChaosDriver{simian.EngineChaosMesh: &testutil.FakeDriver{EngineName: simian.EngineChaosMesh}},
+		lease.NewRegistry("h"), &testutil.FakeAuditor{}, &StaticEligibility{Eligible: map[string]bool{"online-boutique": true},
+			Exclusions: map[string][]string{"online-boutique": {"loadgenerator"}}})
+	_, err := guarded.Apply(context.Background(), m)
+	if ee := asExecutorError(t, err); ee.Reason != simian.ReasonWorkloadExcluded || !strings.Contains(err.Error(), "loadgenerator") {
+		t.Fatalf("err = %v, want workload-excluded naming loadgenerator", err)
 	}
 }
