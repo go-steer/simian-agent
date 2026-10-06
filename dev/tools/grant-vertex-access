@@ -31,7 +31,7 @@
 # when the cluster is deleted.
 set -euo pipefail
 
-project="${GOOGLE_CLOUD_PROJECT:-gke-demos-345619}"
+project="${GOOGLE_CLOUD_PROJECT:?set GOOGLE_CLOUD_PROJECT to the project that runs the cluster}"
 namespace="${SIMIAN_NAMESPACE:-simian-system}"
 ksa="${SIMIAN_KSA:-simian-controller}"
 role="roles/aiplatform.user"

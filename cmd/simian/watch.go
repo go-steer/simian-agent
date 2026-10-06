@@ -89,7 +89,7 @@ Examples:
 			}
 		},
 	}
-	cmd.Flags().StringVar(&mcpURL, "mcp-url", "http://localhost:8081/sse", "Simian MCP/SSE endpoint URL")
+	cmd.Flags().StringVar(&mcpURL, "mcp-url", defaultMCPURL(), "Simian MCP/SSE endpoint URL ($SIMIAN_MCP_URL, else http://localhost:8081/sse)")
 	cmd.Flags().StringVar(&ns, "namespace", "", "Namespace to watch (required)")
 	cmd.Flags().DurationVar(&pollInterval, "interval", 3*time.Second, "Poll interval")
 	cmd.Flags().IntVar(&limit, "recent", 8, "Number of recent faults to show")

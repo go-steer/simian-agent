@@ -87,6 +87,8 @@ func (c *Cluster) InstallChaosMesh(ctx context.Context) error {
 		"--create-namespace",
 		"--set", "chaosDaemon.runtime=containerd",
 		"--set", "chaosDaemon.socketPath=/run/containerd/containerd.sock",
+		// Without it a DNSChaos applies and changes nothing.
+		"--set", "dnsServer.create=true",
 		"--wait",
 		"--timeout", "10m",
 	)

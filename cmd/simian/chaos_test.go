@@ -91,3 +91,14 @@ func TestLoadSpecInvalidJSONReturnsError(t *testing.T) {
 		t.Error("expected error for invalid JSON")
 	}
 }
+
+func TestTheControllerURLComesFromTheEnvironmentWhenSet(t *testing.T) {
+	t.Setenv("SIMIAN_MCP_URL", "")
+	if got := defaultMCPURL(); got != "http://localhost:8081/sse" {
+		t.Errorf("unset: %q", got)
+	}
+	t.Setenv("SIMIAN_MCP_URL", "http://localhost:18081/sse")
+	if got := defaultMCPURL(); got != "http://localhost:18081/sse" {
+		t.Errorf("set: %q", got)
+	}
+}

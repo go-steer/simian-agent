@@ -45,7 +45,7 @@ fail=0
 # manifest for the given value overrides.
 render() {
   local name="$1"; shift
-  if ! helm template "$name" "$CHART" "$@" 2>&1; then
+  if ! helm template "$name" "$CHART" --set llm.vertex.project=verify-project "$@" 2>&1; then
     echo "verify-chart: helm template failed for case '$name'" >&2
     exit 1
   fi
@@ -128,6 +128,18 @@ reject_arg "audit-off" "$out" "--audit-file="
 out="$(render sim-audit-emptydir --set audit.file.persistence.enabled=false)"
 if ! grep -qF "mountPath: /var/lib/simian" <<<"$out" || ! grep -qF "emptyDir: {}" <<<"$out" || grep -qF "claimName: simian-audit" <<<"$out"; then
   echo "✗ audit-emptydir: expected an emptyDir mounted at /var/lib/simian and no claim" >&2
+  fail=1
+fi
+
+echo "▸ an install that names no Vertex project refuses to render"
+# The chart used to default to the development project, so an install that
+# forgot the flag sent its LLM calls there.
+if helm template sim-noproject "$CHART" >/dev/null 2>&1; then
+  echo "✗ vertex-project: rendered with llm.vertex.enabled and no llm.vertex.project" >&2
+  fail=1
+fi
+if ! helm template sim-apikey "$CHART" --set llm.vertex.enabled=false --set llm.apiKey.enabled=true >/dev/null 2>&1; then
+  echo "✗ vertex-project: the API-key path should not need a Vertex project" >&2
   fail=1
 fi
 
