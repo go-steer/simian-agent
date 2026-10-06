@@ -18,7 +18,11 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/simian ./cmd/simian
+# The release workflow passes the tag without its leading v (0.1.14); a
+# local build says dev. Stamped into the binary so the controller reports
+# the version it is — simian_build_info, the MCP server's version.
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/simian ./cmd/simian
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/simian-envoy-agent ./cmd/simian-envoy-agent
 
 # The image carries two binaries: the simian controller (ENTRYPOINT)
