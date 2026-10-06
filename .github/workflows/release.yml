@@ -63,10 +63,12 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           # Strip the leading 'v' from semver tags so the image tag matches the
           # Helm chart's appVersion (which is "0.1.0-dev", not "v0.1.0-dev").
-          # Plus a "latest" floating tag for the most recent release.
+          # Plus a "latest" floating tag for the most recent stable release:
+          # a tag with no prerelease suffix (v0.1.11, not v0.1.11-dev).
+          # {{is_default_branch}} is false on a tag build, so it never moved.
           tags: |
             type=match,pattern=v(.*),group=1
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
 
       - uses: docker/build-push-action@v6
         with:
