@@ -1,7 +1,7 @@
 ---
 title: "CLI reference"
 linkTitle: "CLI reference"
-weight: 80
+weight: 40
 description: "Every flag on every simian subcommand."
 ---
 

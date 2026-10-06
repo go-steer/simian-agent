@@ -1,7 +1,7 @@
 ---
 title: "Requirements"
 linkTitle: "Requirements"
-weight: 30
+weight: 80
 description: "Scope, operating modes, deployment postures, and the R-* requirements catalog."
 ---
 

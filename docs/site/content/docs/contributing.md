@@ -1,7 +1,7 @@
 ---
 title: "Contributing"
 linkTitle: "Contributing"
-weight: 110
+weight: 130
 description: "How to file issues, structure PRs, and keep our chart values overlay honest."
 ---
 

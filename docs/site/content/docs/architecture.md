@@ -1,7 +1,7 @@
 ---
 title: "Architecture at a glance"
 linkTitle: "Architecture at a glance"
-weight: 12
+weight: 60
 description: "Three entry points, who launches whom, and which credentials each one holds."
 ---
 

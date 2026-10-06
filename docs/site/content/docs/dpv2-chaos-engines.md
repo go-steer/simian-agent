@@ -1,7 +1,7 @@
 ---
 title: "DPv2-compatible chaos engines"
 linkTitle: "DPv2 chaos engines"
-weight: 50
+weight: 110
 description: "Why we ship network-policy + envoy-fault engines for GKE Dataplane V2 clusters."
 ---
 

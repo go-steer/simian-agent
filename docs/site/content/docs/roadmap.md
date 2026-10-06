@@ -1,7 +1,7 @@
 ---
 title: "Roadmap"
 linkTitle: "Roadmap"
-weight: 40
+weight: 90
 description: "Phased development roadmap — what's shipped, what's next."
 ---
 

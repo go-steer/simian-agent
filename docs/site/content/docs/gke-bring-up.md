@@ -1,7 +1,7 @@
 ---
 title: "GKE bring-up"
 linkTitle: "GKE bring-up"
-weight: 15
+weight: 55
 description: "Pointing Simian at a real GKE cluster, and finding out which faults actually land on it."
 ---
 

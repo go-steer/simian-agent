@@ -1,7 +1,7 @@
 ---
 title: "Eval substrate plan"
 linkTitle: "Eval substrate (plan)"
-weight: 45
+weight: 100
 description: "Plan for turning Simian into the fault plane and ground-truth source for evaluating the go-steer agentic SRE stack."
 ---
 

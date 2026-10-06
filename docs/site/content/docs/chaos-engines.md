@@ -1,7 +1,7 @@
 ---
 title: "Using the chaos engines"
 linkTitle: "Chaos engines"
-weight: 70
+weight: 30
 description: "Directed and autonomous patterns for chaos-mesh, network-policy, envoy-fault, and kube-state."
 ---
 

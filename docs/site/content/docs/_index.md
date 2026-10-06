@@ -11,7 +11,7 @@ You're in the `simian-agent` reference docs. The site root has the marketing pit
 
 ## Start here
 
-**Brand new?** → [Getting started]({{< relref "getting-started.md" >}}) walks from `make all` through your first directed-chaos fault and your first autonomous-mode plan against an Online Boutique deployment.
+**Brand new?** → [Getting started]({{< relref "getting-started.md" >}}) takes you from an empty project to watching Simian break Online Boutique, check the damage and plan its own faults — on GKE (about 30 minutes) or kind (about 15). Written as a runbook an agent can follow too.
 
 **Installing in-cluster?** → [Deploying with Helm]({{< relref "deploy.md" >}}) covers the chart install patterns and the recommended overlay.
 
@@ -24,7 +24,7 @@ You're in the `simian-agent` reference docs. The site root has the marketing pit
 ## Reference index
 
 ### Getting things done
-- **[Getting started]({{< relref "getting-started.md" >}})** — first chaos in under 10 minutes.
+- **[Getting started]({{< relref "getting-started.md" >}})** — GKE or kind, end to end, every step checked.
 - **[Deploying with Helm]({{< relref "deploy.md" >}})** — in-cluster install patterns.
 - **[GKE bring-up]({{< relref "gke-bring-up.md" >}})** — the first run against a real GKE cluster, and what lands on Dataplane V2.
 - **[Using the chaos engines]({{< relref "chaos-engines.md" >}})** — directed and autonomous patterns per engine.
