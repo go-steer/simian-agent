@@ -108,7 +108,7 @@ run-serve: build
 #   make image                          # → ghcr.io/go-steer/simian-agent:dev
 #   make image VERSION=v0.1.0-dev       # → ghcr.io/go-steer/simian-agent:v0.1.0-dev
 image:
-	docker build -t $(IMAGE) .
+	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE) .
 
 # Build and push the image. Requires `docker login $(IMAGE_REGISTRY)` first
 # (for ghcr.io: `echo $$GITHUB_TOKEN | docker login ghcr.io -u <user> --password-stdin`).

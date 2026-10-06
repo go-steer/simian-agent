@@ -137,6 +137,18 @@ func (r *Recorder) Emit(_ context.Context, e simian.AuditEvent) {
 	}
 }
 
+// Remember tells the Recorder what an adopted fault is. A fault applied by a
+// previous controller process is in this one's lease registry but in none of
+// the events this process saw, so without it the fault's end and recovery
+// check are counted with empty labels.
+func (r *Recorder) Remember(af simian.ActiveFault) {
+	ns := ""
+	if n := af.Manifest.TargetNamespaces(); len(n) > 0 {
+		ns = n[0]
+	}
+	r.remember(af.FaultUID, faultInfo{namespace: ns, kind: af.Manifest.ResourceKind})
+}
+
 func (r *Recorder) end(e simian.AuditEvent, outcome string) {
 	if e.FaultUID == "" {
 		return

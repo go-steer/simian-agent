@@ -111,3 +111,18 @@ func TestCyclesAndTheEndpoint(t *testing.T) {
 type fakeActive []simian.ActiveFault
 
 func (f fakeActive) ListActive(context.Context, string) ([]simian.ActiveFault, error) { return f, nil }
+
+// A fault the previous controller applied is known to this one only through
+// adoption; its end and recovery are still counted against its arena and kind.
+func TestAnAdoptedFaultIsCountedWithItsLabels(t *testing.T) {
+	r := New("v-test")
+	r.Remember(simian.ActiveFault{FaultUID: "f-old", Manifest: manifest("PodChaos", "boutique", "productcatalogservice")})
+	r.Emit(context.Background(), simian.AuditEvent{Event: audit.EventLeaseExpired, FaultUID: "f-old", Reason: "deadline-reached"})
+	r.Emit(context.Background(), simian.AuditEvent{Event: audit.EventFaultRecovered, FaultUID: "f-old", Payload: map[string]any{"passed": true}})
+	if got := testutil.ToFloat64(r.ended.WithLabelValues("boutique", "PodChaos", "expired", "deadline-reached")); got != 1 {
+		t.Errorf("expired = %v, want 1 under boutique/PodChaos", got)
+	}
+	if got := testutil.ToFloat64(r.recovered.WithLabelValues("boutique", "PodChaos", "true")); got != 1 {
+		t.Errorf("recovered = %v, want 1 under boutique/PodChaos", got)
+	}
+}

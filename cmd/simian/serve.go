@@ -267,8 +267,13 @@ func newServeCmd() *cobra.Command {
 				logger.Info("simian serve: adopted live faults found in the cluster", slog.Int("faults", n))
 			}
 			// A fault adopted from the cluster alone is in no history yet;
-			// the planner should still see it running (#178).
+			// the planner should still see it running (#178). The metrics
+			// need its kind and namespace too, which this process never saw
+			// an event for.
 			for _, af := range registry.List("") {
+				if recorder != nil {
+					recorder.Remember(af)
+				}
 				if !history.Has(af.FaultUID) {
 					history.Push(executor.RecentFault{FaultUID: af.FaultUID, Manifest: af.Manifest, AppliedAt: af.AppliedAt})
 				}
