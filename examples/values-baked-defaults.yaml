@@ -44,7 +44,7 @@ image:
   # silently change the running binary.
   # Must be at least the chart's appVersion: the chart renders flags
   # (e.g. --audit-file) an older binary refuses. verify-chart checks it.
-  tag: "0.1.13"
+  tag: "0.1.14"
   # IfNotPresent matches the chart default; explicit for clarity.
   pullPolicy: IfNotPresent
 
@@ -178,6 +178,11 @@ resources:
 # ============================================================
 # Hardening log — what is "baked" and as of when
 # ============================================================
+#
+# 2026-10-06 (chart 0.1.14):
+#   - image pin moved to 0.1.14: what autonomous mode decided is visible
+#     (simian watch, audit export --cycles, get_recent_cycles), and the
+#     controller serves Prometheus metrics on :9090 (metrics.enabled).
 #
 # 2026-10-06 (chart 0.1.13):
 #   - image pin moved to 0.1.13: a Chaos Mesh selector that names no
