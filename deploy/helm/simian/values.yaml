@@ -32,7 +32,10 @@ llm:
   model: ""              # default: gemini-2.5-pro
   vertex:
     enabled: true
-    project: gke-demos-345619
+    # Required when enabled: the GCP project whose Vertex AI the controller
+    # calls, through its Workload Identity. No default — an install that
+    # forgot it fails to render rather than calling someone else's project.
+    project: ""
     location: us-central1
   apiKey:
     enabled: false

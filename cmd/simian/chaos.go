@@ -110,7 +110,7 @@ Examples:
 			}
 		},
 	}
-	cmd.Flags().StringVar(&mcpURL, "mcp-url", "http://localhost:8081/sse", "Simian MCP/SSE endpoint URL")
+	cmd.Flags().StringVar(&mcpURL, "mcp-url", defaultMCPURL(), "Simian MCP/SSE endpoint URL ($SIMIAN_MCP_URL, else http://localhost:8081/sse)")
 	cmd.Flags().StringVar(&intent, "intent", "", "Plain-text chaos intent (LLM-translated)")
 	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Path to a JSON FaultManifest to submit verbatim")
 	cmd.Flags().StringVar(&engine, "engine", "chaos-mesh", "Chaos engine (chaos-mesh|network-policy|envoy-fault|kube-state)")
@@ -153,6 +153,16 @@ func withResponseTimeout(d time.Duration) mcpClientOption {
 	return func(o *mcpClientOpts) {
 		o.transportOpts = append(o.transportOpts, transport.WithResponseTimeout(d))
 	}
+}
+
+// defaultMCPURL is where the CLI looks for the controller unless --mcp-url
+// says otherwise: $SIMIAN_MCP_URL, so a session (or an agent following the
+// getting-started runbook) sets it once, else the port-forward default.
+func defaultMCPURL() string {
+	if v := os.Getenv("SIMIAN_MCP_URL"); v != "" {
+		return v
+	}
+	return "http://localhost:8081/sse"
 }
 
 func newMCPClient(ctx context.Context, baseURL string, opts ...mcpClientOption) (*mcpclient.Client, error) {

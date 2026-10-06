@@ -90,7 +90,7 @@ Examples:
 			return callTool(ctx, cli, "establish_baseline", args)
 		},
 	}
-	cmd.Flags().StringVar(&mcpURL, "mcp-url", "http://localhost:8081/sse", "Simian MCP/SSE endpoint URL")
+	cmd.Flags().StringVar(&mcpURL, "mcp-url", defaultMCPURL(), "Simian MCP/SSE endpoint URL ($SIMIAN_MCP_URL, else http://localhost:8081/sse)")
 	cmd.Flags().StringVar(&ns, "namespace", "", "Target arena namespace (required)")
 	cmd.Flags().StringVar(&sut, "sut", "", "Optional registered SUT name to deploy before baselining. Omit for topology-driven baseline of existing workloads.")
 	return cmd
@@ -118,7 +118,7 @@ func newBaselineShowCmd() *cobra.Command {
 			return callTool(ctx, cli, "get_baseline", map[string]any{"namespace": ns})
 		},
 	}
-	cmd.Flags().StringVar(&mcpURL, "mcp-url", "http://localhost:8081/sse", "Simian MCP/SSE endpoint URL")
+	cmd.Flags().StringVar(&mcpURL, "mcp-url", defaultMCPURL(), "Simian MCP/SSE endpoint URL ($SIMIAN_MCP_URL, else http://localhost:8081/sse)")
 	cmd.Flags().StringVar(&ns, "namespace", "", "Namespace whose cached baseline to print (required)")
 	return cmd
 }

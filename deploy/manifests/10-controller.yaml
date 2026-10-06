@@ -110,5 +110,5 @@ metadata:
   name: simian-config
   namespace: simian-system
 data:
-  googleCloudProject: gke-demos-345619
+  googleCloudProject: REPLACE-WITH-YOUR-GCP-PROJECT
   vertexLocation: us-central1

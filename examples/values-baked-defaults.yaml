@@ -65,15 +65,14 @@ sutInController:
 #   - Workload Identity binding to a GCP service account with
 #     roles/aiplatform.user is auditable and revokable per pod.
 #
-# Fill `project` and `location` for your install before applying
-# this overlay. The `gke-demos-345619` value below is a placeholder
-# matching the simian-test cluster used during development.
+# `project` is deliberately empty: pass --set llm.vertex.project=<your GCP
+# project> with this overlay (the chart refuses to render without it).
 llm:
   provider: gemini
   model: ""              # default gemini-2.5-pro
   vertex:
     enabled: true
-    project: gke-demos-345619     # REPLACE with your GCP project
+    project: ""          # REQUIRED: --set llm.vertex.project=<your GCP project>
     location: us-central1
   apiKey:
     enabled: false       # prefer Vertex/WI; flip if your cluster lacks WI

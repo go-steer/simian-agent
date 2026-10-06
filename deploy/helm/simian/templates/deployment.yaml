@@ -68,7 +68,7 @@ spec:
             - name: GOOGLE_GENAI_USE_VERTEXAI
               value: "true"
             - name: GOOGLE_CLOUD_PROJECT
-              value: {{ .Values.llm.vertex.project | quote }}
+              value: {{ required "llm.vertex.project is required while llm.vertex.enabled is true: --set llm.vertex.project=<your GCP project>, or set llm.vertex.enabled=false and use llm.apiKey" .Values.llm.vertex.project | quote }}
             - name: VERTEX_LOCATION
               value: {{ .Values.llm.vertex.location | quote }}
             {{- end }}

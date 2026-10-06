@@ -36,7 +36,7 @@ For installs that want a known-good starting point rather than the chart default
 | `llm.provider` | `gemini` | `gemini` or `stub`. |
 | `llm.model` | `""` (default `gemini-2.5-pro`) | |
 | `llm.vertex.enabled` | `true` | Vertex via Workload Identity (production-recommended). |
-| `llm.vertex.project` | `gke-demos-345619` | Replace for your install. |
+| `llm.vertex.project` | `""` | **Required** while `llm.vertex.enabled`: the GCP project whose Vertex AI the controller calls. The chart refuses to render without it. |
 | `llm.vertex.location` | `us-central1` | |
 | `llm.apiKey.enabled` | `false` | Alternative to Vertex; mounts a Kubernetes Secret. |
 | `llm.apiKey.secretRef` / `secretKey` | `simian-llm` / `geminiApiKey` | |
