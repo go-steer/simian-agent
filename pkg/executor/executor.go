@@ -184,6 +184,11 @@ func (e *Executor) apply(ctx context.Context, m simian.FaultManifest) (string, e
 	// actually be given, not the one the manifest arrived with. Labels are
 	// filled in first because the default probes select pods by them.
 	labelled, unlabelled := e.resolveTargetLabels(ctx, &m)
+	podLabels, err := e.narrowPodSelector(ctx, &m)
+	if err != nil {
+		e.rejected(ctx, m, err)
+		return "", err
+	}
 	attached := e.attachDefaultProbes(&m)
 
 	validated := simian.AuditEvent{
@@ -192,8 +197,12 @@ func (e *Executor) apply(ctx context.Context, m simian.FaultManifest) (string, e
 		PlanID:   m.PlanID,
 		Mode:     m.Source,
 	}
-	if len(attached) > 0 || len(narrowed) > 0 || len(labelled) > 0 || len(unlabelled) > 0 {
+	if len(attached) > 0 || len(narrowed) > 0 || len(labelled) > 0 || len(unlabelled) > 0 || podLabels != nil {
 		validated.Payload = map[string]any{}
+	}
+	if podLabels != nil {
+		// The spec's selector named no pods; it now names the targets'.
+		validated.Payload["selector_labels_from_targets"] = podLabels
 	}
 	if len(labelled) > 0 {
 		// The targets arrived as names; the labels are the workloads' own
