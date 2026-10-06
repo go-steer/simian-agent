@@ -39,9 +39,13 @@ ci:
 
 # Two binaries: the operator, and the evaluation harness that drives packs
 # against a subject. The harness stays out of the operator image on purpose.
+# The CLI reports the tag it was built from (0.1.15), or how far past one
+# (0.1.15-3-gabc1234) — not the 0.1.0-dev compiled into main.go.
+BUILD_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
+
 build:
 	@mkdir -p bin
-	$(GO) build -o $(BIN) ./cmd/simian
+	$(GO) build -ldflags "-X main.version=$(BUILD_VERSION)" -o $(BIN) ./cmd/simian
 	$(GO) build -o $(EVAL_BIN) ./cmd/simian-eval
 
 test:

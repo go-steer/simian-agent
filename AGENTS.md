@@ -35,7 +35,7 @@ Rules:
 - **Autonomous mode spends LLM calls and keeps injecting faults.** Turn it off
   (step 9's last command) before leaving the user's cluster, unless they asked
   for it to keep running.
-- **Clean up what you created** (step 11), including
+- **Clean up what you created** (step 12), including
   `dev/tools/grant-vertex-access --revoke` on GKE: the IAM grant is
   project-wide and outlives the cluster. Report anything you could not delete.
 - **Pin the release** the runbook names (`git clone --branch v…`). The chart,
@@ -44,8 +44,8 @@ Rules:
   without the `chaos-mesh.org` API group — see "Agents that triage the
   cluster" in [`docs/site/content/docs/deploy.md`](docs/site/content/docs/deploy.md).
 
-When it works, show the user the audit export (step 7) and one autonomous plan
-(step 9): that is what they came to see.
+When it works, show the user the audit export (step 7) and what autonomous mode
+decided (step 9): that is what they came to see.
 
 ## Changing the code
 

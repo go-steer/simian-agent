@@ -36,7 +36,7 @@ Steps 1–7 need no LLM at all; steps 8 and 9 do.
 ## 1. Get Simian
 
 ```bash
-git clone --depth 1 --branch v0.1.13 https://github.com/go-steer/simian-agent
+git clone --depth 1 --branch v0.1.15 https://github.com/go-steer/simian-agent
 cd simian-agent
 make build
 bin/simian --help
@@ -115,10 +115,13 @@ dev/tools/grant-vertex-access   # binds roles/aiplatform.user to the controller'
 helm upgrade --install simian deploy/helm/simian -n simian-system --create-namespace \
     -f examples/values-baked-defaults.yaml \
     --set llm.vertex.project="$GOOGLE_CLOUD_PROJECT" \
+    --set metrics.podMonitoring.enabled=true \
     --wait --timeout 4m
 ```
 
-The grant is project-wide and outlives the cluster; step 11 revokes it.
+The grant is project-wide and outlives the cluster; step 12 revokes it.
+`metrics.podMonitoring.enabled` has GKE's Managed Service for Prometheus
+collect Simian's metrics (step 10).
 
 ### On kind: a Gemini API key
 
@@ -288,18 +291,39 @@ kubectl -n simian-system port-forward svc/simian-controller 18081:8081 >/tmp/sim
 step 8 fault is still running, the new controller adopts it and its first
 cycle waits for it to end: one fault at a time.)
 
-**Check:** within a few minutes, the plan it wrote:
+**Check:** within a few minutes, watch what it decides:
 
 ```bash
-kubectl -n simian-system logs deploy/simian-controller \
-  | grep '"event":"plan.generated"' | tail -1 \
-  | jq '{hypothesis: .payload.hypothesis, kind: .payload.steps[0].fault.kind, target: .payload.steps[0].fault.targets[0].name, duration: .payload.steps[0].fault.duration, why: .payload.steps[0].duration_rationale}'
+bin/simian watch --namespace boutique   # redraws every few seconds; Ctrl-C to leave
 ```
 
-and new rows in the audit export (step 7) every few minutes. A cycle the
-controller skips says why in the log: `health-gate` (something in the arena is
-not Ready, often the previous fault's pod still restarting), `budget-full`
-(one fault at a time), `no-valid-plan` (the LLM's plans failed validation).
+The `AUTONOMOUS CYCLES` section shows the latest hypothesis and plan in full,
+then one line per cycle with what it applied or why it was skipped:
+
+```
+AUTONOMOUS CYCLES (4)
+  latest plan (18:28:10):
+    If the adservice is unavailable, the frontend will handle the
+    error gracefully and continue to serve user requests for other
+    product features without significant latency or errors.
+    1. PodChaos → adservice for 1m30s
+       why that long: The pod-kill action is instantaneous. The 90-second duratio…
+  18:28:10  completed PodChaos→adservice (1 applied)
+  18:26:10  completed NetworkChaos→paymentservice (1 applied)
+  18:24:10  skipped   budget-full
+  18:22:10  completed NetworkChaos→currencyservice (1 applied)
+```
+
+The same as a table, which suits an agent better than a redrawing view:
+
+```bash
+kubectl -n simian-system exec deploy/simian-controller -- \
+    simian audit export --cycles /var/lib/simian/audit.jsonl
+```
+
+A skipped cycle says why: `health-gate` (something in the arena is not Ready,
+often the previous fault's pod still restarting), `budget-full` (one fault at
+a time), `no-valid-plan` (the LLM's plans failed validation).
 
 Turn it off again before you leave it unattended, unless that is the point:
 
@@ -308,7 +332,41 @@ helm upgrade simian deploy/helm/simian -n simian-system --reuse-values \
     --set autonomous.enabled=false --wait
 ```
 
-## 10. Point your agent at it
+## 10. Metrics
+
+The controller serves Prometheus metrics on port `9090`:
+
+```bash
+kubectl -n simian-system port-forward svc/simian-controller 19090:9090 >/tmp/simian-metrics-pf.log 2>&1 &
+sleep 2; curl -s http://localhost:19090/metrics | grep '^simian_'
+```
+
+**Check:** `simian_build_info{version="0.1.15"} 1`, and counters such as
+`simian_faults_applied_total{…,kind="PodChaos",namespace="boutique",…}` and
+`simian_cycles_total{namespace="boutique",outcome="completed",…}`.
+
+### On GKE: in Cloud Monitoring
+
+The PodMonitoring from step 3 sends the same metrics to Managed Service for
+Prometheus. After a few minutes they are queryable in the console (Metrics
+Explorer, PromQL: `simian_faults_applied_total`), or from the command line:
+
+```bash
+curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  "https://monitoring.googleapis.com/v1/projects/$GOOGLE_CLOUD_PROJECT/location/global/prometheus/api/v1/query?query=sum%20by%20(kind)(simian_faults_applied_total)"
+```
+
+**Check:** a JSON result with one series per fault kind applied so far.
+**If not:** `kubectl -n simian-system describe podmonitoring simian-controller`
+shows whether the endpoint is being scraped; collection can take five minutes
+to appear.
+
+[Seeing what Simian is doing]({{< relref "observability.md" >}}) lists every
+metric, with queries and alerts worth having — above all
+`simian_fault_recovery_checks_total{passed="false"}`, a fault that left
+something broken.
+
+## 11. Point your agent at it
 
 Simian makes the faults; diagnosing them is the job of whatever agent your
 team is building. With autonomous mode on, ask your agent to assess the
@@ -321,12 +379,12 @@ can read the answer straight off Chaos Mesh's objects in the arena — see
 To score agents systematically, against scenario packs with ground truth, see
 the [eval substrate]({{< relref "eval-substrate.md" >}}).
 
-## 11. Clean up
+## 12. Clean up
 
 ### On GKE
 
 ```bash
-kill %1 2>/dev/null   # the port-forward, if it is still running in this shell
+kill %1 %2 2>/dev/null   # the port-forwards, if still running in this shell
 helm uninstall simian -n simian-system
 kubectl -n simian-system delete pvc simian-audit   # the audit volume is kept on uninstall
 dev/tools/grant-vertex-access --revoke
@@ -337,7 +395,7 @@ rm -f .kube/quickstart.yaml
 ### On kind
 
 ```bash
-kill %1 2>/dev/null
+kill %1 %2 2>/dev/null
 make cluster-down
 ```
 

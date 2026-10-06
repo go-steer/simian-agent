@@ -31,23 +31,28 @@ bin/simian watch --namespace boutique
 Redraws every few seconds (`Ctrl-C` to leave):
 
 ```
-simian watch — boutique   (updated 14:07:31)
+simian watch — boutique   (updated 18:29:49)
 ────────────────────────────────────────────────────────────────────────
 ACTIVE FAULTS (1)
-  01M48F…  chaos-mesh   NetworkChaos     → checkoutservice      [2m10s remaining]
+  f-01M497MC2X  chaos-mesh       PodChaos         → adservice             [1m1s remaining]
 
-AUTONOMOUS CYCLES (3)
-  latest plan (14:04:21):
-    Injecting network latency into the checkoutservice will cause increased
-    latency in user-facing checkout operations…
-    1. NetworkChaos → checkoutservice for 3m0s
-       why that long: A 3-minute duration is sufficient to allow the…
-  14:04:21  completed NetworkChaos→checkoutservice (1 applied)
-  14:01:21  skipped   budget-full
-  13:58:21  skipped   health-gate: workload Deployment/adservice: 0/1 pods ready…
+AUTONOMOUS CYCLES (4)
+  latest plan (18:28:10):
+    If the adservice is unavailable, the frontend will handle the
+    error gracefully and continue to serve user requests for other
+    product features without significant latency or errors.
+    1. PodChaos → adservice for 1m30s
+       why that long: The pod-kill action is instantaneous. The 90-second duratio…
+  18:28:10  completed PodChaos→adservice (1 applied)
+  18:26:10  completed NetworkChaos→paymentservice (1 applied)
+  18:24:10  skipped   budget-full
+  18:22:10  completed NetworkChaos→currencyservice (1 applied)
 
-RECENT FAULTS (2)
-  …
+RECENT FAULTS (4)
+  18:29:20  f-01M497MC2X chaos-mesh       PodChaos         → adservice             applied
+  18:28:40  f-01M497FE8N chaos-mesh       NetworkChaos     → paymentservice        cleared (deadline-reached)
+  18:26:10  f-01M497AJ44 chaos-mesh       NetworkChaos     → currencyservice       cleared (deadline-reached)
+  18:23:10  f-01M49770TJ chaos-mesh       PodChaos         → productcatalogservice  cleared (deadline-reached)
 ```
 
 The cycles section is what autonomous mode is thinking: the latest hypothesis
