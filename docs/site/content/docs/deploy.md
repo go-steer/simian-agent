@@ -38,6 +38,13 @@ needs around it. On a fresh Standard GKE cluster that is four more steps, in
 this order. Autopilot cannot run Chaos Mesh's `chaos-daemon` — see
 [GKE bring-up]({{< relref "gke-bring-up.md" >}}).
 
+The `network-policy` engine needs the cluster to enforce NetworkPolicies, and
+a Standard cluster created without `--enable-dataplane-v2` (or
+`--enable-network-policy`) does not: the policy is created and nothing is
+blocked. Simian's efficacy gate notices and rolls the fault back
+(`probe-failed`), so nothing is misreported, but every such fault is wasted.
+Create the cluster with `--enable-dataplane-v2` if you want that engine.
+
 ### 1. Chaos Mesh
 
 ```bash
@@ -141,6 +148,34 @@ overlay does). Then turn the loop on:
 helm upgrade simian deploy/helm/simian -n simian-system --reuse-values \
     --set autonomous.enabled=true --set 'autonomous.namespaces={payments}'
 ```
+
+## Agents that triage the cluster
+
+Simian creates the chaos; other teams' agents are what diagnose it. Give them
+any read role without the `chaos-mesh.org` API group, and they read the
+cluster as it really is without being able to read the answer: neither
+Simian's fault objects nor Chaos Mesh's per-pod `PodNetworkChaos` /
+`PodHttpChaos` / `PodIOChaos` objects, which sit in the faulted namespace and
+spell out the fault while it runs. The built-in `view` ClusterRole qualifies —
+Chaos Mesh does not aggregate its resources into it — but it also leaves out
+secrets and RBAC objects, and an agent built on k8s-lookout needs both: its
+health, dependency-edge, event and blast-radius checks fail without them.
+`dev/tools/eval-sre-agent` binds `view` plus secrets, RBAC and the
+cluster-scoped objects lookout reads (`simian-vantage-lookout`); copy that.
+Check an agent's identity before pointing it at an arena:
+
+```bash
+kubectl auth can-i list networkchaos.chaos-mesh.org -n payments \
+    --as=system:serviceaccount:agents:triage-agent        # expect: no
+kubectl auth can-i list podnetworkchaos.chaos-mesh.org -n payments \
+    --as=system:serviceaccount:agents:triage-agent        # expect: no
+```
+
+An agent running as `cluster-admin`, or with a wildcard read role, can read
+both and will report a fault by name (#129). Workload objects Simian's other
+engines create — a NetworkPolicy, a synthesized Deployment — are visible to
+`view` by nature; they carry only a `simian.chaos/managed` label, never the
+fault's kind.
 
 ## Ad-hoc dev images
 

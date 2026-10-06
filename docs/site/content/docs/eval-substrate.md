@@ -581,11 +581,14 @@ Adapters:
   name or ClusterIP fails even when the Service is healthy, and the agent has
   taken those failures as evidence for causes it invented.
   `dev/tools/eval-sre-agent` therefore runs the agent's lookout in a pod
-  (`simian-vantage/lookout`, a read-only ServiceAccount) by default, through a
+  (`simian-vantage/lookout`, whose ServiceAccount has `view` plus the secrets,
+  RBAC and cluster-scoped objects lookout reads, and nothing from
+  `chaos-mesh.org`, so the answer is out of reach — #129) by default, through a
   `kubectl exec -i` wrapper handed to the agent as `SRE_LOOKOUT_BIN` — the
   vantage a deployed agent has. The pod is left in place between runs;
   `SIMIAN_SRE_AGENT_VANTAGE=workstation` restores the old behaviour for
-  comparing against earlier runs.
+  comparing against earlier runs — including its leak: there the agent's
+  lookout reads with the operator's kubeconfig, Chaos Mesh objects and all.
 
   A neutral pod is not the caller's pod. For two of the dataplane pack's five
   faults — `partition-one-way` and `dns-blackhole-partial` — that is the whole
