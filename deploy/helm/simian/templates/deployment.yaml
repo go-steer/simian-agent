@@ -20,6 +20,12 @@ spec:
     metadata:
       labels:
         {{- include "simian.selectorLabels" . | nindent 8 }}
+      {{- if .Values.metrics.enabled }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.metrics.port | quote }}
+        prometheus.io/path: /metrics
+      {{- end }}
     spec:
       serviceAccountName: simian-controller
       securityContext:
@@ -31,6 +37,11 @@ spec:
           args:
             - serve
             - --mcp-addr=:{{ .Values.mcp.port }}
+            {{- if .Values.metrics.enabled }}
+            - --metrics-addr=:{{ .Values.metrics.port }}
+            {{- else }}
+            - --metrics-addr=
+            {{- end }}
             - --llm-provider={{ .Values.llm.provider }}
             {{- if .Values.llm.model }}
             - --llm-model={{ .Values.llm.model }}
@@ -87,6 +98,11 @@ spec:
             - name: mcp
               containerPort: {{ .Values.mcp.port }}
               protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
@@ -128,3 +144,9 @@ spec:
       port: {{ .Values.mcp.port }}
       targetPort: mcp
       protocol: TCP
+    {{- if .Values.metrics.enabled }}
+    - name: metrics
+      port: {{ .Values.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}

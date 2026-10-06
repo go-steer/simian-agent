@@ -1,0 +1,37 @@
+{{- if and .Values.metrics.enabled .Values.metrics.podMonitoring.enabled }}
+# GKE Managed Service for Prometheus scrapes this.
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: simian-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "simian.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "simian.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.metrics.podMonitoring.interval }}
+{{- end }}
+{{- if and .Values.metrics.enabled .Values.metrics.serviceMonitor.enabled }}
+---
+# prometheus-operator scrapes this.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: simian-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "simian.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "simian.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+{{- end }}

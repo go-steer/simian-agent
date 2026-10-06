@@ -122,6 +122,17 @@ On GKE the controller's stdout already reaches Cloud Logging, so the audit
 events are retained there as well; the file is what you have on clusters
 without a log pipeline, and what `simian audit export` reads directly.
 
+## Metrics
+
+| Value | Default | Notes |
+|---|---|---|
+| `metrics.enabled` | `true` | Serve Prometheus metrics on `/metrics` (`--metrics-addr`), with a `metrics` container and Service port and the `prometheus.io/*` scrape annotations on the pod. |
+| `metrics.port` | `9090` | |
+| `metrics.podMonitoring.enabled` | `false` | Create a `PodMonitoring` for GKE Managed Service for Prometheus. |
+| `metrics.serviceMonitor.enabled` | `false` | Create a `ServiceMonitor` for prometheus-operator. Needs its CRD. |
+
+What the metrics are, with example queries and alerts: [Seeing what Simian is doing]({{< relref "observability.md" >}}).
+
 ## MCP server
 
 | Value | Default | Notes |
