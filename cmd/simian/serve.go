@@ -49,6 +49,7 @@ import (
 	"github.com/go-steer/simian-agent/pkg/llm/stub"
 	"github.com/go-steer/simian-agent/pkg/loop"
 	"github.com/go-steer/simian-agent/pkg/mcp"
+	"github.com/go-steer/simian-agent/pkg/metrics"
 	"github.com/go-steer/simian-agent/pkg/planner"
 	"github.com/go-steer/simian-agent/pkg/probe"
 	"github.com/go-steer/simian-agent/pkg/simian"
@@ -83,6 +84,7 @@ func newServeCmd() *cobra.Command {
 		maxSeverityPerCycle  string
 		hypothesisHint       string
 		sutInjectEnvoyFault  bool
+		metricsAddr          string
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -116,6 +118,20 @@ func newServeCmd() *cobra.Command {
 				}
 			}
 			auditor = audit.Multi{auditor, cycleLog}
+			// Prometheus metrics, counted from the same audit events.
+			var recorder *metrics.Recorder
+			if metricsAddr != "" {
+				recorder = metrics.New(version)
+				auditor = audit.Multi{auditor, recorder}
+				msrv := &http.Server{Addr: metricsAddr, Handler: recorder.Handler(), ReadHeaderTimeout: 5 * time.Second}
+				go func() {
+					if err := msrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+						logger.Error("simian serve: metrics listener", slog.String("error", err.Error()))
+					}
+				}()
+				defer func() { _ = msrv.Close() }()
+				logger.Info("simian serve: metrics listening", slog.String("addr", metricsAddr))
+			}
 
 			// Background loops that emit audit events. Deferred after the
 			// audit file's Close, so it runs first: stop them and let them
@@ -229,6 +245,9 @@ func newServeCmd() *cobra.Command {
 				execOpts = append(execOpts, executor.WithDefaultProbes(catalog.DefaultProbes))
 			}
 			exec := executor.New(execCfg, drivers, registry, auditor, elig, execOpts...)
+			if recorder != nil {
+				recorder.WatchActive(exec)
+			}
 
 			// Before anything plans or applies: a fault still running from
 			// the previous process has to be counted from the first cycle.
@@ -431,6 +450,7 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&defaultProbes, "default-efficacy-probes", true, "Attach Simian's built-in efficacy probes to fault kinds that have one (see the catalog's efficacy_gate field). Turning this off applies dataplane faults unverified: a fault the cluster accepts but silently drops is then indistinguishable from one that worked.")
 	cmd.Flags().DurationVar(&reapInterval, "reap-interval", 30*time.Second, "Lease reaper sweep interval")
 	cmd.Flags().StringVar(&holderID, "holder-id", os.Getenv("HOSTNAME"), "Holder ID recorded on leases (defaults to HOSTNAME)")
+	cmd.Flags().StringVar(&metricsAddr, "metrics-addr", ":9090", "Serve Prometheus metrics on this address (/metrics); empty disables")
 	cmd.Flags().BoolVar(&debugLLMPayloads, "debug-llm-payloads", false, "Log raw LLM responses (debug only; do not enable in production — see design.md §12.2)")
 	cmd.Flags().StringVar(&auditFile, "audit-file", "", "Also append audit events to this file as JSON lines, so the trail outlives the process. Read it with 'simian audit export'. At start-up, faults a previous process applied and never closed get a closing event from it.")
 	cmd.Flags().Int64Var(&auditFileMaxBytes, "audit-file-max-bytes", audit.DefaultFileMaxBytes, "Rotate --audit-file to <file>.1 past this size (one previous generation is kept)")

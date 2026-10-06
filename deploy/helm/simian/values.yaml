@@ -133,6 +133,21 @@ audit:
       size: 1Gi
       storageClass: ""     # empty: the cluster default
 
+# Prometheus metrics on /metrics: faults applied and ended, recovery checks,
+# autonomous cycles and skip reasons, active faults, counted from the audit
+# events. The pod carries the prometheus.io/* scrape annotations; for GKE's
+# managed Prometheus turn on podMonitoring, for prometheus-operator
+# serviceMonitor (each needs its CRD installed).
+metrics:
+  enabled: true
+  port: 9090
+  podMonitoring:
+    enabled: false       # monitoring.googleapis.com/v1 PodMonitoring (GKE Managed Prometheus)
+    interval: 30s
+  serviceMonitor:
+    enabled: false       # monitoring.coreos.com/v1 ServiceMonitor (prometheus-operator)
+    interval: 30s
+
 # MCP server.
 mcp:
   port: 8081

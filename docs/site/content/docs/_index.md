@@ -26,6 +26,7 @@ You're in the `simian-agent` reference docs. The site root has the marketing pit
 ### Getting things done
 - **[Getting started]({{< relref "getting-started.md" >}})** — GKE or kind, end to end, every step checked.
 - **[Deploying with Helm]({{< relref "deploy.md" >}})** — in-cluster install patterns.
+- **[Seeing what Simian is doing]({{< relref "observability.md" >}})** — live view, what autonomous mode decided and why, the audit trail, metrics and alerts.
 - **[GKE bring-up]({{< relref "gke-bring-up.md" >}})** — the first run against a real GKE cluster, and what lands on Dataplane V2.
 - **[Using the chaos engines]({{< relref "chaos-engines.md" >}})** — directed and autonomous patterns per engine.
 - **[CLI reference]({{< relref "cli-reference.md" >}})** — every flag on every subcommand.

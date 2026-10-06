@@ -131,6 +131,25 @@ if ! grep -qF "mountPath: /var/lib/simian" <<<"$out" || ! grep -qF "emptyDir: {}
   fail=1
 fi
 
+echo "▸ metrics are served and scrapeable by default, and can be turned off"
+out="$(render sim-metrics)"
+expect_arg "metrics-default" "$out" "--metrics-addr=:9090"
+if ! grep -qF "prometheus.io/scrape: \"true\"" <<<"$out" || ! grep -qF "name: metrics" <<<"$out"; then
+  echo "✗ metrics-default: expected the scrape annotation and a metrics port" >&2
+  fail=1
+fi
+out="$(render sim-metrics-off --set metrics.enabled=false)"
+expect_arg "metrics-off" "$out" "--metrics-addr="
+if grep -qF "prometheus.io/scrape" <<<"$out" || grep -qF "name: metrics" <<<"$out"; then
+  echo "✗ metrics-off: still annotated or exposing a metrics port" >&2
+  fail=1
+fi
+out="$(render sim-podmonitoring --set metrics.podMonitoring.enabled=true --set metrics.serviceMonitor.enabled=true)"
+if ! grep -qF "kind: PodMonitoring" <<<"$out" || ! grep -qF "kind: ServiceMonitor" <<<"$out"; then
+  echo "✗ metrics-monitors: expected a PodMonitoring and a ServiceMonitor" >&2
+  fail=1
+fi
+
 echo "▸ an install that names no Vertex project refuses to render"
 # The chart used to default to the development project, so an install that
 # forgot the flag sent its LLM calls there.
