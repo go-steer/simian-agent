@@ -42,6 +42,7 @@ func newAuditExportCmd() *cobra.Command {
 	var (
 		since  string
 		format string
+		cycles bool
 	)
 	cmd := &cobra.Command{
 		Use:   "export [FILE...]",
@@ -58,6 +59,10 @@ The controller image has no shell or cat, so to read the file in the pod, run
 export there:
 
   kubectl -n simian-system exec deploy/simian-controller -- simian audit export /var/lib/simian/audit.jsonl
+
+With --cycles, one row per autonomous-mode cycle instead: whether it
+completed or was skipped and why, the hypothesis, the plan's steps, the faults
+it applied and the steps that were refused.
 
 Lines that are not audit events are skipped.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -91,6 +96,32 @@ Lines that are not audit events are skipped.`,
 			}
 			// Generations and log streams can arrive out of order.
 			sort.SliceStable(records, func(i, j int) bool { return records[i].TS.Before(records[j].TS) })
+			if cycles {
+				rows := audit.Cycles(records)
+				if !cutoff.IsZero() {
+					kept := rows[:0:0]
+					for _, r := range rows {
+						if !r.StartedAt.Before(cutoff) {
+							kept = append(kept, r)
+						}
+					}
+					rows = kept
+				}
+				switch format {
+				case "json":
+					enc := json.NewEncoder(cmd.OutOrStdout())
+					for _, r := range rows {
+						if err := enc.Encode(r); err != nil {
+							return err
+						}
+					}
+					return nil
+				case "table":
+					return writeCyclesTable(cmd.OutOrStdout(), rows)
+				default:
+					return fmt.Errorf("--format must be table or json, not %q", format)
+				}
+			}
 			rows := audit.Faults(records)
 			if !cutoff.IsZero() {
 				rows = audit.Since(rows, cutoff)
@@ -107,6 +138,7 @@ Lines that are not audit events are skipped.`,
 	}
 	cmd.Flags().StringVar(&since, "since", "", "Only faults first seen after this: a duration back from now (24h) or an RFC 3339 time")
 	cmd.Flags().StringVar(&format, "format", "table", "table, or json for one JSON object per line with the full spec and targets")
+	cmd.Flags().BoolVar(&cycles, "cycles", false, "One row per autonomous-mode cycle — outcome, skip reason, hypothesis, plan, applied and refused steps — instead of per fault")
 	return cmd
 }
 
@@ -211,4 +243,31 @@ func specCell(spec any) string {
 		return string(b[:limit]) + "…"
 	}
 	return string(b)
+}
+
+func writeCyclesTable(w io.Writer, rows []audit.CycleRow) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "STARTED\tNAMESPACE\tOUTCOME\tREASON\tPLAN\tAPPLIED\tREFUSED\tHYPOTHESIS / DETAIL")
+	for _, r := range rows {
+		steps := make([]string, 0, len(r.Steps))
+		for _, s := range r.Steps {
+			steps = append(steps, fmt.Sprintf("%s→%s %s", dash(s.Kind), dash(s.Target), s.Duration))
+		}
+		text := r.Hypothesis
+		if text == "" {
+			text = r.Detail
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
+			stamp(r.StartedAt), r.Namespace, r.Outcome, dash(r.Reason), dash(strings.Join(steps, "; ")),
+			len(r.Applied), len(r.Refused), truncate(text, 100))
+	}
+	return tw.Flush()
+}
+
+func truncate(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) <= n {
+		return dash(s)
+	}
+	return s[:n-1] + "…"
 }

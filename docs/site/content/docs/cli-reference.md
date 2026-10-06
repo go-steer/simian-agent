@@ -25,7 +25,8 @@ simian sut deploy --help
 | `simian serve` | Run the controller: Fault Executor + MCP server + autonomous loop. |
 | `simian chaos` | Submit a fault either as plain-text intent (LLM-translated) or as a hand-built FaultManifest (deterministic-control). Also list/clear active faults. |
 | `simian plan` | Generate an `AttackPlan` against a real arena and emit it as JSON. Default `--dry-run=true` does not apply. |
-| `simian audit export` | Fold the audit trail into one row per fault: what was asked for, what ran on what, and how it ended. Reads `--audit-file` output or `kubectl logs`. |
+| `simian audit export` | Fold the audit trail into one row per fault: what was asked for, what ran on what, and how it ended — or, with `--cycles`, one row per autonomous cycle: what it decided and why. Reads `--audit-file` output or `kubectl logs`. |
+| `simian watch` | Live terminal view of an arena: active faults, what autonomous mode decided (latest hypothesis and plan, each recent cycle's outcome or skip reason), and recent faults. |
 | `simian evaluate` | Score a finished run offline from its audit log and the subject's report. Contacts no cluster. |
 
 ## Common flag patterns
@@ -146,6 +147,20 @@ there is the place to look first.
 first seen after it. `--format json` writes one object per line with the full
 spec; the table truncates it. Lines that are not audit events are skipped, so a
 controller's whole log can be piped in.
+
+`--cycles` folds the same records by autonomous-mode cycle instead: one row per
+cycle and namespace with its outcome (`completed`, `skipped`, `unfinished` when
+the controller restarted mid-cycle), the skip reason and what the gate, the LLM
+or the validator said (`health-gate: workload Deployment/adservice: 0/1 pods
+ready`), the hypothesis, the plan's steps, and how many steps were applied and
+refused. `--format json` adds each step's rationale and duration rationale.
+This is the answer to "what is autonomous mode doing, and why" without reading
+the controller log.
+
+`simian watch --namespace <arena>` shows the same live: the latest plan in full
+and a line per recent cycle above the active and recent faults. It reads the
+controller's `get_recent_cycles` MCP tool, which any MCP client can call too;
+the controller rebuilds recent cycles from its audit file at start-up.
 
 `simian serve --audit-file PATH` writes the file (`--audit-file-max-bytes`,
 default 100 MiB, sets the rotation point). At start-up it adopts the faults a

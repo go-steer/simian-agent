@@ -28,6 +28,8 @@ import (
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	mcpsdk "github.com/mark3labs/mcp-go/mcp"
 	"github.com/spf13/cobra"
+
+	"github.com/go-steer/simian-agent/pkg/audit"
 )
 
 func newWatchCmd() *cobra.Command {
@@ -104,6 +106,10 @@ type watchSnapshot struct {
 	CapturedAt time.Time
 	Active     []activeFault
 	Recent     []recentFault
+	Cycles     []audit.CycleRow
+	// CyclesNote says why there are no cycles to show when the controller
+	// cannot report them (one older than get_recent_cycles).
+	CyclesNote string
 }
 
 // activeFault mirrors simian.ActiveFault but is redeclared locally so
@@ -150,7 +156,24 @@ func gatherSnapshot(ctx context.Context, cli *mcpclient.Client, ns string, limit
 	if err != nil {
 		return nil, fmt.Errorf("get_recent_faults: %w", err)
 	}
-	snap := &watchSnapshot{Namespace: ns, CapturedAt: time.Now()}
+	cyclesText, cyclesErr := callToolText(pollCtx, cli, "get_recent_cycles", map[string]any{"namespace": ns, "limit": float64(5)})
+	snap, err := parseSnapshot(ns, activeText, recentText, cyclesText)
+	if err != nil {
+		return nil, err
+	}
+	if cyclesErr != nil {
+		snap.CyclesNote = "this controller does not report cycles (older than v0.1.14)"
+	}
+	snap.CapturedAt = time.Now()
+	return snap, nil
+}
+
+// parseSnapshot reads the three tools' answers. get_recent_faults and
+// get_recent_cycles wrap their lists in {"enabled":…,"recent"/"cycles":[…]};
+// watch used to read get_recent_faults as a bare list and failed on every
+// poll, so both shapes are accepted.
+func parseSnapshot(ns, activeText, recentText, cyclesText string) (*watchSnapshot, error) {
+	snap := &watchSnapshot{Namespace: ns}
 	// Empty registry serializes to "null" (json.Marshal on nil slice) —
 	// let json.Unmarshal handle it as an empty slice.
 	if activeText != "" && activeText != "null" {
@@ -158,12 +181,34 @@ func gatherSnapshot(ctx context.Context, cli *mcpclient.Client, ns string, limit
 			return nil, fmt.Errorf("parse active faults: %w", err)
 		}
 	}
-	if recentText != "" && recentText != "null" {
-		if err := json.Unmarshal([]byte(recentText), &snap.Recent); err != nil {
-			return nil, fmt.Errorf("parse recent faults: %w", err)
-		}
+	if err := unwrapList(recentText, "recent", &snap.Recent); err != nil {
+		return nil, fmt.Errorf("parse recent faults: %w", err)
+	}
+	if err := unwrapList(cyclesText, "cycles", &snap.Cycles); err != nil {
+		return nil, fmt.Errorf("parse recent cycles: %w", err)
 	}
 	return snap, nil
+}
+
+// unwrapList decodes text, a JSON list or an object holding the list under
+// key, into out. Empty text and null leave out empty.
+func unwrapList(text, key string, out any) error {
+	text = strings.TrimSpace(text)
+	if text == "" || text == "null" {
+		return nil
+	}
+	if strings.HasPrefix(text, "[") {
+		return json.Unmarshal([]byte(text), out)
+	}
+	var wrapper map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(text), &wrapper); err != nil {
+		return err
+	}
+	raw, ok := wrapper[key]
+	if !ok || string(raw) == "null" {
+		return nil
+	}
+	return json.Unmarshal(raw, out)
 }
 
 // callToolText invokes an MCP tool and returns the first text-content
@@ -201,6 +246,8 @@ func renderSnapshot(w io.Writer, s *watchSnapshot) {
 	fmt.Fprintf(w, "simian watch — %s   (updated %s)\n", s.Namespace, s.CapturedAt.Format("15:04:05"))
 	fmt.Fprintln(w, strings.Repeat("─", 72))
 	renderActive(w, s.Active, s.CapturedAt)
+	fmt.Fprintln(w)
+	renderCycles(w, s.Cycles, s.CyclesNote)
 	fmt.Fprintln(w)
 	renderRecent(w, s.Recent)
 	fmt.Fprintln(w)
@@ -287,4 +334,79 @@ func formatRemaining(d time.Duration) string {
 		return "expired"
 	}
 	return d.String()
+}
+
+// renderCycles shows what autonomous mode decided: the latest plan in full —
+// hypothesis, steps, why each lasts as long as it does — then a line per
+// recent cycle, so a skipped cycle says why without reading the log.
+func renderCycles(w io.Writer, cycles []audit.CycleRow, note string) {
+	fmt.Fprintf(w, "AUTONOMOUS CYCLES (%d)\n", len(cycles))
+	if note != "" {
+		fmt.Fprintf(w, "  (%s)\n", note)
+		return
+	}
+	if len(cycles) == 0 {
+		fmt.Fprintln(w, "  (none — autonomous mode off, or no cycle yet)")
+		return
+	}
+	for _, c := range cycles { // newest first
+		if c.Hypothesis == "" {
+			continue
+		}
+		fmt.Fprintf(w, "  latest plan (%s):\n", c.StartedAt.Local().Format("15:04:05"))
+		for _, line := range wrap(c.Hypothesis, 66) {
+			fmt.Fprintf(w, "    %s\n", line)
+		}
+		for _, st := range c.Steps {
+			fmt.Fprintf(w, "    %d. %s → %s for %s\n", st.Order, st.Kind, st.Target, st.Duration)
+			if st.DurationRationale != "" {
+				fmt.Fprintf(w, "       why that long: %s\n", truncate(st.DurationRationale, 60))
+			}
+		}
+		break
+	}
+	for _, c := range cycles {
+		what := ""
+		switch c.Outcome {
+		case audit.CycleCompleted:
+			parts := make([]string, 0, len(c.Steps))
+			for _, st := range c.Steps {
+				parts = append(parts, st.Kind+"→"+st.Target)
+			}
+			what = fmt.Sprintf("%s (%d applied", strings.Join(parts, ", "), len(c.Applied))
+			if len(c.Refused) > 0 {
+				what += fmt.Sprintf(", %d refused: %s", len(c.Refused), truncate(c.Refused[0].Error, 50))
+			}
+			what += ")"
+		case audit.CycleSkipped:
+			what = c.Reason
+			if c.Detail != "" {
+				what += ": " + truncate(c.Detail, 60)
+			}
+		default:
+			what = c.Outcome
+		}
+		fmt.Fprintf(w, "  %s  %-9s %s\n", c.StartedAt.Local().Format("15:04:05"), c.Outcome, what)
+	}
+}
+
+// wrap breaks s into lines of at most width runes, on spaces.
+func wrap(s string, width int) []string {
+	var lines []string
+	line := ""
+	for _, word := range strings.Fields(s) {
+		if line != "" && len(line)+1+len(word) > width {
+			lines = append(lines, line)
+			line = word
+			continue
+		}
+		if line != "" {
+			line += " "
+		}
+		line += word
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return lines
 }

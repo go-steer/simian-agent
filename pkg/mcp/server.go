@@ -28,6 +28,7 @@ import (
 	mcpsdk "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"github.com/go-steer/simian-agent/pkg/audit"
 	"github.com/go-steer/simian-agent/pkg/executor"
 	"github.com/go-steer/simian-agent/pkg/planner"
 	"github.com/go-steer/simian-agent/pkg/simian"
@@ -76,6 +77,7 @@ type Server struct {
 	Baselines   BaselineLookup      // optional
 	Topology    TopologyLookup      // optional
 	Recents     RecentLookup        // optional
+	Cycles      CycleLookup         // optional
 	Establisher BaselineEstablisher // optional
 	Version     string
 
@@ -90,6 +92,15 @@ func WithTopology(t TopologyLookup) Option { return func(s *Server) { s.Topology
 
 // WithRecents wires the get_recent_faults tool.
 func WithRecents(r RecentLookup) Option { return func(s *Server) { s.Recents = r } }
+
+// CycleLookup is what get_recent_cycles reads: the autonomous loop's recent
+// cycles, newest first. *audit.CycleLog satisfies it.
+type CycleLookup interface {
+	Recent(namespace string, limit int) []audit.CycleRow
+}
+
+// WithCycles wires the get_recent_cycles tool.
+func WithCycles(c CycleLookup) Option { return func(s *Server) { s.Cycles = c } }
 
 // WithBaselineEstablisher wires the establish_baseline tool.
 func WithBaselineEstablisher(e BaselineEstablisher) Option {
@@ -187,6 +198,12 @@ func (s *Server) registerTools() {
 		mcpsdk.WithString("query", mcpsdk.Required()),
 		mcpsdk.WithString("namespace"),
 	), s.handleGetMetrics)
+
+	s.mcpServer.AddTool(mcpsdk.NewTool("get_recent_cycles",
+		mcpsdk.WithDescription("List the autonomous loop's recent cycles in a namespace, newest first: whether each completed or was skipped and why (health gate, fault budget, invalid plans, LLM unavailable), the hypothesis and plan it generated, the faults it applied and the steps that were refused."),
+		mcpsdk.WithString("namespace"),
+		mcpsdk.WithNumber("limit"),
+	), s.handleGetRecentCycles)
 
 	s.mcpServer.AddTool(mcpsdk.NewTool("get_recent_faults",
 		mcpsdk.WithDescription("List faults the executor recently handled. Used by the autonomous-mode planner so it doesn't repeat the same attack with no observation gap. Each entry includes the original FaultManifest plus applied/cleared timestamps and clear reason."),
@@ -393,6 +410,27 @@ func (s *Server) handleGetRecentFaults(_ context.Context, req mcpsdk.CallToolReq
 		Recent  []executor.RecentFault `json:"recent"`
 	}{Enabled: true, Recent: out}
 	b, _ := json.Marshal(wrapper)
+	return mcpsdk.NewToolResultText(string(b)), nil
+}
+
+func (s *Server) handleGetRecentCycles(_ context.Context, req mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+	args := req.GetArguments()
+	ns, _ := args["namespace"].(string)
+	limit := 10
+	if n, ok := args["limit"].(float64); ok && n > 0 {
+		limit = int(n)
+	}
+	if s.Cycles == nil {
+		return mcpsdk.NewToolResultText(`{"cycles":[],"enabled":false}`), nil
+	}
+	out := s.Cycles.Recent(ns, limit)
+	if out == nil {
+		out = []audit.CycleRow{}
+	}
+	b, _ := json.Marshal(struct {
+		Enabled bool             `json:"enabled"`
+		Cycles  []audit.CycleRow `json:"cycles"`
+	}{Enabled: true, Cycles: out})
 	return mcpsdk.NewToolResultText(string(b)), nil
 }
 
