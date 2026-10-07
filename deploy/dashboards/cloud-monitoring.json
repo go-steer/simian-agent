@@ -1,0 +1,262 @@
+{
+  "displayName": "Simian",
+  "mosaicLayout": {
+    "columns": 48,
+    "tiles": [
+      {
+        "xPos": 0,
+        "yPos": 0,
+        "width": 48,
+        "height": 6,
+        "widget": {
+          "title": "Simian",
+          "text": {
+            "format": "MARKDOWN",
+            "content": "What Simian is doing to the arenas, counted from its audit events. **Broken workloads** is the panel that needs a person: the audit export (`simian audit export --format json`) names the pods. Scorecards: version running, faults held now, recovery failures in the last day."
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 6,
+        "width": 16,
+        "height": 10,
+        "widget": {
+          "title": "Version",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "prometheusQuery": "max by (version) (simian_build_info)"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 16,
+        "yPos": 6,
+        "width": 16,
+        "height": 10,
+        "widget": {
+          "title": "Faults held now",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "prometheusQuery": "sum(simian_active_faults) or vector(0)"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 32,
+        "yPos": 6,
+        "width": 16,
+        "height": 10,
+        "widget": {
+          "title": "Broken workloads (24h)",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "prometheusQuery": "sum(increase(simian_fault_recovery_checks_total{passed=\"false\"}[1d])) or vector(0)"
+            },
+            "thresholds": [
+              {
+                "value": 0.5,
+                "color": "RED",
+                "direction": "ABOVE"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 16,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Faults applied per hour, by kind",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (kind) (increase(simian_faults_applied_total[1h]))"
+                },
+                "plotType": "STACKED_BAR",
+                "targetAxis": "Y1",
+                "legendTemplate": "${labels.kind}"
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 24,
+        "yPos": 16,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Active faults, by arena",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (namespace) (simian_active_faults)"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "legendTemplate": "${labels.namespace}"
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 32,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Faults that left a workload broken (recovery check failed)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (namespace, kind) (increase(simian_fault_recovery_checks_total{passed=\"false\"}[1h])) or vector(0)"
+                },
+                "plotType": "STACKED_BAR",
+                "targetAxis": "Y1",
+                "legendTemplate": "${labels.namespace} ${labels.kind}"
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 24,
+        "yPos": 32,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Recovery checks passed, share (1h)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum(increase(simian_fault_recovery_checks_total{passed=\"true\"}[1h])) / sum(increase(simian_fault_recovery_checks_total[1h]))"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "legendTemplate": "passed"
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 48,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Autonomous cycles per hour, by outcome and reason",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (outcome, reason) (increase(simian_cycles_total[1h]))"
+                },
+                "plotType": "STACKED_BAR",
+                "targetAxis": "Y1",
+                "legendTemplate": "${labels.outcome} ${labels.reason}"
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 24,
+        "yPos": 48,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "How faults ended, per hour",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (outcome) (increase(simian_faults_ended_total[1h]))"
+                },
+                "plotType": "STACKED_BAR",
+                "targetAxis": "Y1",
+                "legendTemplate": "${labels.outcome}"
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 64,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Refused by the safety checks, per day, by reason",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (reason) (increase(simian_faults_ended_total{outcome=\"refused\"}[1d]))"
+                },
+                "plotType": "STACKED_BAR",
+                "targetAxis": "Y1",
+                "legendTemplate": "${labels.reason}"
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 24,
+        "yPos": 64,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Faults applied per hour, by arena and source",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (namespace, source) (increase(simian_faults_applied_total[1h]))"
+                },
+                "plotType": "STACKED_BAR",
+                "targetAxis": "Y1",
+                "legendTemplate": "${labels.namespace} ${labels.source}"
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        }
+      }
+    ]
+  }
+}
