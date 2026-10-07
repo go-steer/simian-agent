@@ -369,6 +369,13 @@ func newServeCmd() *cobra.Command {
 				mcp.WithBaselineEstablisher(establisher),
 			)
 
+			// The metrics' series, at 0, for every arena and catalog entry,
+			// and again as arenas are opted in: a series that first appears
+			// at 1 loses that fault in increase() and in Managed Prometheus.
+			if recorder != nil {
+				workers.Go(func() { primeMetrics(ctx, recorder, arenaNamespaces, drivers, reapInterval, logger) })
+			}
+
 			if autonomous {
 				if len(autonomousNS) == 0 {
 					return fmt.Errorf("--autonomous requires at least one --autonomous-namespace")
@@ -529,6 +536,33 @@ func buildEligibility(k8s kubernetes.Interface, eligible []string, logger *slog.
 	logger.Info("eligibility: using annotation-based lookup (simian.chaos/eligible=\"true\")")
 	ae := arena.NewAnnotationEligibility(k8s)
 	return ae, ae.ListEligible
+}
+
+// primeMetrics primes recorder for the current arenas and catalog now and
+// every interval until ctx ends. A driver whose catalog cannot be read is
+// left out of that round, not the others.
+func primeMetrics(ctx context.Context, recorder *metrics.Recorder, arenas func(context.Context) ([]string, error),
+	drivers map[simian.Engine]simian.ChaosDriver, interval time.Duration, logger *slog.Logger) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		if ns, err := arenas(ctx); err != nil {
+			logger.Debug("simian serve: metrics: cannot resolve arenas", slog.String("error", err.Error()))
+		} else {
+			var catalog []simian.CatalogEntry
+			for _, d := range drivers {
+				if entries, err := d.Catalog(ctx); err == nil {
+					catalog = append(catalog, entries...)
+				}
+			}
+			recorder.Prime(ns, catalog)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 func buildLLM(ctx context.Context, id, model string) (simian.LLMProvider, error) {
