@@ -110,12 +110,22 @@ collects them, queryable in Cloud Monitoring. With prometheus-operator, use
 
 | Metric | Labels | What it counts |
 |---|---|---|
-| `simian_faults_applied_total` | `namespace`, `engine`, `kind`, `source` | faults that reached the cluster |
-| `simian_faults_ended_total` | `namespace`, `kind`, `outcome`, `reason` | faults that ended: `expired`, `cleared`, `refused`, `driver-failed` |
-| `simian_fault_recovery_checks_total` | `namespace`, `kind`, `passed` | recovery checks after a fault; `passed="false"` is a fault that left something broken |
-| `simian_cycles_total` | `namespace`, `outcome`, `reason` | autonomous cycles, completed or skipped and why |
-| `simian_active_faults` | `namespace` | faults held right now |
+| `simian_faults_applied_total` | `arena`, `engine`, `kind`, `source` | faults that reached the cluster |
+| `simian_faults_ended_total` | `arena`, `kind`, `outcome`, `reason` | faults that ended: `expired`, `cleared`, `refused`, `driver-failed` |
+| `simian_faults_refused_total` | `arena`, `reason` | faults the executor refused, by the safety check's reason |
+| `simian_fault_recovery_checks_total` | `arena`, `kind`, `passed` | recovery checks after a fault; `passed="false"` is a fault that left something broken |
+| `simian_cycles_total` | `arena`, `outcome`, `reason` | autonomous cycles, completed or skipped and why |
+| `simian_active_faults` | `arena` | faults held right now |
 | `simian_build_info` | `version` | the running version |
+
+The arena is labelled `arena`, not `namespace`: Managed Service for Prometheus
+and most Prometheus scrape configs set `namespace` to the namespace of the pod
+they scraped, which is `simian-system` for every series. The controller also
+creates each arena's series at `0` — for every fault kind in the catalog,
+every cycle outcome and every refusal reason — as soon as it sees the arena,
+so `increase()` counts the first fault rather than starting from it. A
+refusal in a namespace that is not an arena still counts, but its series
+starts at 1.
 
 ### Dashboards
 
@@ -135,7 +145,7 @@ version, faults held now and broken workloads in the last day.
   It appears as **Simian** under Monitoring → Dashboards.
 - **Grafana:** Dashboards → New → Import, upload
   `deploy/dashboards/grafana.json`, and pick your Prometheus data source. An
-  **Arena** selector filters every panel by namespace. To provision it instead,
+  **Arena** selector filters every panel by arena. To provision it instead,
   point a file provider at the directory holding the JSON.
 
 Useful queries:
@@ -149,7 +159,7 @@ sum by (reason) (increase(simian_cycles_total{outcome="skipped"}[1h]))
   / ignoring(reason) group_left sum(increase(simian_cycles_total[1h]))
 
 # refusals, by reason — the safety checks at work
-sum by (reason) (increase(simian_faults_ended_total{outcome="refused"}[1d]))
+sum by (reason) (increase(simian_faults_refused_total[1d]))
 ```
 
 Alerts worth having:

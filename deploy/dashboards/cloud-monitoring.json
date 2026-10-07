@@ -100,11 +100,11 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "sum by (namespace) (simian_active_faults)"
+                  "prometheusQuery": "sum by (arena) (simian_active_faults)"
                 },
                 "plotType": "LINE",
                 "targetAxis": "Y1",
-                "legendTemplate": "${labels.namespace}"
+                "legendTemplate": "${labels.arena}"
               }
             ],
             "yAxis": {
@@ -124,11 +124,11 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "sum by (namespace, kind) (increase(simian_fault_recovery_checks_total{passed=\"false\"}[1h])) or vector(0)"
+                  "prometheusQuery": "sum by (arena, kind) (increase(simian_fault_recovery_checks_total{passed=\"false\"}[1h])) or vector(0)"
                 },
                 "plotType": "STACKED_BAR",
                 "targetAxis": "Y1",
-                "legendTemplate": "${labels.namespace} ${labels.kind}"
+                "legendTemplate": "${labels.arena} ${labels.kind}"
               }
             ],
             "yAxis": {
@@ -220,7 +220,7 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "sum by (reason) (increase(simian_faults_ended_total{outcome=\"refused\"}[1d]))"
+                  "prometheusQuery": "sum by (reason) (increase(simian_faults_refused_total[1d]))"
                 },
                 "plotType": "STACKED_BAR",
                 "targetAxis": "Y1",
@@ -244,11 +244,11 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "sum by (namespace, source) (increase(simian_faults_applied_total[1h]))"
+                  "prometheusQuery": "sum by (arena, source) (increase(simian_faults_applied_total[1h]))"
                 },
                 "plotType": "STACKED_BAR",
                 "targetAxis": "Y1",
-                "legendTemplate": "${labels.namespace} ${labels.source}"
+                "legendTemplate": "${labels.arena} ${labels.source}"
               }
             ],
             "yAxis": {

@@ -63,6 +63,9 @@ func TestTheExecutorsEventsAreCounted(t *testing.T) {
 	if got := testutil.ToFloat64(r.ended.WithLabelValues("kube-system", "PodChaos", "refused", string(simian.ReasonNamespaceNotEligible))); got != 1 {
 		t.Errorf("refused = %v, want 1", got)
 	}
+	if got := testutil.ToFloat64(r.refused.WithLabelValues("kube-system", string(simian.ReasonNamespaceNotEligible))); got != 1 {
+		t.Errorf("simian_faults_refused_total = %v, want 1", got)
+	}
 
 	// The lease ends at its deadline and the workload is checked.
 	r.Emit(context.Background(), simian.AuditEvent{Event: audit.EventLeaseExpired, FaultUID: uid, Reason: "deadline-reached"})
@@ -93,9 +96,9 @@ func TestCyclesAndTheEndpoint(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	for _, want := range []string{
-		`simian_cycles_total{namespace="bank",outcome="completed",reason=""} 1`,
-		`simian_cycles_total{namespace="bank",outcome="skipped",reason="health-gate"} 2`,
-		`simian_active_faults{namespace="bank"} 1`,
+		`simian_cycles_total{arena="bank",outcome="completed",reason=""} 1`,
+		`simian_cycles_total{arena="bank",outcome="skipped",reason="health-gate"} 2`,
+		`simian_active_faults{arena="bank"} 1`,
 		`simian_build_info{version="v-test"} 1`,
 		`go_goroutines`,
 	} {
@@ -124,5 +127,43 @@ func TestAnAdoptedFaultIsCountedWithItsLabels(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(r.recovered.WithLabelValues("boutique", "PodChaos", "true")); got != 1 {
 		t.Errorf("recovered = %v, want 1 under boutique/PodChaos", got)
+	}
+}
+
+// Managed Service for Prometheus baselines a counter series' first sample, and
+// increase() has nothing before it either: a series that first appears at 1
+// loses that fault. Primed series are there at 0 before the first fault.
+func TestPrimedSeriesStartAtZero(t *testing.T) {
+	r := New("v-test")
+	catalog := []simian.CatalogEntry{
+		{Engine: simian.EngineChaosMesh, ResourceKind: "PodChaos"},
+		{Engine: simian.EngineKubeState, ResourceKind: "BadConfigMap"},
+	}
+	r.Prime([]string{"bank"}, catalog)
+	r.Prime([]string{"bank"}, catalog) // again, as when an arena is added: no change
+
+	srv := httptest.NewServer(r.Handler())
+	defer srv.Close()
+	resp, err := srv.Client().Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	for _, want := range []string{
+		`simian_faults_applied_total{arena="bank",engine="chaos-mesh",kind="PodChaos",source="autonomous"} 0`,
+		`simian_faults_applied_total{arena="bank",engine="kube-state",kind="BadConfigMap",source="directed"} 0`,
+		`simian_faults_ended_total{arena="bank",kind="PodChaos",outcome="expired",reason="deadline-reached"} 0`,
+		`simian_fault_recovery_checks_total{arena="bank",kind="BadConfigMap",passed="false"} 0`,
+		`simian_cycles_total{arena="bank",outcome="completed",reason=""} 0`,
+		`simian_cycles_total{arena="bank",outcome="skipped",reason="health-gate"} 0`,
+		`simian_faults_refused_total{arena="bank",reason="workload-excluded"} 0`,
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("/metrics lacks %s", want)
+		}
+	}
+	if strings.Contains(string(body), `namespace="`) {
+		t.Error("a metric still carries a namespace label, which GMP overwrites with the scrape target's")
 	}
 }

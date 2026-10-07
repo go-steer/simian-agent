@@ -21,7 +21,7 @@
         "label": "Datasource"
       },
       {
-        "name": "namespace",
+        "name": "arena",
         "type": "query",
         "label": "Arena",
         "datasource": {
@@ -29,10 +29,10 @@
           "uid": "${datasource}"
         },
         "query": {
-          "query": "label_values(simian_cycles_total, namespace)",
+          "query": "label_values(simian_cycles_total, arena)",
           "refId": "A"
         },
-        "definition": "label_values(simian_cycles_total, namespace)",
+        "definition": "label_values(simian_cycles_total, arena)",
         "includeAll": true,
         "multi": true,
         "allValue": ".*",
@@ -105,7 +105,7 @@
       },
       "targets": [
         {
-          "expr": "sum(simian_active_faults{namespace=~\"$namespace\"}) or vector(0)",
+          "expr": "sum(simian_active_faults{arena=~\"$arena\"}) or vector(0)",
           "refId": "A",
           "legendFormat": ""
         }
@@ -149,7 +149,7 @@
       },
       "targets": [
         {
-          "expr": "sum(increase(simian_fault_recovery_checks_total{passed=\"false\",namespace=~\"$namespace\"}[1d])) or vector(0)",
+          "expr": "sum(increase(simian_fault_recovery_checks_total{passed=\"false\",arena=~\"$arena\"}[1d])) or vector(0)",
           "refId": "A",
           "legendFormat": ""
         }
@@ -197,7 +197,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (kind) (increase(simian_faults_applied_total{namespace=~\"$namespace\"}[1h]))",
+          "expr": "sum by (kind) (increase(simian_faults_applied_total{arena=~\"$arena\"}[1h]))",
           "refId": "A",
           "legendFormat": "{{kind}}"
         }
@@ -231,9 +231,9 @@
       },
       "targets": [
         {
-          "expr": "sum by (namespace) (simian_active_faults{namespace=~\"$namespace\"})",
+          "expr": "sum by (arena) (simian_active_faults{arena=~\"$arena\"})",
           "refId": "A",
-          "legendFormat": "{{namespace}}"
+          "legendFormat": "{{arena}}"
         }
       ],
       "fieldConfig": {
@@ -265,9 +265,9 @@
       },
       "targets": [
         {
-          "expr": "sum by (namespace, kind) (increase(simian_fault_recovery_checks_total{namespace=~\"$namespace\",passed=\"false\"}[1h])) or vector(0)",
+          "expr": "sum by (arena, kind) (increase(simian_fault_recovery_checks_total{arena=~\"$arena\",passed=\"false\"}[1h])) or vector(0)",
           "refId": "A",
-          "legendFormat": "{{namespace}} {{kind}}"
+          "legendFormat": "{{arena}} {{kind}}"
         }
       ],
       "fieldConfig": {
@@ -303,7 +303,7 @@
       },
       "targets": [
         {
-          "expr": "sum(increase(simian_fault_recovery_checks_total{namespace=~\"$namespace\",passed=\"true\"}[1h])) / sum(increase(simian_fault_recovery_checks_total{namespace=~\"$namespace\"}[1h]))",
+          "expr": "sum(increase(simian_fault_recovery_checks_total{arena=~\"$arena\",passed=\"true\"}[1h])) / sum(increase(simian_fault_recovery_checks_total{arena=~\"$arena\"}[1h]))",
           "refId": "A",
           "legendFormat": "passed"
         }
@@ -337,7 +337,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (outcome, reason) (increase(simian_cycles_total{namespace=~\"$namespace\"}[1h]))",
+          "expr": "sum by (outcome, reason) (increase(simian_cycles_total{arena=~\"$arena\"}[1h]))",
           "refId": "A",
           "legendFormat": "{{outcome}} {{reason}}"
         }
@@ -371,7 +371,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (outcome) (increase(simian_faults_ended_total{namespace=~\"$namespace\"}[1h]))",
+          "expr": "sum by (outcome) (increase(simian_faults_ended_total{arena=~\"$arena\"}[1h]))",
           "refId": "A",
           "legendFormat": "{{outcome}}"
         }
@@ -405,7 +405,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (reason) (increase(simian_faults_ended_total{namespace=~\"$namespace\",outcome=\"refused\"}[1d]))",
+          "expr": "sum by (reason) (increase(simian_faults_refused_total{arena=~\"$arena\"}[1d]))",
           "refId": "A",
           "legendFormat": "{{reason}}"
         }
@@ -439,9 +439,9 @@
       },
       "targets": [
         {
-          "expr": "sum by (namespace, source) (increase(simian_faults_applied_total{namespace=~\"$namespace\"}[1h]))",
+          "expr": "sum by (arena, source) (increase(simian_faults_applied_total{arena=~\"$arena\"}[1h]))",
           "refId": "A",
-          "legendFormat": "{{namespace}} {{source}}"
+          "legendFormat": "{{arena}} {{source}}"
         }
       ],
       "fieldConfig": {

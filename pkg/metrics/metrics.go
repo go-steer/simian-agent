@@ -17,6 +17,15 @@
 // The metrics are counted from the audit events, not alongside them: the
 // Recorder is one more simian.Auditor in the controller's chain, so a
 // dashboard and the audit trail cannot disagree about what happened.
+//
+// Two things here are for Managed Service for Prometheus on GKE, and hold for
+// any Prometheus. The arena label is "arena", not "namespace": a collector
+// that attaches the scrape target's namespace overwrites a "namespace" label,
+// and every fault would read as applied in simian-system. And Prime creates
+// the series at 0 before anything happens: a counter series that first
+// appears at 1 has no earlier sample to increase from, so increase() and
+// rate() — and GMP, which baselines a series' first sample — miss its first
+// fault.
 package metrics
 
 import (
@@ -53,6 +62,7 @@ type Recorder struct {
 	ended     *prometheus.CounterVec
 	recovered *prometheus.CounterVec
 	cycles    *prometheus.CounterVec
+	refused   *prometheus.CounterVec
 
 	mu     sync.Mutex
 	faults map[string]faultInfo
@@ -68,19 +78,23 @@ func New(version string) *Recorder {
 		applied: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "simian_faults_applied_total",
 			Help: "Faults that reached the cluster, by arena, engine, kind and source (autonomous or directed).",
-		}, []string{"namespace", "engine", "kind", "source"}),
+		}, []string{"arena", "engine", "kind", "source"}),
 		ended: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "simian_faults_ended_total",
 			Help: "Faults that ended, by arena, kind and outcome (expired, cleared, refused, driver-failed) and the audit reason.",
-		}, []string{"namespace", "kind", "outcome", "reason"}),
+		}, []string{"arena", "kind", "outcome", "reason"}),
 		recovered: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "simian_fault_recovery_checks_total",
 			Help: "Recovery checks after a fault ended, by arena, kind and whether the workload was Ready again. passed=\"false\" means a fault left something broken.",
-		}, []string{"namespace", "kind", "passed"}),
+		}, []string{"arena", "kind", "passed"}),
 		cycles: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "simian_cycles_total",
 			Help: "Autonomous-mode cycles, by arena and outcome (completed, skipped) and the skip reason.",
-		}, []string{"namespace", "outcome", "reason"}),
+		}, []string{"arena", "outcome", "reason"}),
+		refused: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "simian_faults_refused_total",
+			Help: "Faults the executor refused, by arena and rejection reason — the safety checks at work.",
+		}, []string{"arena", "reason"}),
 		faults: map[string]faultInfo{},
 	}
 	buildInfo := prometheus.NewGauge(prometheus.GaugeOpts{
@@ -89,7 +103,7 @@ func New(version string) *Recorder {
 		ConstLabels: prometheus.Labels{"version": version},
 	})
 	buildInfo.Set(1)
-	r.reg.MustRegister(r.applied, r.ended, r.recovered, r.cycles, buildInfo,
+	r.reg.MustRegister(r.applied, r.ended, r.recovered, r.cycles, r.refused, buildInfo,
 		collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return r
 }
@@ -99,6 +113,48 @@ func New(version string) *Recorder {
 // executor is built with, before the executor exists.
 func (r *Recorder) WatchActive(active ActiveFaults) {
 	r.reg.MustRegister(&activeCollector{active: active})
+}
+
+// sources, cycle outcomes and refusal reasons are what Prime creates series
+// for. A series outside them still counts; it only misses the first increment
+// on a backend that baselines new series.
+var (
+	sources     = []simian.ManifestSource{simian.SourceAutonomous, simian.SourceDirected}
+	cycleSkips  = []string{"budget-full", "health-gate", "llm-unavailable", "no-valid-plan", "plan-layering-failed", string(simian.ReasonInterrupted)}
+	refusalKeys = []simian.RejectionReason{
+		simian.ReasonUnknownGVK, simian.ReasonSchemaInvalid, simian.ReasonNamespaceNotEligible,
+		simian.ReasonWorkloadExcluded, simian.ReasonRBACDenied, simian.ReasonTierNotPermitted,
+		simian.ReasonDurationOverCeiling, simian.ReasonBudgetExceeded, simian.ReasonDriverFailed,
+		simian.ReasonLeaseFailed, simian.ReasonProbeFailed, simian.ReasonInjectionFailed,
+		simian.ReasonInterrupted, simian.ReasonPrecheckFailed, simian.ReasonTargetIncompatible,
+		simian.ReasonCannotGate, simian.ReasonProbeNotConfigured,
+	}
+)
+
+// Prime creates, at 0, the series each arena will most likely count into:
+// faults applied for every catalog entry and source, the normal ends, recovery
+// checks passed and failed, every cycle outcome and every refusal reason. It
+// only adds series, so calling it again — when an arena is opted in — is
+// safe.
+func (r *Recorder) Prime(arenas []string, catalog []simian.CatalogEntry) {
+	for _, a := range arenas {
+		for _, c := range catalog {
+			for _, src := range sources {
+				r.applied.WithLabelValues(a, string(c.Engine), c.ResourceKind, string(src))
+			}
+			r.ended.WithLabelValues(a, c.ResourceKind, "expired", "deadline-reached")
+			r.ended.WithLabelValues(a, c.ResourceKind, "cleared", "explicit-clear")
+			r.recovered.WithLabelValues(a, c.ResourceKind, "true")
+			r.recovered.WithLabelValues(a, c.ResourceKind, "false")
+		}
+		r.cycles.WithLabelValues(a, audit.CycleCompleted, "")
+		for _, reason := range cycleSkips {
+			r.cycles.WithLabelValues(a, audit.CycleSkipped, reason)
+		}
+		for _, reason := range refusalKeys {
+			r.refused.WithLabelValues(a, string(reason))
+		}
+	}
 }
 
 // Handler serves the metrics in the Prometheus exposition format.
@@ -117,6 +173,9 @@ func (r *Recorder) Emit(_ context.Context, e simian.AuditEvent) {
 		}
 	case audit.EventExecutorRejected:
 		r.end(e, "refused")
+		if e.FaultUID != "" {
+			r.refused.WithLabelValues(r.lookup(e.FaultUID).namespace, e.Reason).Inc()
+		}
 	case audit.EventDriverFailed:
 		r.end(e, "driver-failed")
 	case audit.EventLeaseExpired:
@@ -193,7 +252,7 @@ func (r *Recorder) lookup(uid string) faultInfo {
 type activeCollector struct{ active ActiveFaults }
 
 var activeDesc = prometheus.NewDesc("simian_active_faults",
-	"Faults the controller holds a lease for right now, by arena.", []string{"namespace"}, nil)
+	"Faults the controller holds a lease for right now, by arena.", []string{"arena"}, nil)
 
 func (c *activeCollector) Describe(ch chan<- *prometheus.Desc) { ch <- activeDesc }
 
