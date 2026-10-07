@@ -53,14 +53,15 @@ func (e *Executor) narrowPodSelector(ctx context.Context, m *simian.FaultManifes
 	if m.Engine != simian.EngineChaosMesh || m.Spec == nil {
 		return nil, nil
 	}
+	if err := e.checkSecondarySelectors(ctx, m); err != nil {
+		return nil, err
+	}
 	sel, _ := m.Spec["selector"].(map[string]any)
 	if sel == nil {
 		sel = map[string]any{}
 	}
-	for _, k := range podNarrowingKeys {
-		if v, ok := sel[k]; ok && !emptyValue(v) {
-			return nil, nil // the spec already says which pods
-		}
+	if selectsPods(sel) {
+		return nil, nil // the spec already says which pods
 	}
 
 	var labels map[string]string
@@ -118,6 +119,49 @@ func emptyValue(v any) bool {
 		return len(x) == 0
 	case string:
 		return x == ""
+	}
+	return false
+}
+
+// checkSecondarySelectors refuses a fault whose other pod selectors — a
+// NetworkChaos spec.target.selector picking the far side of the link, say —
+// match every pod in a namespace with excluded workloads (#198).
+//
+// Targets describe only the primary side, so there are no labels to narrow
+// these to; a namespace-wide far side is a legitimate partition ("cut edge
+// off from everything"), and is allowed where nothing is excluded. Where
+// something is, the exclusion would be bypassed silently, which is the one
+// thing it exists to prevent.
+func (e *Executor) checkSecondarySelectors(ctx context.Context, m *simian.FaultManifest) error {
+	for _, site := range findSelectorSites(m.Spec) {
+		if site.path == "spec.selector" || selectsPods(site.node) {
+			continue
+		}
+		namespaces := site.namespaces
+		if len(namespaces) == 0 {
+			namespaces = m.TargetNamespaces()
+		}
+		for _, ns := range namespaces {
+			excluded, err := e.elig.ExcludedWorkloads(ctx, ns)
+			if err != nil {
+				return simian.NewExecutorError(simian.StageSafety, simian.ReasonWorkloadExcluded, "exclusion lookup failed", err)
+			}
+			if len(excluded) > 0 {
+				return simian.NewExecutorError(simian.StageSafety, simian.ReasonWorkloadExcluded,
+					fmt.Sprintf("%s matches every pod in namespace %q, including excluded workloads %s; add labelSelectors to it", site.path, ns, strings.Join(excluded, ", ")), nil)
+			}
+		}
+	}
+	return nil
+}
+
+// selectsPods reports whether a selector picks particular pods out of its
+// namespaces.
+func selectsPods(sel map[string]any) bool {
+	for _, k := range podNarrowingKeys {
+		if v, ok := sel[k]; ok && !emptyValue(v) {
+			return true
+		}
 	}
 	return false
 }
