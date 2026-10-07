@@ -44,7 +44,7 @@ image:
   # silently change the running binary.
   # Must be at least the chart's appVersion: the chart renders flags
   # (e.g. --audit-file) an older binary refuses. verify-chart checks it.
-  tag: "0.1.15"
+  tag: "0.2.0-rc.1"
   # IfNotPresent matches the chart default; explicit for clarity.
   pullPolicy: IfNotPresent
 
@@ -178,6 +178,13 @@ resources:
 # ============================================================
 # Hardening log — what is "baked" and as of when
 # ============================================================
+#
+# 2026-10-07 (chart 0.2.0-rc.1):
+#   - image pin moved to 0.2.0-rc.1, the release candidate soaked before
+#     v0.2.0: a NetworkChaos far-side selector that would reach excluded
+#     workloads is refused (#198). From here versions follow semver
+#     (docs/contributing.md); install the last stable release, v0.1.15,
+#     unless you are soaking the candidate.
 #
 # 2026-10-06 (chart 0.1.15):
 #   - image pin moved to 0.1.15: the image reports its real version, and
