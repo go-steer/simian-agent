@@ -202,3 +202,33 @@ func TestANamespaceWideSelectorIsRefusedWhereThereAreExclusions(t *testing.T) {
 		t.Fatalf("err = %v, want workload-excluded naming loadgenerator", err)
 	}
 }
+
+// #198: a NetworkChaos partition's far side, spec.target.selector, naming
+// only the namespace cuts the caller off from every pod there — the excluded
+// load generator included.
+func TestASecondarySelectorThatReachesExcludedWorkloadsIsRefused(t *testing.T) {
+	partition := func(target map[string]any) simian.FaultManifest {
+		m := goodManifest()
+		m.Spec = map[string]any{"action": "partition", "direction": "to",
+			"selector": map[string]any{"labelSelectors": map[string]any{"app": "edge"}},
+			"target":   map[string]any{"mode": "all", "selector": target}}
+		m.Targets = []simian.TargetRef{{Namespace: "online-boutique", Name: "edge", Labels: map[string]string{"app": "edge"}}}
+		return m
+	}
+	executor := func(excl map[string][]string) *Executor {
+		return New(DefaultConfig(), map[simian.Engine]simian.ChaosDriver{simian.EngineChaosMesh: &testutil.FakeDriver{EngineName: simian.EngineChaosMesh}},
+			lease.NewRegistry("h"), &testutil.FakeAuditor{}, &StaticEligibility{Eligible: map[string]bool{"online-boutique": true}, Exclusions: excl})
+	}
+	guarded := executor(map[string][]string{"online-boutique": {"loadgenerator"}})
+
+	_, err := guarded.Apply(context.Background(), partition(map[string]any{"namespaces": []any{"online-boutique"}}))
+	if ee := asExecutorError(t, err); ee.Reason != simian.ReasonWorkloadExcluded || !strings.Contains(err.Error(), "spec.target.selector") {
+		t.Fatalf("namespace-wide far side: err = %v, want workload-excluded naming spec.target.selector", err)
+	}
+	if _, err := guarded.Apply(context.Background(), partition(map[string]any{"labelSelectors": map[string]any{"app": "upstream"}})); err != nil {
+		t.Errorf("a far side naming its pods was refused: %v", err)
+	}
+	if _, err := executor(nil).Apply(context.Background(), partition(map[string]any{"namespaces": []any{"online-boutique"}})); err != nil {
+		t.Errorf("a namespace-wide far side with nothing excluded was refused: %v", err)
+	}
+}
