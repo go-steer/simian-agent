@@ -44,7 +44,7 @@ image:
   # silently change the running binary.
   # Must be at least the chart's appVersion: the chart renders flags
   # (e.g. --audit-file) an older binary refuses. verify-chart checks it.
-  tag: "0.2.0-rc.2"
+  tag: "0.2.0"
   # IfNotPresent matches the chart default; explicit for clarity.
   pullPolicy: IfNotPresent
 
@@ -178,6 +178,12 @@ resources:
 # ============================================================
 # Hardening log — what is "baked" and as of when
 # ============================================================
+#
+# 2026-10-07 (chart 0.2.0):
+#   - image pin moved to 0.2.0, the first stable release under semver:
+#     0.2.0-rc.1 soaked 12h on GKE (135 faults, 96 recovery checks, none
+#     failed, a hard kill, an upgrade and a graceful restart survived),
+#     the last 6h as 0.2.0-rc.2. Upgrading from 0.1.x: see the release notes.
 #
 # 2026-10-07 (chart 0.2.0-rc.2):
 #   - image pin moved to 0.2.0-rc.2: the metrics label the arena "arena"
