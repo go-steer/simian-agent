@@ -117,6 +117,27 @@ collects them, queryable in Cloud Monitoring. With prometheus-operator, use
 | `simian_active_faults` | `namespace` | faults held right now |
 | `simian_build_info` | `version` | the running version |
 
+### Dashboards
+
+Two ready-made dashboards ship in `deploy/dashboards/`, with the same panels:
+faults applied by kind and by arena, active faults, how faults ended, recovery
+failures (in red — the panel that needs a person), autonomous cycles by
+outcome and skip reason, refusals by reason, and scorecards for the running
+version, faults held now and broken workloads in the last day.
+
+- **GKE (Cloud Monitoring):** with `metrics.podMonitoring.enabled=true`,
+
+  ```bash
+  gcloud monitoring dashboards create --project "$GOOGLE_CLOUD_PROJECT" \
+      --config-from-file=deploy/dashboards/cloud-monitoring.json
+  ```
+
+  It appears as **Simian** under Monitoring → Dashboards.
+- **Grafana:** Dashboards → New → Import, upload
+  `deploy/dashboards/grafana.json`, and pick your Prometheus data source. An
+  **Arena** selector filters every panel by namespace. To provision it instead,
+  point a file provider at the directory holding the JSON.
+
 Useful queries:
 
 ```promql
