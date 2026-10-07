@@ -148,6 +148,13 @@ metrics:
     enabled: false       # monitoring.coreos.com/v1 ServiceMonitor (prometheus-operator)
     interval: 30s
 
+# Web UI: a read-only page at /ui/ on the MCP port, with the JSON API and
+# live event stream it reads under /api/. It shows what the MCP endpoint
+# already exposes and inherits its access model — unauthenticated, reached by
+# port-forward or from inside the cluster.
+ui:
+  enabled: true
+
 # MCP server.
 mcp:
   port: 8081

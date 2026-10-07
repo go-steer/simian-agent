@@ -11,6 +11,7 @@ the audit export and `simian watch` all tell the same story.
 
 | You want to… | Use |
 |---|---|
+| see it all in a browser | [the web UI](#in-a-browser-the-web-ui) |
 | watch an arena live | [`simian watch`](#live-simian-watch) |
 | know what autonomous mode decided, and why a cycle was skipped | [`simian audit export --cycles`](#what-autonomous-mode-decided) or `simian watch` |
 | know exactly what was injected, when, and how it ended | [`simian audit export`](#what-was-injected) |
@@ -21,6 +22,31 @@ the audit export and `simian watch` all tell the same story.
 The commands assume the CLI can reach the controller — see step 4 of
 [Getting started]({{< relref "getting-started.md" >}}) (`SIMIAN_MCP_URL` and a
 port-forward).
+
+## In a browser: the web UI
+
+The controller serves a read-only page at `/ui/` on its MCP port (chart value
+`ui.enabled`, on by default; v0.3 and later). Through the same port-forward
+the CLI uses:
+
+```bash
+kubectl -n simian-system port-forward svc/simian-controller 18081:8081 &
+# then open http://localhost:18081/ui/
+```
+
+Pick an arena at the top. The page shows the faults running now with their
+countdowns; what autonomous mode decided — the latest hypothesis and plan,
+with each step's rationale and the reason for its duration, then each recent
+cycle's outcome or skip reason; recent faults with how they ended, whether
+the engine confirmed them, whether their effect was seen and whether the
+workload recovered; the arena's workloads against their desired replicas; and
+a live feed of audit events. It updates as events arrive.
+
+The page reads a small JSON API under `/api/` (`info`, `arenas`, `active`,
+`faults`, `cycles`, `topology`) and a server-sent event stream at
+`/api/events`, which other tools can use too. Like the MCP endpoint it is
+unauthenticated: reach it by port-forward or from inside the cluster, and do
+not expose it more widely without putting authentication in front of it.
 
 ## Live: `simian watch`
 
@@ -214,6 +240,8 @@ Keep it for operators.
 
 ## Not yet
 
-There is no web UI ([design]({{< relref "web-ui-design.md" >}})), and Simian
-does not write Kubernetes Events: events in an arena would be readable by any
-agent with the `view` role, and would hand it the answer.
+The web UI is read-only: submitting and clearing faults from it, and the eval
+scorecard view, are the next phases of its
+[design]({{< relref "web-ui-design.md" >}}). Simian does not write Kubernetes
+Events: events in an arena would be readable by any agent with the `view`
+role, and would hand it the answer.

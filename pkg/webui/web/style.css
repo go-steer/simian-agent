@@ -1,0 +1,68 @@
+/*
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+:root {
+  --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6b7280; --line: #e3e6eb;
+  --ok: #1a7f37; --warn: #b26a00; --bad: #c62828; --info: #1f5fbf; --chip: #eef1f5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12151b; --panel: #1b2029; --text: #e6e9ef; --muted: #9aa3b2; --line: #2b313c;
+    --ok: #4cc26b; --warn: #e0a33a; --bad: #ef5350; --info: #6aa3ff; --chip: #262c37;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+header { display: flex; align-items: center; gap: 1rem; padding: .75rem 1.25rem; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 1; }
+header h1 { margin: 0; font-size: 1.15rem; }
+.arena { margin-left: auto; color: var(--muted); }
+select { font: inherit; padding: .2rem .4rem; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
+.conn { color: var(--muted); font-size: 1.1rem; }
+.conn.live { color: var(--ok); }
+main { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; padding: 1rem 1.25rem; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .9rem 1rem; min-width: 0; }
+.panel.wide { grid-column: 1 / -1; }
+h2 { margin: 0 0 .6rem; font-size: 1rem; }
+h3 { margin: 1rem 0 .4rem; font-size: .85rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.count { color: var(--muted); font-weight: normal; }
+.muted { color: var(--muted); }
+.empty { color: var(--muted); font-style: italic; }
+footer { padding: 0 1.25rem 1.25rem; font-size: .85rem; }
+code { background: var(--chip); padding: 0 .3rem; border-radius: 4px; }
+
+.card { border: 1px solid var(--line); border-left: 4px solid var(--info); border-radius: 8px; padding: .55rem .7rem; margin-bottom: .5rem; }
+.card .top { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; }
+.card .remaining { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
+.badge { display: inline-block; padding: 0 .45rem; border-radius: 999px; font-size: .78rem; background: var(--chip); white-space: nowrap; }
+.badge.ok { color: var(--ok); } .badge.warn { color: var(--warn); } .badge.bad { color: var(--bad); } .badge.info { color: var(--info); }
+.kind { font-weight: 600; }
+
+.plan .hypothesis { margin: .2rem 0 .5rem; }
+.plan ol { margin: 0; padding-left: 1.2rem; }
+.plan li { margin-bottom: .35rem; }
+.plan .why { color: var(--muted); font-size: .85rem; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: .8rem; }
+td.num { font-variant-numeric: tabular-nums; }
+tr.short td { color: var(--bad); font-weight: 600; }
+
+.cycle .badge, #events .badge { justify-self: start; align-self: start; }
+.cycle { display: grid; grid-template-columns: 5.5rem 6rem 1fr; gap: .5rem; padding: .25rem 0; border-bottom: 1px solid var(--line); }
+#events { list-style: none; margin: 0; padding: 0; max-height: 28rem; overflow-y: auto; font-size: .85rem; }
+#events li { display: grid; grid-template-columns: 5.5rem 14rem 1fr; gap: .5rem; padding: .2rem 0; border-bottom: 1px solid var(--line); }
+#events .ev { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }

@@ -12,6 +12,18 @@ description: "Design doc for a single browser surface serving two purposes: live
 > a view in *this* application, not a second one. See §"One site, two data
 > sources" below.
 
+> **Status (v0.3):** phase 1, the read-only live view, is built and served by
+> `simian serve --ui` at `/ui/` — see
+> [Seeing what Simian is doing]({{< relref "observability.md#in-a-browser-the-web-ui" >}}).
+> One deviation from the plan below: the page reads a small JSON API under
+> `/api/` and an event stream at `/api/events`, served next to the MCP
+> endpoint, rather than speaking MCP from the browser. The data is the same
+> (the lease registry and the controller's fault and cycle logs), and plain
+> `fetch` and `EventSource` are what a page without a build step can use
+> cleanly; agents keep the MCP endpoint. It also adds what this design
+> predates: autonomous mode's cycles and plans, and each fault's recovery
+> verdict. Manual submit (phase 2) and the scorecard (phase 3) are next.
+
 ## Why a web UI
 
 Simian's operator-facing surface today is CLI-only:

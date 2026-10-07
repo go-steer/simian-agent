@@ -37,6 +37,7 @@ spec:
           args:
             - serve
             - --mcp-addr=:{{ .Values.mcp.port }}
+            - --ui={{ .Values.ui.enabled }}
             {{- if .Values.metrics.enabled }}
             - --metrics-addr=:{{ .Values.metrics.port }}
             {{- else }}

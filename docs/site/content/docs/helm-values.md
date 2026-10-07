@@ -122,6 +122,12 @@ On GKE the controller's stdout already reaches Cloud Logging, so the audit
 events are retained there as well; the file is what you have on clusters
 without a log pipeline, and what `simian audit export` reads directly.
 
+## Web UI
+
+| Value | Default | Notes |
+|---|---|---|
+| `ui.enabled` | `true` | Serve the read-only web UI at `/ui/`, with its JSON API and event stream under `/api/`, on the MCP port (`--ui`). Unauthenticated, like the MCP endpoint. |
+
 ## Metrics
 
 | Value | Default | Notes |

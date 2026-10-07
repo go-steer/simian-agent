@@ -55,6 +55,7 @@ import (
 	"github.com/go-steer/simian-agent/pkg/simian"
 	"github.com/go-steer/simian-agent/pkg/sut"
 	"github.com/go-steer/simian-agent/pkg/topology"
+	"github.com/go-steer/simian-agent/pkg/webui"
 )
 
 func newServeCmd() *cobra.Command {
@@ -85,6 +86,7 @@ func newServeCmd() *cobra.Command {
 		hypothesisHint       string
 		sutInjectEnvoyFault  bool
 		metricsAddr          string
+		ui                   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -104,6 +106,9 @@ func newServeCmd() *cobra.Command {
 			// and simian watch. Seeded from the audit file so a restart does
 			// not wipe it.
 			cycleLog := audit.NewCycleLog(0)
+			// Each fault's record — how it ended, whether it took and the
+			// workload recovered — for the web UI, likewise seeded.
+			faultLog := audit.NewFaultLog(0)
 			if auditFile != "" {
 				fileAuditor, records, takeOver, err := openAuditFile(auditFile, auditFileMaxBytes, logger)
 				if err != nil {
@@ -115,9 +120,16 @@ func newServeCmd() *cobra.Command {
 				pastFaults = audit.Faults(records)
 				for _, r := range records {
 					cycleLog.Add(r)
+					faultLog.Add(r)
 				}
 			}
-			auditor = audit.Multi{auditor, cycleLog}
+			auditor = audit.Multi{auditor, cycleLog, faultLog}
+			// The web UI's live stream of audit events.
+			var broadcaster *webui.Broadcaster
+			if ui {
+				broadcaster = webui.NewBroadcaster(ctx)
+				auditor = audit.Multi{auditor, broadcaster}
+			}
 			// Prometheus metrics, counted from the same audit events.
 			var recorder *metrics.Recorder
 			if metricsAddr != "" {
@@ -432,7 +444,27 @@ func newServeCmd() *cobra.Command {
 			}
 
 			sse := srv.ServeSSE(mcpAddr)
-			httpSrv := &http.Server{Addr: mcpAddr, Handler: sse, ReadHeaderTimeout: 5 * time.Second}
+			var handler http.Handler = sse
+			if ui {
+				// The web UI shares the MCP port: one port-forward reaches
+				// both, and the page needs no second deployment.
+				var autonomousIn []string
+				if autonomous {
+					autonomousIn = autonomousNS
+				}
+				uiHandler := webui.Handler(webui.Deps{
+					Version: version, Active: exec, Faults: faultLog, Cycles: cycleLog, Topology: disco2,
+					Arenas: arenaNamespaces, Autonomous: autonomousIn, Events: broadcaster,
+				})
+				mux := http.NewServeMux()
+				mux.Handle("/ui", uiHandler)
+				mux.Handle("/ui/", uiHandler)
+				mux.Handle("/api/", uiHandler)
+				mux.Handle("/", sse)
+				handler = mux
+				logger.Info("simian serve: web UI at /ui/", slog.String("addr", mcpAddr))
+			}
+			httpSrv := &http.Server{Addr: mcpAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 			errCh := make(chan error, 1)
 			go func() {
 				logger.Info("simian serve: MCP/SSE listening", "addr", mcpAddr)
@@ -462,6 +494,7 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&defaultProbes, "default-efficacy-probes", true, "Attach Simian's built-in efficacy probes to fault kinds that have one (see the catalog's efficacy_gate field). Turning this off applies dataplane faults unverified: a fault the cluster accepts but silently drops is then indistinguishable from one that worked.")
 	cmd.Flags().DurationVar(&reapInterval, "reap-interval", 30*time.Second, "Lease reaper sweep interval")
 	cmd.Flags().StringVar(&holderID, "holder-id", os.Getenv("HOSTNAME"), "Holder ID recorded on leases (defaults to HOSTNAME)")
+	cmd.Flags().BoolVar(&ui, "ui", true, "Serve the read-only web UI at /ui/ (and its /api/) on the MCP address")
 	cmd.Flags().StringVar(&metricsAddr, "metrics-addr", ":9090", "Serve Prometheus metrics on this address (/metrics); empty disables")
 	cmd.Flags().BoolVar(&debugLLMPayloads, "debug-llm-payloads", false, "Log raw LLM responses (debug only; do not enable in production — see design.md §12.2)")
 	cmd.Flags().StringVar(&auditFile, "audit-file", "", "Also append audit events to this file as JSON lines, so the trail outlives the process. Read it with 'simian audit export'. At start-up, faults a previous process applied and never closed get a closing event from it.")
