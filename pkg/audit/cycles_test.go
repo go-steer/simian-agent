@@ -101,3 +101,23 @@ func TestCycleLogKeepsOnlyTheNewest(t *testing.T) {
 		t.Errorf("cycles kept = %d, want 4", got)
 	}
 }
+
+func TestFaultLogFoldsFaultsAsTheExportDoes(t *testing.T) {
+	l := NewFaultLog(0)
+	emit := func(e simian.AuditEvent) { l.Emit(context.Background(), e) }
+	target := []map[string]any{{"namespace": "boutique", "name": "cartservice"}}
+	emit(simian.AuditEvent{Event: EventExecutorReceived, FaultUID: "f-1", Mode: simian.SourceAutonomous, Payload: map[string]any{"kind": "PodChaos", "targets": target}})
+	emit(simian.AuditEvent{Event: EventDriverApplied, FaultUID: "f-1", Payload: map[string]any{"kind": "PodChaos", "targets": target, "deadline": "2026-10-07T12:00:00Z"}})
+	emit(simian.AuditEvent{Event: EventLeaseExpired, FaultUID: "f-1", Reason: "deadline-reached"})
+	emit(simian.AuditEvent{Event: EventFaultRecovered, FaultUID: "f-1", Payload: map[string]any{"passed": true}})
+	emit(simian.AuditEvent{Event: EventExecutorReceived, FaultUID: "f-2", Payload: map[string]any{"kind": "PodChaos", "targets": []map[string]any{{"namespace": "bank"}}}})
+	emit(simian.AuditEvent{Event: EventCycleStarted, Payload: map[string]any{"namespace": "boutique"}}) // not about a fault
+
+	if all := l.Recent("", 0); len(all) != 2 || all[0].FaultUID != "f-2" {
+		t.Fatalf("recent = %+v, want f-2 (newest) then f-1", all)
+	}
+	got := l.Recent("boutique", 5)
+	if len(got) != 1 || got[0].Outcome != OutcomeExpired || got[0].Recovered == nil || !*got[0].Recovered || got[0].Kind != "PodChaos" {
+		t.Errorf("boutique = %+v", got)
+	}
+}

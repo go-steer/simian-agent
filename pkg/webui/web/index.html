@@ -1,0 +1,69 @@
+<!doctype html>
+<!--
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Simian</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Simian</h1>
+    <span id="version" class="muted"></span>
+    <label class="arena">Arena
+      <select id="arena"><option value="">All arenas</option></select>
+    </label>
+    <span id="conn" class="conn" title="Live event stream">●</span>
+  </header>
+
+  <main>
+    <section id="active-panel" class="panel">
+      <h2>Active faults <span id="active-count" class="count"></span></h2>
+      <div id="active"></div>
+    </section>
+
+    <section id="plan-panel" class="panel">
+      <h2>Autonomous mode</h2>
+      <div id="plan"></div>
+      <h3>Recent cycles</h3>
+      <div id="cycles"></div>
+    </section>
+
+    <section id="faults-panel" class="panel wide">
+      <h2>Recent faults</h2>
+      <div id="faults"></div>
+    </section>
+
+    <section id="workloads-panel" class="panel">
+      <h2>Workloads</h2>
+      <div id="workloads"></div>
+    </section>
+
+    <section id="events-panel" class="panel">
+      <h2>Live events</h2>
+      <ol id="events"></ol>
+    </section>
+  </main>
+
+  <footer class="muted">
+    Read-only view of what this controller has done, from its audit trail.
+    The same record as <code>simian watch</code> and <code>simian audit export</code>.
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>
