@@ -44,7 +44,7 @@ image:
   # silently change the running binary.
   # Must be at least the chart's appVersion: the chart renders flags
   # (e.g. --audit-file) an older binary refuses. verify-chart checks it.
-  tag: "0.2.0-rc.1"
+  tag: "0.2.0-rc.2"
   # IfNotPresent matches the chart default; explicit for clarity.
   pullPolicy: IfNotPresent
 
@@ -178,6 +178,12 @@ resources:
 # ============================================================
 # Hardening log — what is "baked" and as of when
 # ============================================================
+#
+# 2026-10-07 (chart 0.2.0-rc.2):
+#   - image pin moved to 0.2.0-rc.2: the metrics label the arena "arena"
+#     (Managed Prometheus overwrote "namespace") and start each arena's
+#     series at 0, so the first fault is counted; refusals have their own
+#     counter (#216).
 #
 # 2026-10-07 (chart 0.2.0-rc.1):
 #   - image pin moved to 0.2.0-rc.1, the release candidate soaked before
