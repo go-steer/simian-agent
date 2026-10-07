@@ -36,7 +36,7 @@ Steps 1–7 need no LLM at all; steps 8 and 9 do.
 ## 1. Get Simian
 
 ```bash
-git clone --depth 1 --branch v0.1.15 https://github.com/go-steer/simian-agent
+git clone --depth 1 --branch v0.2.0 https://github.com/go-steer/simian-agent
 cd simian-agent
 make build
 bin/simian --help
@@ -341,9 +341,10 @@ kubectl -n simian-system port-forward svc/simian-controller 19090:9090 >/tmp/sim
 sleep 2; curl -s http://localhost:19090/metrics | grep '^simian_'
 ```
 
-**Check:** `simian_build_info{version="0.1.15"} 1`, and counters such as
-`simian_faults_applied_total{…,kind="PodChaos",namespace="boutique",…}` and
-`simian_cycles_total{namespace="boutique",outcome="completed",…}`.
+**Check:** `simian_build_info{version="0.2.0"} 1`, and counters for the arena
+such as `simian_faults_applied_total{arena="boutique",…,kind="PodChaos",…}` and
+`simian_cycles_total{arena="boutique",outcome="completed",…}`. They exist from
+the start, at `0` until something happens.
 
 ### On GKE: in Cloud Monitoring
 
@@ -356,10 +357,22 @@ curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
   "https://monitoring.googleapis.com/v1/projects/$GOOGLE_CLOUD_PROJECT/location/global/prometheus/api/v1/query?query=sum%20by%20(kind)(simian_faults_applied_total)"
 ```
 
-**Check:** a JSON result with one series per fault kind applied so far.
+**Check:** a JSON result with one series per fault kind in the catalog, at
+`0` for the kinds not applied yet.
+
 **If not:** `kubectl -n simian-system describe podmonitoring simian-controller`
 shows whether the endpoint is being scraped; collection can take five minutes
 to appear.
+
+For a dashboard of it all, import the one Simian ships:
+
+```bash
+gcloud monitoring dashboards create --project "$GOOGLE_CLOUD_PROJECT" \
+    --config-from-file=deploy/dashboards/cloud-monitoring.json
+```
+
+It appears as **Simian** in the console under Monitoring → Dashboards. (Step 12
+deletes it.)
 
 [Seeing what Simian is doing]({{< relref "observability.md" >}}) lists every
 metric, with queries and alerts worth having — above all
@@ -388,6 +401,8 @@ kill %1 %2 2>/dev/null   # the port-forwards, if still running in this shell
 helm uninstall simian -n simian-system
 kubectl -n simian-system delete pvc simian-audit   # the audit volume is kept on uninstall
 dev/tools/grant-vertex-access --revoke
+gcloud monitoring dashboards list --project "$GOOGLE_CLOUD_PROJECT" --filter='displayName="Simian"' --format='value(name)' \
+  | xargs -r -n1 gcloud monitoring dashboards delete --quiet   # if you imported it in step 10
 gcloud container clusters delete "$CLUSTER" --project "$GOOGLE_CLOUD_PROJECT" --zone "$ZONE" --quiet
 rm -f .kube/quickstart.yaml
 ```
