@@ -66,9 +66,13 @@ jobs:
           # Plus a "latest" floating tag for the most recent stable release:
           # a tag with no prerelease suffix (v0.1.11, not v0.1.11-dev).
           # {{is_default_branch}} is false on a tag build, so it never moved.
+          # flavor latest=false: the action's default (auto) adds "latest" to
+          # a type=match tag by itself, and moved it to v0.2.0-rc.2.
           tags: |
             type=match,pattern=v(.*),group=1
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+          flavor: |
+            latest=false
 
       - uses: docker/build-push-action@v6
         with:
