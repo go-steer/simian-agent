@@ -25,7 +25,7 @@
           "title": "Version",
           "scorecard": {
             "timeSeriesQuery": {
-              "prometheusQuery": "max by (version) (simian_build_info)"
+              "prometheusQuery": "max by (version) (simian_build_info{${cluster}})"
             }
           }
         }
@@ -39,7 +39,7 @@
           "title": "Faults held now",
           "scorecard": {
             "timeSeriesQuery": {
-              "prometheusQuery": "sum(simian_active_faults) or vector(0)"
+              "prometheusQuery": "sum(simian_active_faults{${cluster}}) or vector(0)"
             }
           }
         }
@@ -53,7 +53,7 @@
           "title": "Broken workloads (24h)",
           "scorecard": {
             "timeSeriesQuery": {
-              "prometheusQuery": "sum(increase(simian_fault_recovery_checks_total{passed=\"false\"}[1d])) or vector(0)"
+              "prometheusQuery": "sum(increase(simian_fault_recovery_checks_total{passed=\"false\", ${cluster}}[1d])) or vector(0)"
             },
             "thresholds": [
               {
@@ -76,7 +76,7 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "sum by (kind) (increase(simian_faults_applied_total[1h]))"
+                  "prometheusQuery": "sum by (kind) (increase(simian_faults_applied_total{${cluster}}[1h]))"
                 },
                 "plotType": "STACKED_BAR",
                 "targetAxis": "Y1",
@@ -100,7 +100,7 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "sum by (arena) (simian_active_faults)"
+                  "prometheusQuery": "sum by (arena) (simian_active_faults{${cluster}})"
                 },
                 "plotType": "LINE",
                 "targetAxis": "Y1",
@@ -124,7 +124,7 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "sum by (arena, kind) (increase(simian_fault_recovery_checks_total{passed=\"false\"}[1h])) or vector(0)"
+                  "prometheusQuery": "sum by (arena, kind) (increase(simian_fault_recovery_checks_total{passed=\"false\", ${cluster}}[1h])) or vector(0)"
                 },
                 "plotType": "STACKED_BAR",
                 "targetAxis": "Y1",
@@ -148,7 +148,7 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "sum(increase(simian_fault_recovery_checks_total{passed=\"true\"}[1h])) / sum(increase(simian_fault_recovery_checks_total[1h]))"
+                  "prometheusQuery": "sum(increase(simian_fault_recovery_checks_total{passed=\"true\", ${cluster}}[1h])) / sum(increase(simian_fault_recovery_checks_total{${cluster}}[1h]))"
                 },
                 "plotType": "LINE",
                 "targetAxis": "Y1",
@@ -172,7 +172,7 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "sum by (outcome, reason) (increase(simian_cycles_total[1h]))"
+                  "prometheusQuery": "sum by (outcome, reason) (increase(simian_cycles_total{${cluster}}[1h]))"
                 },
                 "plotType": "STACKED_BAR",
                 "targetAxis": "Y1",
@@ -196,7 +196,7 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "sum by (outcome) (increase(simian_faults_ended_total[1h]))"
+                  "prometheusQuery": "sum by (outcome) (increase(simian_faults_ended_total{${cluster}}[1h]))"
                 },
                 "plotType": "STACKED_BAR",
                 "targetAxis": "Y1",
@@ -220,7 +220,7 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "sum by (reason) (increase(simian_faults_refused_total[1d]))"
+                  "prometheusQuery": "sum by (reason) (increase(simian_faults_refused_total{${cluster}}[1d]))"
                 },
                 "plotType": "STACKED_BAR",
                 "targetAxis": "Y1",
@@ -244,7 +244,7 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "sum by (arena, source) (increase(simian_faults_applied_total[1h]))"
+                  "prometheusQuery": "sum by (arena, source) (increase(simian_faults_applied_total{${cluster}}[1h]))"
                 },
                 "plotType": "STACKED_BAR",
                 "targetAxis": "Y1",
@@ -258,5 +258,12 @@
         }
       }
     ]
-  }
+  },
+  "dashboardFilters": [
+    {
+      "filterType": "RESOURCE_LABEL",
+      "labelKey": "cluster",
+      "templateVariable": "cluster"
+    }
+  ]
 }
