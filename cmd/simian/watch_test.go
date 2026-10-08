@@ -96,7 +96,7 @@ func TestRenderSnapshotWithFaults(t *testing.T) {
 		"network-policy",
 		"NetworkPolicy",
 		"cartservice",
-		"cleared (deadline-reached)",
+		"expired (deadline-reached)", // the audit export's word for it, not "cleared"
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected output to contain %q; got:\n%s", want, out)

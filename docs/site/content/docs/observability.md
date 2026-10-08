@@ -50,9 +50,9 @@ AUTONOMOUS CYCLES (4)
 
 RECENT FAULTS (4)
   18:29:20  f-01M497MC2X chaos-mesh       PodChaos         → adservice             applied
-  18:28:40  f-01M497FE8N chaos-mesh       NetworkChaos     → paymentservice        cleared (deadline-reached)
-  18:26:10  f-01M497AJ44 chaos-mesh       NetworkChaos     → currencyservice       cleared (deadline-reached)
-  18:23:10  f-01M49770TJ chaos-mesh       PodChaos         → productcatalogservice  cleared (deadline-reached)
+  18:28:40  f-01M497FE8N chaos-mesh       NetworkChaos     → paymentservice        expired (deadline-reached)
+  18:26:10  f-01M497AJ44 chaos-mesh       NetworkChaos     → currencyservice       expired (deadline-reached)
+  18:23:10  f-01M49770TJ chaos-mesh       PodChaos         → productcatalogservice  expired (deadline-reached)
 ```
 
 The cycles section is what autonomous mode is thinking: the latest hypothesis
