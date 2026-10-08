@@ -17,6 +17,7 @@ package webui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -192,5 +193,91 @@ func TestAnAdminClearsEveryFaultInTheirName(t *testing.T) {
 	}
 	if len(w.exec.cleared) != 2 || w.exec.actors[0] != "alice@example.com" || w.exec.actors[1] != "alice@example.com" {
 		t.Errorf("cleared %v as %v", w.exec.cleared, w.exec.actors)
+	}
+}
+
+// pausedAtClear clears faults and notes whether autonomous mode was already
+// paused everywhere when each one was cleared.
+type pausedAtClear struct {
+	*fakeExecutor
+	control *loop.Control
+	seen    []bool
+}
+
+func (p *pausedAtClear) Clear(ctx context.Context, uid string) error {
+	s, _ := p.control.Get()
+	p.seen = append(p.seen, s.IsPaused("*"))
+	return p.fakeExecutor.Clear(ctx, uid)
+}
+
+type failingStore struct{ memStore }
+
+func (f *failingStore) Save(context.Context, loop.Settings, loop.Source) error {
+	return errors.New("configmaps is forbidden")
+}
+
+func haltWorld(t *testing.T, store interface {
+	Save(context.Context, loop.Settings, loop.Source) error
+	Clear(context.Context) error
+}) (*httptest.Server, *fakeIAP, *loop.Control, *pausedAtClear, *events) {
+	t.Helper()
+	f := newFakeIAP(t)
+	control := loop.NewControl(loop.Settings{Enabled: true, Namespaces: []string{"boutique"}, Interval: 3 * time.Minute, MaxFaultsPerCycle: 1})
+	exec := &pausedAtClear{fakeExecutor: &fakeExecutor{}, control: control}
+	ev := &events{}
+	auth := f.auth(t, testAudience, "alice@example.com", "bob@example.com")
+	auth.Admins = Writers{"alice@example.com"}
+	srv := httptest.NewServer(Handler(Deps{
+		Auth: auth, Executor: exec, Auditor: ev,
+		Active:   activeList{faults: []simian.ActiveFault{{FaultUID: "f-a"}, {FaultUID: "f-b"}}},
+		Autonomy: &Autonomy{Control: control, Store: store},
+	}))
+	t.Cleanup(srv.Close)
+	return srv, f, control, exec, ev
+}
+
+func TestHaltPausesEverythingThenClearsEveryFault(t *testing.T) {
+	store := &memStore{}
+	srv, f, control, exec, ev := haltWorld(t, store)
+	bob := f.token(t, "ES256", func(c map[string]any) { c["email"] = "bob@example.com" })
+	if code, _ := post(t, srv, "/api/admin/halt", bob, true, `{}`); code != http.StatusForbidden {
+		t.Errorf("a writer who is not an admin halted: %d", code)
+	}
+	code, body := post(t, srv, "/api/admin/halt", f.token(t, "ES256", nil), true, `{}`)
+	if code != 200 || !strings.Contains(body, `"paused":true`) || !strings.Contains(body, `"f-a"`) || !strings.Contains(body, `"f-b"`) {
+		t.Fatalf("halt: %d %s", code, body)
+	}
+	if s, src := control.Get(); !s.IsPaused("anything") || src.By != "alice@example.com" {
+		t.Errorf("after halt: %+v from %+v", s.Paused, src)
+	}
+	if len(exec.seen) != 2 || !exec.seen[0] || !exec.seen[1] {
+		t.Errorf("paused when each fault was cleared: %v — the loop must be stopped first", exec.seen)
+	}
+	if exec.actors[0] != "alice@example.com" {
+		t.Errorf("cleared as %v", exec.actors)
+	}
+	if store.saved == nil || !store.saved.IsPaused("x") {
+		t.Error("the halt was not kept across a restart")
+	}
+	halts := 0
+	for _, e := range ev.e {
+		if e.Event == audit.EventAutonomousConfigured && e.Reason == "halt" && e.Payload["actor"] == "alice@example.com" {
+			halts++
+		}
+	}
+	if halts != 1 {
+		t.Errorf("halt audited %d times, want once", halts)
+	}
+}
+
+// A halt that cannot be kept still stops everything now, and says so.
+func TestAHaltThatCannotBeKeptStillTakesEffect(t *testing.T) {
+	srv, f, control, exec, _ := haltWorld(t, &failingStore{})
+	code, body := post(t, srv, "/api/admin/halt", f.token(t, "ES256", nil), true, `{}`)
+	if code != 200 || !strings.Contains(body, `"paused":true`) || !strings.Contains(body, "forbidden") {
+		t.Fatalf("halt: %d %s", code, body)
+	}
+	if s, _ := control.Get(); !s.IsPaused("x") || len(exec.cleared) != 2 {
+		t.Errorf("paused %v, cleared %v", s.Paused, exec.cleared)
 	}
 }
