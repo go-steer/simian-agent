@@ -1,0 +1,248 @@
+/*
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* chrome.css — the furniture both layouts wear: the backdrop, the HUD
+ * strip along the top, the status bar along the bottom, the scanline and
+ * vignette overlays, and the HUD buttons.
+ *
+ * Adapted from mast-web web/chrome.css at commit da7cf52
+ * (github.com/go-steer/mast-web, Apache-2.0), plus the .hud-brand rule
+ * from its styles.css. The agent sidebar, the batch drawer and the
+ * session/status-bar slots are left out; body.spatial / body.solo are
+ * body.room / body.flat here.
+ *
+ * One colour rule, kept from mast-web: --accent means "this one is live"
+ * (the stream dot, a pressed toggle, the control under the pointer).
+ * Controls at rest are --text.
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: clip;
+}
+
+body.simian {
+  --hud-h: 36px;
+  --status-h: 26px;
+  --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', ui-monospace, Menlo, Consolas, monospace;
+
+  position: relative;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+  background: radial-gradient(
+    ellipse at 50% 62%,
+    var(--room-core) 0%,
+    var(--room-mid) 60%,
+    var(--room-edge) 100%
+  );
+  cursor: default;
+}
+
+/* ─── Overlays ───────────────────────────────────────────────────── */
+
+#scene-scanlines,
+#scene-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+#scene-scanlines {
+  background: repeating-linear-gradient(to bottom, var(--scan) 0 1px, transparent 1px 3px);
+  opacity: 0.9;
+}
+
+#scene-vignette {
+  background: radial-gradient(ellipse at 50% 48%, transparent 44%, var(--room-vignette) 100%);
+}
+
+body.flat #scene-vignette {
+  opacity: 0.45;
+}
+
+/* ─── HUD + status bar ───────────────────────────────────────────── */
+
+#app-hud,
+#app-status {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 14px;
+  font-size: 11px;
+  background: color-mix(in srgb, var(--bg-surface) 82%, transparent);
+  backdrop-filter: blur(3px);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+#app-hud {
+  top: 0;
+  height: var(--hud-h);
+  border-bottom: 1px solid var(--frame);
+  box-shadow: 0 6px 22px -18px var(--glow);
+}
+
+#app-status {
+  bottom: 0;
+  height: var(--status-h);
+  border-top: 1px solid var(--frame);
+  box-shadow: 0 -6px 22px -18px var(--glow);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+}
+
+.hud-brand {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--brand-color);
+  background-image: var(--brand-image);
+  background-clip: text;
+  text-shadow: 0 0 10px var(--glow);
+}
+
+.hud-sep {
+  color: var(--border-soft);
+  opacity: 0.75;
+}
+
+.hud-spacer {
+  flex: 1;
+}
+
+.hud-item,
+.status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.hud-label {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+#hud-camera {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+body.flat .room-only {
+  display: none !important;
+}
+
+#me {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 28ch;
+}
+
+/* Furniture until you reach for it. */
+.hud-btn {
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border: 1px solid var(--frame);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    color 0.12s linear,
+    background-color 0.12s linear,
+    box-shadow 0.12s linear;
+}
+
+.hud-btn:hover,
+.hud-btn:focus-visible {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--accent);
+  box-shadow: 0 0 12px -3px var(--glow);
+  outline: none;
+}
+
+.hud-btn[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  box-shadow: 0 0 12px -3px var(--glow);
+}
+
+.hud-toggle {
+  padding: 2px 7px;
+  font-size: 14px;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+/* Native selects borrow .hud-btn; the dropdown is painted by the OS, so
+   options need a real background. */
+select.hud-btn {
+  text-transform: none;
+  letter-spacing: 0.02em;
+  max-width: 190px;
+}
+
+select.hud-btn option {
+  background: var(--bg-surface);
+  color: var(--text);
+}
+
+/* The live-stream dot: green and haloed while the event stream is open. */
+.conn {
+  font-size: 9px;
+  line-height: 1;
+  color: var(--text-dim);
+}
+
+.conn.live {
+  color: var(--ok);
+  text-shadow: 0 0 7px var(--ok);
+}
+
+.status-live {
+  color: var(--accent);
+}
+
+.status-bad {
+  color: var(--bad);
+}
+
+.status-hint {
+  opacity: 0.7;
+}
+
+.status-item code {
+  font-family: inherit;
+  color: var(--text);
+}
