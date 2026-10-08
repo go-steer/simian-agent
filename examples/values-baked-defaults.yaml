@@ -44,7 +44,7 @@ image:
   # silently change the running binary.
   # Must be at least the chart's appVersion: the chart renders flags
   # (e.g. --audit-file) an older binary refuses. verify-chart checks it.
-  tag: "0.3.0-rc.4"
+  tag: "0.3.0"
   # IfNotPresent matches the chart default; explicit for clarity.
   pullPolicy: IfNotPresent
 
@@ -178,6 +178,12 @@ resources:
 # ============================================================
 # Hardening log — what is "baked" and as of when
 # ============================================================
+#
+# 2026-10-08 (chart 0.3.0):
+#   - image pin moved to 0.3.0: the web UI, with faults injected and
+#     cleared and autonomous mode run from it behind Identity-Aware Proxy.
+#     Validated as rc.1-rc.4 on GKE behind IAP. Upgrading from 0.2.x: see
+#     the release notes.
 #
 # 2026-10-08 (chart 0.3.0-rc.4):
 #   - image pin moved to 0.3.0-rc.4: the controller may keep the UI's
