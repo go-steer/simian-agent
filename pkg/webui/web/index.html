@@ -29,6 +29,7 @@ limitations under the License.
       <select id="arena"><option value="">All arenas</option></select>
     </label>
     <span id="me" class="muted"></span>
+    <button type="button" id="settings" class="icon" title="Configuration" aria-label="Configuration">⚙</button>
     <span id="conn" class="conn" title="Live event stream">●</span>
   </header>
 
@@ -48,7 +49,7 @@ limitations under the License.
         </div>
         <div id="f-exact">
           <label>Kind <select id="f-kind"></select></label>
-          <div id="f-hint" class="muted hint"></div>
+          <details id="f-hint-box"><summary class="muted">Show the template</summary><div id="f-hint" class="muted hint"></div></details>
           <label class="block">Spec (JSON; the target comes from Workload)
             <textarea id="f-spec" rows="5" spellcheck="false"></textarea></label>
         </div>
@@ -86,8 +87,14 @@ limitations under the License.
       <div id="workloads"></div>
     </section>
 
-    <section id="config-panel" class="panel wide">
-      <h2>Configuration</h2>
+    <section id="events-panel" class="panel">
+      <h2>Live events</h2>
+      <ol id="events"></ol>
+    </section>
+  </main>
+
+    <dialog id="config-dialog">
+      <div class="dialog-head"><h2>Configuration</h2><button type="button" id="config-close" aria-label="Close">✕</button></div>
       <div class="config-grid">
         <div>
           <h3>Safety limits <span class="muted">(set where Simian is installed)</span></h3>
@@ -111,7 +118,7 @@ limitations under the License.
         </div>
         <div class="row">
           <label>Every <input id="a-interval" size="6"></label>
-          <label>Faults per cycle <input id="a-max" type="number" min="1" style="width:4rem"></label>
+          <label>Faults per cycle <input id="a-max" type="number" min="1" style="width:4rem"> <span id="a-max-hint" class="muted"></span></label>
           <label>Severity cap <select id="a-tier"></select></label>
         </div>
         <label class="block">Hypothesis hint (optional)
@@ -129,13 +136,7 @@ limitations under the License.
         </div>
         <div class="muted hint">Changes take effect at the next cycle; one already running finishes. They are kept across restarts and recorded in the audit trail in your name. The safety limits above are the ceiling: they change only where Simian is installed.</div>
       </form>
-    </section>
-
-    <section id="events-panel" class="panel">
-      <h2>Live events</h2>
-      <ol id="events"></ol>
-    </section>
-  </main>
+    </dialog>
 
   <footer class="muted">
     What this controller has done, from its audit trail: the same record as
