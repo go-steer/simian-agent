@@ -153,7 +153,7 @@ metrics:
 #
 # auth: none — read-only, for a port-forward or in-cluster access; nobody can
 #   inject faults from the browser, because nobody can be identified.
-# auth: iap — behind Identity-Aware Proxy ("In a browser: the web UI" in docs/observability.md). Every
+# auth: iap — behind Identity-Aware Proxy (docs/web-ui-iap.md). Every
 #   request must carry IAP's signed assertion; IAP decides who may view, and
 #   iap.writers who may also inject and clear faults, each recorded in the
 #   audit trail in their name. Only this port is exposed; MCP stays in the
