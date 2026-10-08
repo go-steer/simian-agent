@@ -168,7 +168,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "simian.labels" . | nindent 4 }}
-  {{- if and .Values.ui.enabled .Values.ui.iap.ingress.enabled }}
+  {{- if and .Values.ui.enabled .Values.ui.iap.ingress.enabled (not .Values.ui.iap.gateway.enabled) }}
   annotations:
     # The UI port's backend gets IAP and the /healthz health check (see
     # ui-iap-ingress.yaml); the load balancer reaches the pods directly.

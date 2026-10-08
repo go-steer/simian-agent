@@ -185,6 +185,20 @@ ui:
       # NAME --global), so the address — and host's DNS record — outlive the
       # Ingress. Empty: an ephemeral address.
       staticIPName: ""
+    # On GKE, the same with the Gateway API instead of an Ingress — for a
+    # cluster with the Gateway API on (--gateway-api=standard), and to use a
+    # certificate you already have in Certificate Manager (a wildcard, say):
+    # a Gateway (gke-l7-global-external-managed) serving certificateMap, an
+    # HTTPRoute for host, a GCPBackendPolicy turning IAP on with the
+    # Google-managed OAuth client, and a HealthCheckPolicy on /healthz. Use
+    # either ingress or gateway, not both.
+    gateway:
+      enabled: false
+      host: ""
+      # A Certificate Manager certificate map with an entry covering host.
+      certificateMap: ""
+      # A reserved global static IP's name. Empty: an ephemeral address.
+      staticIPName: ""
 
 # MCP server.
 mcp:

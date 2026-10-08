@@ -160,13 +160,26 @@ for want in "kind: Ingress" "kind: BackendConfig" "kind: ManagedCertificate" "ki
     fail=1
   fi
 done
+out="$(render sim-ui-gateway --set ui.auth=iap --set ui.iap.projectNumber=123456 \
+  --set ui.iap.gateway.enabled=true --set ui.iap.gateway.host=simian.example.com \
+  --set ui.iap.gateway.certificateMap=star-example-com)"
+for want in "kind: Gateway" "kind: HTTPRoute" "kind: GCPBackendPolicy" "kind: HealthCheckPolicy" \
+  "networking.gke.io/certmap: star-example-com" "requestPath: /healthz" "enabled: true   # no clientID"; do
+  if ! grep -qF -- "$want" <<<"$out"; then
+    echo "✗ ui-gateway: expected '$want' in the render" >&2
+    fail=1
+  fi
+done
 if grep -qF "kind: Ingress" <<<"$(render sim-ui-noingress)"; then
   echo "✗ ui-ingress: an Ingress rendered by default" >&2
   fail=1
 fi
 for bad in "--set ui.auth=iap" "--set ui.auth=oidc" "--set ui.iap.writers={alice@example.com}" \
   "--set ui.iap.ingress.enabled=true --set ui.iap.ingress.host=h" \
-  "--set ui.auth=iap --set ui.iap.projectNumber=1 --set ui.iap.ingress.enabled=true"; do
+  "--set ui.auth=iap --set ui.iap.projectNumber=1 --set ui.iap.ingress.enabled=true" \
+  "--set ui.iap.gateway.enabled=true --set ui.iap.gateway.host=h --set ui.iap.gateway.certificateMap=m" \
+  "--set ui.auth=iap --set ui.iap.projectNumber=1 --set ui.iap.gateway.enabled=true --set ui.iap.gateway.host=h" \
+  "--set ui.auth=iap --set ui.iap.projectNumber=1 --set ui.iap.gateway.enabled=true --set ui.iap.gateway.host=h --set ui.iap.gateway.certificateMap=m --set ui.iap.ingress.enabled=true --set ui.iap.ingress.host=h"; do
   # shellcheck disable=SC2086 # word-splitting the --set pair is the point
   if helm template sim-ui-bad "$CHART" --set llm.vertex.project=verify-project $bad >/dev/null 2>&1; then
     echo "✗ ui-iap: rendered with $bad; it must refuse" >&2
