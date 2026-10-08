@@ -126,7 +126,7 @@ without a log pipeline, and what `simian audit export` reads directly.
 
 | Value | Default | Notes |
 |---|---|---|
-| `ui.enabled` | `true` | Serve the read-only web UI at `/ui/`, with its JSON API and event stream under `/api/`, on the MCP port (`--ui`). Unauthenticated, like the MCP endpoint. |
+| `ui.enabled` | `true` | Serve the read-only web UI at `/ui/`, with its JSON API and event stream under `/api/`, on the MCP port. Unauthenticated, like the MCP endpoint. Only `false` renders a flag (`--ui=false`), which needs a v0.3 image; the default renders none, so 0.2.x images still start. |
 
 ## Metrics
 

@@ -37,7 +37,11 @@ spec:
           args:
             - serve
             - --mcp-addr=:{{ .Values.mcp.port }}
-            - --ui={{ .Values.ui.enabled }}
+            {{- if not .Values.ui.enabled }}
+            {{- /* Only when off: the binary serves the UI by default, so a
+                   default install renders no flag an older image refuses. */}}
+            - --ui=false
+            {{- end }}
             {{- if .Values.metrics.enabled }}
             - --metrics-addr=:{{ .Values.metrics.port }}
             {{- else }}
