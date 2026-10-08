@@ -508,6 +508,9 @@ func renderLabels(labels map[string]string) string {
 // Only workloads the step demonstrably targets are judged — by name, or by a
 // label selector their pod template satisfies.
 func checkTargetCompat(m simian.FaultManifest, topo *topology.TargetTopology) error {
+	if err := checkContainerKill(m, topo); err != nil {
+		return err
+	}
 	if topo != nil && m.Engine == simian.EngineChaosMesh && m.ResourceKind == "HTTPChaos" {
 		return checkHTTPChaosProbes(m, topo)
 	}
@@ -542,6 +545,36 @@ func checkTargetCompat(m simian.FaultManifest, topo *topology.TargetTopology) er
 		}
 	}
 	return nil
+}
+
+// checkContainerKill rejects a PodChaos container-kill that names no
+// container: Chaos Mesh's webhook refuses it, and the cycle is lost as
+// driver-failed (#215). The error lists the target's containers, so the
+// corrective retry can pick one.
+func checkContainerKill(m simian.FaultManifest, topo *topology.TargetTopology) error {
+	if m.Engine != simian.EngineChaosMesh || m.ResourceKind != "PodChaos" || m.Spec["action"] != "container-kill" {
+		return nil
+	}
+	if names, _ := m.Spec["containerNames"].([]any); len(names) > 0 {
+		return nil
+	}
+	var containers []string
+	if topo != nil {
+		for _, w := range topo.Workloads {
+			if !stepTargets(m, w) {
+				continue
+			}
+			for _, c := range w.Containers {
+				if !slices.Contains(containers, c.Name) {
+					containers = append(containers, c.Name)
+				}
+			}
+		}
+	}
+	if len(containers) == 0 {
+		return fmt.Errorf(`PodChaos container-kill needs "containerNames": the containers to kill`)
+	}
+	return fmt.Errorf(`PodChaos container-kill needs "containerNames": the containers to kill, from %v`, containers)
 }
 
 // stepTargets reports whether the step names the workload, or selects its
