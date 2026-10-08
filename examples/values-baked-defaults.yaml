@@ -44,7 +44,7 @@ image:
   # silently change the running binary.
   # Must be at least the chart's appVersion: the chart renders flags
   # (e.g. --audit-file) an older binary refuses. verify-chart checks it.
-  tag: "0.3.0"
+  tag: "0.4.0-rc.1"
   # IfNotPresent matches the chart default; explicit for clarity.
   pullPolicy: IfNotPresent
 
@@ -178,6 +178,11 @@ resources:
 # ============================================================
 # Hardening log — what is "baked" and as of when
 # ============================================================
+#
+# 2026-10-08 (chart 0.4.0-rc.1):
+#   - image pin moved to 0.4.0-rc.1: the web UI in mast-web's spatial room,
+#     with a flat fallback (#242). Install the last stable release, v0.3.0,
+#     unless you are trying the candidate.
 #
 # 2026-10-08 (chart 0.3.0):
 #   - image pin moved to 0.3.0: the web UI, with faults injected and
