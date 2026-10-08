@@ -44,7 +44,7 @@ image:
   # silently change the running binary.
   # Must be at least the chart's appVersion: the chart renders flags
   # (e.g. --audit-file) an older binary refuses. verify-chart checks it.
-  tag: "0.4.0-rc.2"
+  tag: "0.4.0-rc.3"
   # IfNotPresent matches the chart default; explicit for clarity.
   pullPolicy: IfNotPresent
 
@@ -178,6 +178,10 @@ resources:
 # ============================================================
 # Hardening log — what is "baked" and as of when
 # ============================================================
+#
+# 2026-10-08 (chart 0.4.0-rc.3):
+#   - image pin moved to 0.4.0-rc.3: the Chaos theme, frosted glass with
+#     one pink accent, the web UI's new default (#248).
 #
 # 2026-10-08 (chart 0.4.0-rc.2):
 #   - image pin moved to 0.4.0-rc.2: All arenas lists every arena's
