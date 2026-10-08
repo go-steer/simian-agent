@@ -131,8 +131,9 @@ if ! grep -qF "mountPath: /var/lib/simian" <<<"$out" || ! grep -qF "emptyDir: {}
   fail=1
 fi
 
-echo "▸ the web UI is on by default and can be turned off"
-expect_arg "ui-default" "$(render sim-ui)" "--ui=true"
+echo "▸ the web UI is on by default (no flag, so a 0.2.x image still starts) and can be turned off"
+reject_arg "ui-default" "$(render sim-ui)" "--ui=true"
+reject_arg "ui-default" "$(render sim-ui)" "--ui=false"
 expect_arg "ui-off" "$(render sim-ui-off --set ui.enabled=false)" "--ui=false"
 
 echo "▸ metrics are served and scrapeable by default, and can be turned off"
