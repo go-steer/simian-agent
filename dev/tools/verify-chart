@@ -143,6 +143,13 @@ if ! grep -qF "name: ui" <<<"$out" || ! grep -qF "containerPort: 8082" <<<"$out"
   fail=1
 fi
 
+echo "▸ the controller may keep the UI's autonomous settings in its own namespace"
+out="$(render sim-runtime-config)"
+if ! grep -qF "name: simian-runtime-config" <<<"$out" || ! grep -qF 'resourceNames: ["simian-runtime-config"]' <<<"$out"; then
+  echo "✗ runtime-config: expected a Role for the simian-runtime-config ConfigMap" >&2
+  fail=1
+fi
+
 echo "▸ behind IAP the UI checks IAP's assertion, and writers may inject"
 out="$(render sim-ui-iap --set ui.auth=iap --set ui.iap.projectNumber=123456 \
   --set 'ui.iap.writers={alice@example.com,domain:sre.example.com}')"
