@@ -276,6 +276,16 @@ func renderActive(w io.Writer, active []activeFault, now time.Time) {
 	}
 }
 
+// endStatus names how a fault ended in the audit export's words: a lease
+// that ran out is expired, not cleared, which the export keeps for a fault
+// taken out early.
+func endStatus(reason string) string {
+	if reason == "deadline-reached" || reason == "orphan-reaped" {
+		return "expired (" + reason + ")"
+	}
+	return "cleared (" + reason + ")"
+}
+
 func renderRecent(w io.Writer, recent []recentFault) {
 	fmt.Fprintf(w, "RECENT FAULTS (%d)\n", len(recent))
 	if len(recent) == 0 {
@@ -285,7 +295,7 @@ func renderRecent(w io.Writer, recent []recentFault) {
 	for _, f := range recent {
 		status := "applied"
 		if !f.ClearedAt.IsZero() {
-			status = "cleared (" + f.ClearReason + ")"
+			status = endStatus(f.ClearReason)
 		}
 		target := "?"
 		if len(f.Manifest.Targets) > 0 {
