@@ -20,8 +20,10 @@
 // (github.com/go-steer/mast-web, Apache-2.0): a theme is a
 // body[data-theme] block in palette.css plus an entry in THEMES, the
 // default is the absence of the attribute, and the choice is one
-// localStorage key. Simian carries two of mast-web's eleven themes, and
-// with nothing stored it follows the browser's light/dark preference.
+// localStorage key. Simian carries two of mast-web's eleven themes (Neon,
+// the attribute-less base, and Cloud) plus its own Chaos pair, which is
+// what a visitor gets with nothing stored: Chaos dark, or Chaos light
+// when the browser prefers light.
 window.SimianPrefs = (function () {
   "use strict";
 
@@ -29,6 +31,8 @@ window.SimianPrefs = (function () {
   const LAYOUT_KEY = "simian:layout";
 
   const THEMES = [
+    { id: "chaos-dark", label: "Chaos · dark" },
+    { id: "chaos-light", label: "Chaos · light" },
     { id: "default", label: "Neon · dark" },
     { id: "cloud-light", label: "Cloud · light" },
   ];
@@ -52,7 +56,7 @@ window.SimianPrefs = (function () {
   }
 
   function theme() {
-    return storedTheme() || (matchMedia("(prefers-color-scheme: light)").matches ? "cloud-light" : "default");
+    return storedTheme() || (matchMedia("(prefers-color-scheme: light)").matches ? "chaos-light" : "chaos-dark");
   }
 
   function applyTheme(id, remember) {

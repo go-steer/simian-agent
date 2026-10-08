@@ -365,6 +365,59 @@ body.room.has-centred .panel-anchor:not(.centred) {
   }
 }
 
+/* ─── Chaos: a quieter room ──────────────────────────────────────────
+   Thin pink floor lines, a purple back wall, a faint pink-purple
+   horizon, small floor pools, and the radar as a glass disc. */
+
+body[data-theme^='chaos'] .scene-plane {
+  background-image:
+    repeating-linear-gradient(to right, var(--grid-line) 0 1px, transparent 1px var(--grid-step)),
+    repeating-linear-gradient(to bottom, var(--grid-line) 0 1px, transparent 1px var(--grid-step));
+}
+
+body[data-theme^='chaos'] #grid-floor {
+  opacity: 0.55;
+  filter: none;
+}
+
+body[data-theme^='chaos'] #grid-ceiling {
+  opacity: 0.06;
+}
+
+body[data-theme^='chaos'] #grid-wall {
+  --grid-line: rgb(168 85 247 / 50%);
+
+  opacity: 0.1;
+}
+
+body[data-theme^='chaos'] #horizon {
+  background: radial-gradient(ellipse at center, rgb(236 72 153 / 22%) 0%, rgb(147 51 234 / 10%) 40%, transparent 70%);
+  opacity: 0.7;
+}
+
+body[data-theme='chaos-light'] #horizon {
+  opacity: 0.45;
+}
+
+/* The panes' glass blur in the room (panel.css). Measured in headless
+   software rendering, the blur did not slow the room down (its own
+   drift, grid and radar animations dominate), so it is the full 16px;
+   --panel-blur-room is the knob if a slow machine says otherwise. */
+body.room[data-theme^='chaos'] .panel {
+  --panel-blur: var(--panel-blur-room, 16px);
+}
+
+body[data-theme^='chaos'] #hud-radar {
+  border-color: var(--glass-border);
+  background: var(--glass);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--glass-shadow);
+}
+
+body[data-theme^='chaos'] .radar-grid {
+  opacity: 0.35;
+}
+
 /* ─── Flat layout ────────────────────────────────────────────────────
    The same panels in a grid between the HUD and the status bar, with no
    camera, no placement and no drift. Most-watched first. */

@@ -27,8 +27,16 @@
  * --bad, --info) kept apart from the pane hues, so red inside a panel
  * always means something went wrong and never "this is the Inject pane".
  *
- * A theme is a body[data-theme] block here plus an entry in room.js's
- * THEMES list. The default theme is the absence of the attribute.
+ * A theme is a body[data-theme] block here plus an entry in prefs.js's
+ * THEMES list. The base palette (:root, no attribute) is Neon; the theme
+ * a visitor gets with nothing stored is Chaos (see prefs.js).
+ *
+ * Chaos (chaos-dark, chaos-light) is Simian's own: frosted glass on
+ * obsidian or on a pink-lavender wash, one pink accent instead of a hue
+ * per pane, and quiet room lighting. Its material is not just colours,
+ * so beyond this file it has rules keyed on body[data-theme^='chaos']
+ * in chrome.css (ambient glow, HUD), panel.css (the glass), room.css
+ * (planes, radar) and style.css (badges, buttons, the dark terminals).
  */
 
 :root {
@@ -150,6 +158,150 @@ body[data-theme='cloud-light'] {
   color-scheme: light;
 }
 
+/* Chaos, shared by both variants (its type is in chrome.css): the one accent, and the pane
+   marks. The pane marks (--hue-*) are only a small identity cue now —
+   the title glyph, the floor pool, the radar blip — so they stay in the
+   pink-purple family; the panel chrome itself is --accent (panel.css). */
+body[data-theme^='chaos'] {
+  --pink: #ec4899;
+  --magenta: #db2777;
+  --purple: #a855f7;
+
+  --accent: var(--pink);
+  --brand-color: transparent;
+  --scan: transparent;
+  --room-on-hue: #fff;
+}
+
+body[data-theme='chaos-dark'] {
+  --bg: #030712;
+  --bg-surface: #111827;
+  --bg-elevated: #1f2937;
+  --border: rgb(255 255 255 / 8%);
+  --border-soft: #374151;
+  --text: #f3f4f6;
+  --text-dim: #9ca3af;
+  --green: #10b981;
+  --red: #f43f5e;
+  --yellow: #f59e0b;
+  --blue: #06b6d4;
+
+  --ok: #10b981;
+  --warn: #f59e0b;
+  --bad: #f43f5e;
+  --info: #06b6d4;
+
+  --hue-inject: #ec4899;
+  --hue-active: #f472b6;
+  --hue-auto: #a855f7;
+  --hue-faults: #db2777;
+  --hue-workloads: #c084fc;
+  --hue-events: #e879f9;
+
+  /* Glass (panel.css) and the ink on it. */
+  --glass: rgb(17 24 39 / 65%);
+  --glass-hover: rgb(17 24 39 / 72%);
+  --glass-solid: rgb(17 24 39 / 96%);
+  --glass-border: rgb(255 255 255 / 8%);
+  --glass-shadow: 0 8px 32px rgb(0 0 0 / 37%);
+  --glass-glow: 0 12px 40px rgb(236 72 153 / 15%), 0 0 25px rgb(236 72 153 / 20%);
+  --glass-line: rgb(236 72 153 / 30%);
+  --glass-inset: rgb(255 255 255 / 2.5%);
+  --rule: rgb(255 255 255 / 6%);
+  --accent-ink: #f9a8d4;
+  --bar-glass: rgb(3 7 18 / 40%);
+  --terminal: rgb(3 7 18 / 55%);
+  --ambient-opacity: 0.25;
+
+  --glow-amt: 22%;
+  --frame-amt: 30%;
+  --brand-image: linear-gradient(90deg, #f3f4f6 0 38%, #ec4899 62%, #db2777);
+
+  /* Quiet room: obsidian, a faint purple core, almost no vignette. */
+  --room-core: #0f0a1f;
+  --room-mid: #030712;
+  --room-edge: #010309;
+  --room-vignette: rgb(0 0 0 / 38%);
+  --room-surface: var(--glass);
+  --room-surface-bar: transparent;
+  --room-tint: 0%;
+  --room-tint-bar: 0%;
+  --cast-opacity: 0.16;
+  --cast-opacity-active: 0.28;
+  --room-fog: #030712;
+  --fog-max: 0.4;
+  --sheen: rgb(236 72 153 / 6%);
+  --flash: rgb(249 168 212 / 55%);
+  --panel-recede: 0.5;
+
+  color-scheme: dark;
+}
+
+body[data-theme='chaos-light'] {
+  --bg: #f8fafc;
+  --bg-surface: #fff;
+  --bg-elevated: #f1f5f9;
+  --border: rgb(236 72 153 / 15%);
+  --border-soft: #cbd5e1;
+  --text: #0f172a;
+  --text-dim: #64748b;
+  --accent: var(--magenta);
+  --green: #059669;
+  --red: #e11d48;
+  --yellow: #d97706;
+  --blue: #0891b2;
+
+  /* The same four meanings, one shade darker so they read on white. */
+  --ok: #059669;
+  --warn: #d97706;
+  --bad: #e11d48;
+  --info: #0891b2;
+
+  --hue-inject: #db2777;
+  --hue-active: #ec4899;
+  --hue-auto: #9333ea;
+  --hue-faults: #be185d;
+  --hue-workloads: #a855f7;
+  --hue-events: #c026d3;
+
+  --glass: rgb(255 255 255 / 75%);
+  --glass-hover: rgb(255 255 255 / 90%);
+  --glass-solid: rgb(255 255 255 / 97%);
+  --glass-border: rgb(236 72 153 / 15%);
+  --glass-shadow: 0 8px 32px rgb(0 0 0 / 8%);
+  --glass-glow: 0 12px 40px rgb(236 72 153 / 12%), 0 0 22px rgb(236 72 153 / 12%);
+  --glass-line: rgb(236 72 153 / 35%);
+  --glass-inset: rgb(236 72 153 / 3%);
+  --rule: rgb(15 23 42 / 7%);
+  --accent-ink: #be185d;
+  --bar-glass: rgb(255 255 255 / 55%);
+  --terminal: rgb(15 23 42 / 92%);
+  --ambient-opacity: 0.25;
+
+  --glow-amt: 14%;
+  --frame-amt: 22%;
+  --brand-image: linear-gradient(90deg, #0f172a 0 38%, #ec4899 62%, #db2777);
+
+  /* A pink-to-lavender wash over slate-50. */
+  --room-core: #fdf2f8;
+  --room-mid: #f8fafc;
+  --room-edge: #f3e8ff;
+  --room-vignette: rgb(236 72 153 / 5%);
+  --room-surface: var(--glass);
+  --room-surface-bar: transparent;
+  --room-tint: 0%;
+  --room-tint-bar: 0%;
+  --cast-opacity: 0.12;
+  --cast-opacity-active: 0.2;
+  --room-fog: #f8fafc;
+  --fog-max: 0.42;
+  --sheen: rgb(236 72 153 / 7%);
+  --flash: rgb(236 72 153 / 40%);
+  --panel-recede: 0.6;
+
+  color-scheme: light;
+}
+
 body {
   /* Derived on body rather than :root so they pick up the theme's
      --accent (themes override it on body). */
@@ -160,4 +312,12 @@ body {
 
 body[data-theme='cloud-light'] {
   --grid-line: color-mix(in srgb, var(--accent) 26%, var(--border));
+}
+
+body[data-theme='chaos-dark'] {
+  --grid-line: rgb(236 72 153 / 32%);
+}
+
+body[data-theme='chaos-light'] {
+  --grid-line: rgb(219 39 119 / 28%);
 }

@@ -120,6 +120,133 @@ body[data-theme='cloud-light'] :is(.panel, .neon-dialog) {
   --bar-title-shadow: none;
 }
 
+/* Chaos: frosted glass rather than a neon bezel — a thin border, a
+   16px blur of whatever is behind, a soft drop shadow, and a pink
+   hairline along the top (.panel-bar::before). The pane under the
+   pointer or in front picks up a pink border and glow. Every pane's
+   chrome is the one accent; its own hue (--mark) is kept for the title
+   glyph. --panel-blur is the glass's blur radius; in the room it can be
+   tuned on its own with --panel-blur-room (room.css). */
+body[data-theme^='chaos'] :is(.panel, .neon-dialog) {
+  --hue-ink: var(--accent-ink);
+  --panel-border-w: 1px;
+  --panel-fill: var(--glass-solid);
+  --panel-blur: 16px;
+  --panel-shadow: var(--glass-shadow);
+  --panel-shadow-active: var(--glass-shadow), var(--glass-glow);
+  --bar-fill: transparent;
+  --bar-fill-active: rgb(236 72 153 / 7%);
+  --bar-ink: var(--text);
+  --bar-title-shadow: none;
+}
+
+body[data-theme^='chaos'] .panel-anchor[data-pane] > .panel {
+  --hue: var(--accent);
+}
+
+body[data-theme^='chaos'] .panel {
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  background: var(--glass);
+  backdrop-filter: blur(var(--panel-blur));
+  color: var(--text);
+  transition:
+    width 0.52s cubic-bezier(0.18, 1.16, 0.32, 1),
+    height 0.52s cubic-bezier(0.18, 1.16, 0.32, 1),
+    margin 0.52s cubic-bezier(0.18, 1.16, 0.32, 1),
+    border-color 0.25s ease,
+    box-shadow 0.25s ease,
+    background-color 0.25s ease;
+}
+
+body[data-theme^='chaos'] .panel-anchor:hover > .panel,
+body[data-theme^='chaos'] .panel-anchor.front > .panel,
+body[data-theme^='chaos'] .panel-anchor.centred > .panel {
+  border-color: rgb(236 72 153 / 50%);
+  background: var(--glass-hover);
+  box-shadow: var(--panel-shadow-active);
+}
+
+body[data-theme^='chaos'] .panel-bar {
+  position: relative;
+  gap: 9px;
+  padding: 9px 10px 8px 14px;
+  min-height: 38px;
+  border-bottom: 1px solid var(--rule);
+}
+
+body[data-theme^='chaos'] .panel-bar::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--glass-line), transparent);
+  pointer-events: none;
+}
+
+body[data-theme^='chaos'] .panel-anchor.front .panel-bar,
+body[data-theme^='chaos'] .panel-anchor.centred .panel-bar,
+body[data-theme^='chaos'] dialog.neon-dialog > .panel-bar {
+  color: var(--text);
+}
+
+body[data-theme^='chaos'] .panel-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-transform: none;
+}
+
+/* The pane's identity: a glyph in a small tinted tile, as the mockup
+   marks each card. */
+body[data-theme^='chaos'] .panel-title::before {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid color-mix(in srgb, var(--mark, var(--accent)) 35%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--mark, var(--accent)) 12%, transparent);
+  color: var(--mark, var(--accent));
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+body[data-theme^='chaos'] .panel-anchor[data-pane='inject'] .panel-title::before { content: '↯'; }
+body[data-theme^='chaos'] .panel-anchor[data-pane='active'] .panel-title::before { content: '◉'; }
+body[data-theme^='chaos'] .panel-anchor[data-pane='auto'] .panel-title::before { content: '✧'; }
+body[data-theme^='chaos'] .panel-anchor[data-pane='faults'] .panel-title::before { content: '☰'; }
+body[data-theme^='chaos'] .panel-anchor[data-pane='workloads'] .panel-title::before { content: '▦'; }
+body[data-theme^='chaos'] .panel-anchor[data-pane='events'] .panel-title::before { content: '≋'; }
+body[data-theme^='chaos'] #config-title::before { content: '⚙'; }
+
+body[data-theme^='chaos'] .panel-ctl {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--text-dim);
+}
+
+body[data-theme^='chaos'] .panel-ctl:hover,
+body[data-theme^='chaos'] .panel-ctl:focus-visible {
+  color: var(--accent-ink);
+  background: rgb(236 72 153 / 12%);
+}
+
+body[data-theme^='chaos'] .panel-body {
+  padding: 12px 14px 14px;
+  scrollbar-color: rgb(236 72 153 / 35%) transparent;
+}
+
 /* ─── Panel glass ────────────────────────────────────────────────────
    ::before is the specular sweep, ::after the aerial-perspective wash
    (--fog is written per anchor by room.js from the panel's depth). */
