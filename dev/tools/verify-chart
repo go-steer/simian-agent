@@ -148,6 +148,9 @@ out="$(render sim-ui-iap --set ui.auth=iap --set ui.iap.projectNumber=123456 \
   --set 'ui.iap.writers={alice@example.com,domain:sre.example.com}')"
 expect_arg "ui-iap" "$out" "--ui-auth=iap"
 expect_arg "ui-iap" "$out" "--ui-iap-project-number=123456"
+# A real project number is 12 digits, which --set reads as a float.
+expect_arg "ui-iap-long" "$(render sim-ui-iap-long --set ui.auth=iap --set ui.iap.projectNumber=1067056737933)" \
+  "--ui-iap-project-number=1067056737933"
 expect_arg "ui-iap" "$out" "--ui-writers=alice@example.com"
 expect_arg "ui-iap" "$out" "--ui-writers=domain:sre.example.com"
 echo "▸ on GKE the chart can put the UI behind an IAP load balancer, and only behind IAP"

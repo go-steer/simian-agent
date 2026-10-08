@@ -55,7 +55,9 @@ spec:
             - --ui-iap-audience={{ . }}
             {{- end }}
             {{- with .Values.ui.iap.projectNumber }}
-            - --ui-iap-project-number={{ . }}
+            {{- /* --set reads a project number as a float (1.067e+12);
+                   print it back as the integer it is. */}}
+            - --ui-iap-project-number={{ if kindIs "float64" . }}{{ printf "%.0f" . }}{{ else }}{{ . }}{{ end }}
             {{- end }}
             {{- range .Values.ui.iap.writers }}
             - --ui-writers={{ . }}
