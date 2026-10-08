@@ -124,3 +124,19 @@ func TestWaitForWorkersWaitsForThemButNotForever(t *testing.T) {
 		t.Errorf("waited %s on a hung worker, want about the limit", waited)
 	}
 }
+
+// A project number mangled on its way to the flag would refuse every
+// genuine IAP assertion at sign-in; the controller refuses to start instead.
+func TestTheUIRefusesAnIAPProjectNumberThatIsNotOne(t *testing.T) {
+	for _, bad := range []string{"1.067056737933e+12", "gke-demos-345619", "12 34"} {
+		if _, err := uiAuthenticator("iap", "", bad, nil); err == nil {
+			t.Errorf("--ui-iap-project-number=%q was accepted", bad)
+		}
+	}
+	if _, err := uiAuthenticator("iap", "", "1067056737933", []string{"alice@example.com"}); err != nil {
+		t.Errorf("a real project number: %v", err)
+	}
+	if _, err := uiAuthenticator("none", "", "", []string{"alice@example.com"}); err == nil {
+		t.Error("writers without IAP were accepted")
+	}
+}

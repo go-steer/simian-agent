@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -628,6 +629,11 @@ func uiAuthenticator(mode, audience, projectNumber string, writers []string) (we
 	case "iap":
 		if audience == "" && projectNumber == "" {
 			return nil, fmt.Errorf("--ui-auth=iap needs --ui-iap-audience or --ui-iap-project-number")
+		}
+		if projectNumber != "" && strings.Trim(projectNumber, "0123456789") != "" {
+			// A project ID, or a number mangled on the way (1.067e+12), would
+			// refuse every genuine assertion at sign-in rather than here.
+			return nil, fmt.Errorf("--ui-iap-project-number=%q: want the project's number, all digits (gcloud projects describe PROJECT --format='value(projectNumber)')", projectNumber)
 		}
 		return &webui.IAP{Audience: audience, ProjectNumber: projectNumber, Writers: writers}, nil
 	default:
