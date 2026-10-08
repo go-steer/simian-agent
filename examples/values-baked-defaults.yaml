@@ -44,7 +44,7 @@ image:
   # silently change the running binary.
   # Must be at least the chart's appVersion: the chart renders flags
   # (e.g. --audit-file) an older binary refuses. verify-chart checks it.
-  tag: "0.3.0-rc.3"
+  tag: "0.3.0-rc.4"
   # IfNotPresent matches the chart default; explicit for clarity.
   pullPolicy: IfNotPresent
 
@@ -178,6 +178,11 @@ resources:
 # ============================================================
 # Hardening log — what is "baked" and as of when
 # ============================================================
+#
+# 2026-10-08 (chart 0.3.0-rc.4):
+#   - image pin moved to 0.3.0-rc.4: the controller may keep the UI's
+#     autonomous settings in its namespace (#238); configuration opens from
+#     a settings icon and the page keeps its shape on a wide screen (#239).
 #
 # 2026-10-08 (chart 0.3.0-rc.3):
 #   - image pin moved to 0.3.0-rc.3: the web UI's Configuration panel, and
