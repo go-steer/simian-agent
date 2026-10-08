@@ -199,6 +199,15 @@ ui:
       certificateMap: ""
       # A reserved global static IP's name. Empty: an ephemeral address.
       staticIPName: ""
+    # IAP's Google-managed OAuth client authorizes only accounts in the
+    # project's organization, whatever the IAP access grants say. To admit
+    # others (another Workspace domain, gmail.com), create an OAuth client
+    # with an External consent screen and name it here; its secret goes in a
+    # Secret in the release namespace, under the key "key". Empty: the
+    # Google-managed client.
+    oauthClient:
+      clientID: ""
+      secretName: ""
 
 # MCP server.
 mcp:
