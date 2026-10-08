@@ -44,7 +44,7 @@ image:
   # silently change the running binary.
   # Must be at least the chart's appVersion: the chart renders flags
   # (e.g. --audit-file) an older binary refuses. verify-chart checks it.
-  tag: "0.3.0-rc.1"
+  tag: "0.3.0-rc.2"
   # IfNotPresent matches the chart default; explicit for clarity.
   pullPolicy: IfNotPresent
 
@@ -178,6 +178,12 @@ resources:
 # ============================================================
 # Hardening log — what is "baked" and as of when
 # ============================================================
+#
+# 2026-10-08 (chart 0.3.0-rc.2):
+#   - image pin moved to 0.3.0-rc.2: the controller refuses an IAP project
+#     number that is not all digits (#233). The chart can put the UI behind
+#     an IAP load balancer on GKE, by Gateway or Ingress (#231); see
+#     docs/web-ui-iap.md.
 #
 # 2026-10-08 (chart 0.3.0-rc.1):
 #   - image pin moved to 0.3.0-rc.1, the release candidate for v0.3: the
