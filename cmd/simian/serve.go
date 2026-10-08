@@ -87,6 +87,11 @@ func newServeCmd() *cobra.Command {
 		sutInjectEnvoyFault  bool
 		metricsAddr          string
 		ui                   bool
+		uiAddr               string
+		uiAuth               string
+		uiIAPAudience        string
+		uiIAPProjectNumber   string
+		uiWriters            []string
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -438,32 +443,39 @@ func newServeCmd() *cobra.Command {
 				})
 			}
 
+			if ui {
+				// The web UI has its own port, so that putting it behind
+				// Identity-Aware Proxy exposes the page and nothing else: the
+				// MCP endpoint stays unauthenticated and in the cluster.
+				var autonomousIn []string
+				if autonomous {
+					autonomousIn = autonomousNS
+				}
+				auth, err := uiAuthenticator(uiAuth, uiIAPAudience, uiIAPProjectNumber, uiWriters)
+				if err != nil {
+					return err
+				}
+				uiSrv := &http.Server{Addr: uiAddr, ReadHeaderTimeout: 5 * time.Second, Handler: webui.Handler(webui.Deps{
+					Version: version, Active: exec, Faults: faultLog, Cycles: cycleLog, Topology: disco2,
+					Arenas: arenaNamespaces, Autonomous: autonomousIn, Events: broadcaster,
+					Auth: auth, Executor: exec, Catalog: srv.GatherCatalog, Translate: srv.TranslateIntent,
+				})}
+				go func() {
+					if err := uiSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+						logger.Error("simian serve: web UI listener", slog.String("error", err.Error()))
+					}
+				}()
+				defer func() { _ = uiSrv.Close() }()
+				logger.Info("simian serve: web UI at /ui/", slog.String("addr", uiAddr), slog.String("auth", uiAuth),
+					slog.Int("writers", len(uiWriters)))
+			}
+
 			if mcpStdio {
 				logger.Info("simian serve: MCP stdio mode")
 				return srv.ServeStdio(ctx)
 			}
 
-			sse := srv.ServeSSE(mcpAddr)
-			var handler http.Handler = sse
-			if ui {
-				// The web UI shares the MCP port: one port-forward reaches
-				// both, and the page needs no second deployment.
-				var autonomousIn []string
-				if autonomous {
-					autonomousIn = autonomousNS
-				}
-				uiHandler := webui.Handler(webui.Deps{
-					Version: version, Active: exec, Faults: faultLog, Cycles: cycleLog, Topology: disco2,
-					Arenas: arenaNamespaces, Autonomous: autonomousIn, Events: broadcaster,
-				})
-				mux := http.NewServeMux()
-				mux.Handle("/ui", uiHandler)
-				mux.Handle("/ui/", uiHandler)
-				mux.Handle("/api/", uiHandler)
-				mux.Handle("/", sse)
-				handler = mux
-				logger.Info("simian serve: web UI at /ui/", slog.String("addr", mcpAddr))
-			}
+			var handler http.Handler = srv.ServeSSE(mcpAddr)
 			httpSrv := &http.Server{Addr: mcpAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 			errCh := make(chan error, 1)
 			go func() {
@@ -494,7 +506,12 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&defaultProbes, "default-efficacy-probes", true, "Attach Simian's built-in efficacy probes to fault kinds that have one (see the catalog's efficacy_gate field). Turning this off applies dataplane faults unverified: a fault the cluster accepts but silently drops is then indistinguishable from one that worked.")
 	cmd.Flags().DurationVar(&reapInterval, "reap-interval", 30*time.Second, "Lease reaper sweep interval")
 	cmd.Flags().StringVar(&holderID, "holder-id", os.Getenv("HOSTNAME"), "Holder ID recorded on leases (defaults to HOSTNAME)")
-	cmd.Flags().BoolVar(&ui, "ui", true, "Serve the read-only web UI at /ui/ (and its /api/) on the MCP address")
+	cmd.Flags().BoolVar(&ui, "ui", true, "Serve the web UI at /ui/ (and its /api/) on --ui-addr")
+	cmd.Flags().StringVar(&uiAddr, "ui-addr", ":8082", "Web UI listen address")
+	cmd.Flags().StringVar(&uiAuth, "ui-auth", "none", "Web UI authentication: none (read-only, for a port-forward) or iap (Identity-Aware Proxy; --ui-writers may submit and clear faults)")
+	cmd.Flags().StringVar(&uiIAPAudience, "ui-iap-audience", "", "With --ui-auth=iap: the backend service's audience, /projects/NUMBER/global/backendServices/ID")
+	cmd.Flags().StringVar(&uiIAPProjectNumber, "ui-iap-project-number", "", "With --ui-auth=iap and no --ui-iap-audience: accept any backend service in this project number")
+	cmd.Flags().StringSliceVar(&uiWriters, "ui-writers", nil, "With --ui-auth=iap: who may submit and clear faults from the UI — emails, or domain:example.com (repeatable). Empty: nobody")
 	cmd.Flags().StringVar(&metricsAddr, "metrics-addr", ":9090", "Serve Prometheus metrics on this address (/metrics); empty disables")
 	cmd.Flags().BoolVar(&debugLLMPayloads, "debug-llm-payloads", false, "Log raw LLM responses (debug only; do not enable in production — see design.md §12.2)")
 	cmd.Flags().StringVar(&auditFile, "audit-file", "", "Also append audit events to this file as JSON lines, so the trail outlives the process. Read it with 'simian audit export'. At start-up, faults a previous process applied and never closed get a closing event from it.")
@@ -595,6 +612,26 @@ func primeMetrics(ctx context.Context, recorder *metrics.Recorder, arenas func(c
 			return
 		case <-t.C:
 		}
+	}
+}
+
+// uiAuthenticator builds the web UI's authenticator from its flags. A
+// setting that cannot be honoured stops the controller rather than serving
+// the UI less protected than asked.
+func uiAuthenticator(mode, audience, projectNumber string, writers []string) (webui.Authenticator, error) {
+	switch mode {
+	case "none", "":
+		if len(writers) > 0 {
+			return nil, fmt.Errorf("--ui-writers needs --ui-auth=iap: without it the UI cannot tell who anyone is")
+		}
+		return webui.NoAuth{}, nil
+	case "iap":
+		if audience == "" && projectNumber == "" {
+			return nil, fmt.Errorf("--ui-auth=iap needs --ui-iap-audience or --ui-iap-project-number")
+		}
+		return &webui.IAP{Audience: audience, ProjectNumber: projectNumber, Writers: writers}, nil
+	default:
+		return nil, fmt.Errorf("--ui-auth=%q: want none or iap", mode)
 	}
 }
 

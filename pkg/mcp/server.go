@@ -233,11 +233,28 @@ func (s *Server) handleSubmitFault(ctx context.Context, req mcpsdk.CallToolReque
 		}
 	}
 
+	manifest, err := s.TranslateIntent(ctx, intent, defaultNS, defaultDur)
+	if err != nil {
+		return mcpsdk.NewToolResultError(err.Error()), nil
+	}
+	manifest.Source = simian.SourceDirected
+
+	uid, err := s.Executor.Apply(ctx, manifest)
+	if err != nil {
+		return mcpsdk.NewToolResultError(fmt.Sprintf("apply: %v", err)), nil
+	}
+	return mcpsdk.NewToolResultText(fmt.Sprintf(`{"fault_uid":%q,"engine":%q,"resource_kind":%q}`,
+		uid, manifest.Engine, manifest.ResourceKind)), nil
+}
+
+// TranslateIntent turns a plain-English request into a manifest with the
+// LLM, against the live catalog, for submit_fault and the web UI. It does
+// not apply it.
+func (s *Server) TranslateIntent(ctx context.Context, intent, defaultNS string, defaultDur time.Duration) (simian.FaultManifest, error) {
 	cat, err := s.GatherCatalog(ctx)
 	if err != nil {
-		return mcpsdk.NewToolResultError(fmt.Sprintf("catalog: %v", err)), nil
+		return simian.FaultManifest{}, fmt.Errorf("catalog: %w", err)
 	}
-
 	manifest, err := s.Translator.Translate(ctx, planner.IntentInput{
 		Intent:           intent,
 		Catalog:          cat,
@@ -245,7 +262,7 @@ func (s *Server) handleSubmitFault(ctx context.Context, req mcpsdk.CallToolReque
 		DefaultNamespace: defaultNS,
 	})
 	if err != nil {
-		return mcpsdk.NewToolResultError(fmt.Sprintf("translate: %v", err)), nil
+		return simian.FaultManifest{}, fmt.Errorf("translate: %w", err)
 	}
 	if defaultNS != "" {
 		// Back-fill blank namespaces, AND rewrite "default" → defaultNS. The
@@ -260,14 +277,7 @@ func (s *Server) handleSubmitFault(ctx context.Context, req mcpsdk.CallToolReque
 			}
 		}
 	}
-	manifest.Source = simian.SourceDirected
-
-	uid, err := s.Executor.Apply(ctx, manifest)
-	if err != nil {
-		return mcpsdk.NewToolResultError(fmt.Sprintf("apply: %v", err)), nil
-	}
-	return mcpsdk.NewToolResultText(fmt.Sprintf(`{"fault_uid":%q,"engine":%q,"resource_kind":%q}`,
-		uid, manifest.Engine, manifest.ResourceKind)), nil
+	return manifest, nil
 }
 
 func (s *Server) handleSubmitManifest(ctx context.Context, req mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {

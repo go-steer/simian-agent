@@ -126,7 +126,13 @@ without a log pipeline, and what `simian audit export` reads directly.
 
 | Value | Default | Notes |
 |---|---|---|
-| `ui.enabled` | `true` | Serve the read-only web UI at `/ui/`, with its JSON API and event stream under `/api/`, on the MCP port. Unauthenticated, like the MCP endpoint. Only `false` renders a flag (`--ui=false`), which needs a v0.3 image; the default renders none, so 0.2.x images still start. |
+| `ui.enabled` | `true` | Serve the web UI at `/ui/`, with its JSON API and event stream under `/api/`, on `ui.port`. Only `false` renders a flag (`--ui=false`). |
+| `ui.port` | `8082` | The UI's port, on the container and the Service. A value other than `8082` renders `--ui-addr`. |
+| `ui.auth` | `none` | `none`: read-only, for a port-forward. `iap`: behind Identity-Aware Proxy; every request must carry IAP's assertion, and `ui.iap.writers` may inject and clear faults. Needs `ui.iap.audience` or `ui.iap.projectNumber`. |
+| `ui.iap.audience` | `""` | The backend service's audience, `/projects/NUMBER/global/backendServices/ID`, checked exactly. |
+| `ui.iap.projectNumber` | `""` | Without an exact audience: accept any backend service in this project. |
+| `ui.iap.writers` | `[]` | Who may inject and clear faults from the page: emails, or `domain:example.com`. Empty: nobody. Refused without `ui.auth=iap`. |
+| | | The defaults render no UI flags, so the chart still starts a 0.2.x image; `ui.auth=iap` and a non-default port need v0.3. |
 
 ## Metrics
 

@@ -66,3 +66,16 @@ tr.short td { color: var(--bad); font-weight: 600; }
 #events { list-style: none; margin: 0; padding: 0; max-height: 28rem; overflow-y: auto; font-size: .85rem; }
 #events li { display: grid; grid-template-columns: 5.5rem 14rem 1fr; gap: .5rem; padding: .2rem 0; border-bottom: 1px solid var(--line); }
 #events .ev { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+#me { font-size: .85rem; }
+form .row { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-bottom: .6rem; }
+form label { color: var(--muted); font-size: .85rem; }
+form label.block { display: block; margin-top: .5rem; }
+form .modes { margin-left: auto; }
+input, textarea, button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: .2rem .4rem; }
+textarea { display: block; width: 100%; margin-top: .25rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; }
+button { cursor: pointer; padding: .3rem .9rem; }
+button[type=submit] { background: var(--bad); color: #fff; border-color: var(--bad); font-weight: 600; }
+button.clear { margin-left: .5rem; font-size: .8rem; padding: 0 .6rem; }
+.hint { font-size: .8rem; margin-top: .25rem; white-space: pre-wrap; }
+#f-result.ok { color: var(--ok); } #f-result.bad { color: var(--bad); }

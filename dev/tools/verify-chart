@@ -135,6 +135,28 @@ echo "▸ the web UI is on by default (no flag, so a 0.2.x image still starts) a
 reject_arg "ui-default" "$(render sim-ui)" "--ui=true"
 reject_arg "ui-default" "$(render sim-ui)" "--ui=false"
 expect_arg "ui-off" "$(render sim-ui-off --set ui.enabled=false)" "--ui=false"
+out="$(render sim-ui)"
+reject_arg "ui-default" "$out" "--ui-addr=:8082"
+reject_arg "ui-default" "$out" "--ui-auth=none"
+if ! grep -qF "name: ui" <<<"$out" || ! grep -qF "containerPort: 8082" <<<"$out" || ! grep -qF "targetPort: ui" <<<"$out"; then
+  echo "✗ ui-default: expected a ui container port 8082 and a ui Service port" >&2
+  fail=1
+fi
+
+echo "▸ behind IAP the UI checks IAP's assertion, and writers may inject"
+out="$(render sim-ui-iap --set ui.auth=iap --set ui.iap.projectNumber=123456 \
+  --set 'ui.iap.writers={alice@example.com,domain:sre.example.com}')"
+expect_arg "ui-iap" "$out" "--ui-auth=iap"
+expect_arg "ui-iap" "$out" "--ui-iap-project-number=123456"
+expect_arg "ui-iap" "$out" "--ui-writers=alice@example.com"
+expect_arg "ui-iap" "$out" "--ui-writers=domain:sre.example.com"
+for bad in "--set ui.auth=iap" "--set ui.auth=oidc" "--set ui.iap.writers={alice@example.com}"; do
+  # shellcheck disable=SC2086 # word-splitting the --set pair is the point
+  if helm template sim-ui-bad "$CHART" --set llm.vertex.project=verify-project $bad >/dev/null 2>&1; then
+    echo "✗ ui-iap: rendered with $bad; it must refuse" >&2
+    fail=1
+  fi
+done
 
 echo "▸ metrics are served and scrapeable by default, and can be turned off"
 out="$(render sim-metrics)"

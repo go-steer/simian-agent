@@ -37,10 +37,33 @@ spec:
           args:
             - serve
             - --mcp-addr=:{{ .Values.mcp.port }}
+            {{- /* The UI flags render only when they differ from the
+                   binary's defaults, so a default install passes none an
+                   older image refuses. */}}
             {{- if not .Values.ui.enabled }}
-            {{- /* Only when off: the binary serves the UI by default, so a
-                   default install renders no flag an older image refuses. */}}
             - --ui=false
+            {{- end }}
+            {{- if ne (int .Values.ui.port) 8082 }}
+            - --ui-addr=:{{ .Values.ui.port }}
+            {{- end }}
+            {{- if eq .Values.ui.auth "iap" }}
+            {{- if not (or .Values.ui.iap.audience .Values.ui.iap.projectNumber) }}
+            {{- fail "ui.auth=iap needs ui.iap.audience or ui.iap.projectNumber, so the UI accepts only IAP's assertions for this project" }}
+            {{- end }}
+            - --ui-auth=iap
+            {{- with .Values.ui.iap.audience }}
+            - --ui-iap-audience={{ . }}
+            {{- end }}
+            {{- with .Values.ui.iap.projectNumber }}
+            - --ui-iap-project-number={{ . }}
+            {{- end }}
+            {{- range .Values.ui.iap.writers }}
+            - --ui-writers={{ . }}
+            {{- end }}
+            {{- else if ne .Values.ui.auth "none" }}
+            {{- fail (printf "ui.auth=%q: want none or iap" .Values.ui.auth) }}
+            {{- else if .Values.ui.iap.writers }}
+            {{- fail "ui.iap.writers needs ui.auth=iap: without IAP the UI cannot tell who anyone is" }}
             {{- end }}
             {{- if .Values.metrics.enabled }}
             - --metrics-addr=:{{ .Values.metrics.port }}
@@ -103,6 +126,11 @@ spec:
             - name: mcp
               containerPort: {{ .Values.mcp.port }}
               protocol: TCP
+            {{- if .Values.ui.enabled }}
+            - name: ui
+              containerPort: {{ .Values.ui.port }}
+              protocol: TCP
+            {{- end }}
             {{- if .Values.metrics.enabled }}
             - name: metrics
               containerPort: {{ .Values.metrics.port }}
@@ -149,6 +177,12 @@ spec:
       port: {{ .Values.mcp.port }}
       targetPort: mcp
       protocol: TCP
+    {{- if .Values.ui.enabled }}
+    - name: ui
+      port: {{ .Values.ui.port }}
+      targetPort: ui
+      protocol: TCP
+    {{- end }}
     {{- if .Values.metrics.enabled }}
     - name: metrics
       port: {{ .Values.metrics.port }}

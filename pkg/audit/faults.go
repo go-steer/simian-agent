@@ -74,6 +74,11 @@ type FaultRow struct {
 	Source     string    `json:"source,omitempty"`
 	ReceivedAt time.Time `json:"received_at,omitzero"`
 
+	// RequestedBy and ClearedBy are the person a directed fault was applied
+	// or cleared for, when the request carried one (the web UI's IAP user).
+	RequestedBy string `json:"requested_by,omitempty"`
+	ClearedBy   string `json:"cleared_by,omitempty"`
+
 	Engine   string `json:"engine,omitempty"`
 	Kind     string `json:"kind,omitempty"`
 	Targets  []any  `json:"targets,omitempty"`
@@ -142,6 +147,7 @@ func apply(row *FaultRow, r Record) {
 	switch r.Event {
 	case EventExecutorReceived:
 		row.ReceivedAt = r.TS
+		row.RequestedBy = str("actor")
 		describe(row, r.Payload)
 		req := &FaultRow{FaultUID: row.FaultUID, PlanID: row.PlanID, Source: row.Source}
 		describe(req, r.Payload)
@@ -184,6 +190,7 @@ func apply(row *FaultRow, r Record) {
 			return // still in the cluster; the reaper will close it
 		}
 		end(row, r, OutcomeCleared)
+		row.ClearedBy = str("actor")
 	case EventLeaseExpired:
 		end(row, r, OutcomeExpired)
 		if r.Reason == ReasonUntrackedAfterRestart {

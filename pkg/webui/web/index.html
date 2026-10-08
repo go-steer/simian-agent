@@ -28,10 +28,42 @@ limitations under the License.
     <label class="arena">Arena
       <select id="arena"><option value="">All arenas</option></select>
     </label>
+    <span id="me" class="muted"></span>
     <span id="conn" class="conn" title="Live event stream">●</span>
   </header>
 
   <main>
+    <section id="inject-panel" class="panel wide" hidden>
+      <h2>Inject a fault</h2>
+      <div id="inject-readonly" class="empty" hidden></div>
+      <form id="inject" hidden>
+        <div class="row">
+          <label>Arena <select id="f-arena" required></select></label>
+          <label id="f-workload-label">Workload <select id="f-workload"><option value="">(choose an arena)</option></select></label>
+          <label>Duration <input id="f-duration" value="2m" size="6" required></label>
+          <span class="modes">
+            <label><input type="radio" name="mode" value="manifest" checked> Exact</label>
+            <label><input type="radio" name="mode" value="intent"> Describe it</label>
+          </span>
+        </div>
+        <div id="f-exact">
+          <label>Kind <select id="f-kind"></select></label>
+          <div id="f-hint" class="muted hint"></div>
+          <label class="block">Spec (JSON; the target comes from Workload)
+            <textarea id="f-spec" rows="5" spellcheck="false"></textarea></label>
+        </div>
+        <div id="f-intent" hidden>
+          <label class="block">What should go wrong? The LLM picks the fault.
+            <textarea id="f-text" rows="3" placeholder="add 300ms of latency to calls into cartservice"></textarea></label>
+        </div>
+        <div class="row">
+          <button type="submit">Inject</button>
+          <span id="f-result"></span>
+        </div>
+        <div class="muted hint">It goes through the same safety checks as the CLI: arenas only, no excluded workloads, within the duration and concurrency limits. The audit trail records it in your name.</div>
+      </form>
+    </section>
+
     <section id="active-panel" class="panel">
       <h2>Active faults <span id="active-count" class="count"></span></h2>
       <div id="active"></div>
@@ -61,8 +93,8 @@ limitations under the License.
   </main>
 
   <footer class="muted">
-    Read-only view of what this controller has done, from its audit trail.
-    The same record as <code>simian watch</code> and <code>simian audit export</code>.
+    What this controller has done, from its audit trail: the same record as
+    <code>simian watch</code> and <code>simian audit export</code>.
   </footer>
   <script src="app.js"></script>
 </body>

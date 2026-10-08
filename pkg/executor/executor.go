@@ -156,8 +156,8 @@ func (e *Executor) apply(ctx context.Context, m simian.FaultManifest) (string, e
 		FaultUID: m.UID,
 		PlanID:   m.PlanID,
 		Mode:     m.Source,
-		// What was asked for, before narrowing touches the spec.
-		Payload: m.AuditRecord(),
+		// What was asked for, before narrowing touches the spec, and by whom.
+		Payload: withActor(ctx, m.AuditRecord()),
 	})
 
 	if err := e.validateSchema(m); err != nil {
@@ -567,8 +567,22 @@ func (e *Executor) Clear(ctx context.Context, faultUID string) error {
 		Event:    audit.EventLeaseCleared,
 		FaultUID: faultUID,
 		Reason:   "explicit-clear",
+		Payload:  withActor(ctx, nil),
 	})
 	return nil
+}
+
+// withActor adds the request's actor, if any, to an audit payload.
+func withActor(ctx context.Context, p map[string]any) map[string]any {
+	a := simian.ActorFrom(ctx)
+	if a == "" {
+		return p
+	}
+	if p == nil {
+		p = map[string]any{}
+	}
+	p["actor"] = a
+	return p
 }
 
 // ListActive returns currently leased faults, optionally filtered by namespace.

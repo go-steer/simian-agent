@@ -22,7 +22,19 @@ description: "Design doc for a single browser surface serving two purposes: live
 > `fetch` and `EventSource` are what a page without a build step can use
 > cleanly; agents keep the MCP endpoint. It also adds what this design
 > predates: autonomous mode's cycles and plans, and each fault's recovery
-> verdict. Manual submit (phase 2) and the scorecard (phase 3) are next.
+> verdict.
+>
+> **Phase 2 (v0.3), manual submit and clear, decided 2026-10-08: behind
+> Identity-Aware Proxy.** The UI moved to its own port (`8082`) so that only
+> it is exposed through IAP; the MCP endpoint stays in the cluster. With
+> `--ui-auth=iap` every request must carry IAP's signed assertion — checked
+> for IAP's ES256 keys and issuer, not merely any Google ID token, which a
+> service account can mint for any audience — and the users in
+> `--ui-writers` may inject (exact spec, or intent through the LLM) and clear.
+> Writes need a custom header, so a cross-site page cannot use the IAP cookie.
+> Every submit goes through the executor, and the audit trail records the
+> actor on `executor.received` and `lease.cleared`. Without IAP the UI is
+> read-only. The scorecard (phase 3) is next.
 
 ## Why a web UI
 
