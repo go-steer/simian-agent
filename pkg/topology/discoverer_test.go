@@ -365,3 +365,39 @@ func TestContainerSummaryRecordsGRPCPorts(t *testing.T) {
 		t.Errorf("GRPCPorts = %v, want %v", got.GRPCPorts, want)
 	}
 }
+
+// The controller's first autonomous cycle runs seconds after start. A
+// snapshot taken before the informers synced read a healthy deployment with
+// no pods, and the health gate skipped the cycle for "0/1 pods ready". A
+// started Discoverer now waits for its caches.
+func TestASnapshotRightAfterStartWaitsForTheCaches(t *testing.T) {
+	ns := "boutique"
+	client := fake.NewClientset(toRuntimeObjects([]any{
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "adservice", Namespace: ns},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: intptr(1),
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "adservice"}},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "server"}}},
+				},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "adservice-5c8d-xk2p9", Namespace: ns,
+				OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "adservice-5c8d"}}},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
+		},
+	})...)
+	d := New(client, 0)
+	d.Start() // and no WaitForSync, as in serve
+	defer d.Stop()
+	snap, err := d.Snapshot(context.Background(), ns)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if pods := snap.PodStatus["adservice"]; len(pods) != 1 || !pods[0].Ready {
+		t.Errorf("a snapshot right after Start saw %+v, want adservice's one ready pod", snap.PodStatus)
+	}
+}
