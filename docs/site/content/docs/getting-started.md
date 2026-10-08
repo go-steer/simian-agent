@@ -36,7 +36,7 @@ Steps 1–7 need no LLM at all; steps 8 and 9 do.
 ## 1. Get Simian
 
 ```bash
-git clone --depth 1 --branch v0.2.0 https://github.com/go-steer/simian-agent
+git clone --depth 1 --branch v0.2.1 https://github.com/go-steer/simian-agent
 cd simian-agent
 make build
 bin/simian --help
@@ -366,7 +366,7 @@ echo $! >/tmp/simian-metrics-pf.pid
 sleep 2; curl -s http://localhost:19090/metrics | grep '^simian_'
 ```
 
-**Check:** `simian_build_info{version="0.2.0"} 1`, and counters for the arena
+**Check:** `simian_build_info{version="0.2.1"} 1`, and counters for the arena
 such as `simian_faults_applied_total{arena="boutique",…,kind="PodChaos",…}` and
 `simian_cycles_total{arena="boutique",outcome="completed",…}`. They exist from
 the start, at `0` until something happens. They count since the controller
