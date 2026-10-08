@@ -63,13 +63,13 @@ spec:
   default:
     iap:
       enabled: true
-      {{- if or .Values.ui.iap.oauthClient.clientID .Values.ui.iap.oauthClient.secretName }}
-      {{- if not (and .Values.ui.iap.oauthClient.clientID .Values.ui.iap.oauthClient.secretName) }}
+      {{- if or (dig "oauthClient" "clientID" "" .Values.ui.iap) (dig "oauthClient" "secretName" "" .Values.ui.iap) }}
+      {{- if not (and (dig "oauthClient" "clientID" "" .Values.ui.iap) (dig "oauthClient" "secretName" "" .Values.ui.iap)) }}
       {{- fail "ui.iap.oauthClient needs both clientID and secretName" }}
       {{- end }}
-      clientID: {{ .Values.ui.iap.oauthClient.clientID | quote }}
+      clientID: {{ (dig "oauthClient" "clientID" "" .Values.ui.iap) | quote }}
       oauth2ClientSecret:
-        name: {{ .Values.ui.iap.oauthClient.secretName }}
+        name: {{ (dig "oauthClient" "secretName" "" .Values.ui.iap) }}
       {{- else }}
       # no clientID: IAP's Google-managed OAuth client, for the project's
       # organization only

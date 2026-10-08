@@ -17,7 +17,7 @@ metadata:
 spec:
   iap:
     enabled: true
-    {{- with .Values.ui.iap.oauthClient.secretName }}
+    {{- with (dig "oauthClient" "secretName" "" .Values.ui.iap) }}
     oauthclientCredentials:
       secretName: {{ . }}
     {{- end }}
