@@ -144,16 +144,25 @@ function renderFaults(rows) {
     : '<div class="empty">No faults yet.</div>';
 }
 
+// renderWorkloads shows one arena's workloads, or with All arenas every
+// arena's, each under its name.
 function renderWorkloads(list) {
-  if (!state.arena) {
-    $("workloads").innerHTML = '<div class="empty">Pick an arena to see its workloads.</div>';
-    return;
-  }
+  const all = !state.arena;
   $("workloads").innerHTML = list.length
-    ? `<table><thead><tr><th>Workload</th><th>Ready</th></tr></thead><tbody>
-      ${list.map((w) => `<tr class="${w.ready < w.desired ? "short" : ""}"><td>${esc(w.kind)}/${esc(w.name)}</td><td class="num">${w.ready}/${w.desired}</td></tr>`).join("")}
+    ? `<table><thead><tr>${all ? "<th>Arena</th>" : ""}<th>Workload</th><th>Ready</th></tr></thead><tbody>
+      ${list.map((w) => `<tr class="${w.ready < w.desired ? "short" : ""}">${all ? `<td class="muted">${esc(w.arena)}</td>` : ""}<td>${esc(w.kind)}/${esc(w.name)}</td><td class="num">${w.ready}/${w.desired}</td></tr>`).join("")}
       </tbody></table>`
     : '<div class="empty">No workloads found.</div>';
+}
+
+// workloadsEverywhere reads each arena's topology and tags its workloads
+// with the arena, for the All arenas view.
+async function workloadsEverywhere() {
+  const lists = await Promise.all((state.arenas || []).map((ns) =>
+    get("/api/topology?namespace=" + encodeURIComponent(ns))
+      .then((ws) => ws.map((w) => Object.assign({ arena: ns }, w)))
+      .catch(() => [])));
+  return lists.flat();
 }
 
 // An event belongs to the arena if it names it, targets it, or is about a
@@ -308,7 +317,7 @@ function setupAdmin() {
 async function refresh() {
   const [active, faults, cycles, workloads, config] = await Promise.allSettled([
     get(q("/api/active")), get(q("/api/faults?limit=40")), get(q("/api/cycles?limit=15")),
-    state.arena ? get(q("/api/topology")) : Promise.resolve([]),
+    state.arena ? get(q("/api/topology")) : workloadsEverywhere(),
     get("/api/config"),
   ]);
   if (config.status === "fulfilled") renderConfig(config.value);
@@ -452,6 +461,7 @@ async function main() {
   let arenas = [];
   try {
     arenas = await get("/api/arenas");
+    state.arenas = arenas;
     for (const ns of arenas) $("arena").add(new Option(ns, ns));
   } catch (e) { /* All arenas still works */ }
   await setupInject(arenas);
