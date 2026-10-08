@@ -168,11 +168,16 @@ version, faults held now and broken workloads in the last day.
       --config-from-file=deploy/dashboards/cloud-monitoring.json
   ```
 
-  It appears as **Simian** under Monitoring → Dashboards.
+  It appears as **Simian** under Monitoring → Dashboards. It shows every
+  Simian install in the project; the **cluster** selector in the toolbar
+  narrows it to one. The label is the cluster the controller runs in, which is
+  also the cluster it tests.
 - **Grafana:** Dashboards → New → Import, upload
-  `deploy/dashboards/grafana.json`, and pick your Prometheus data source. An
-  **Arena** selector filters every panel by arena. To provision it instead,
-  point a file provider at the directory holding the JSON.
+  `deploy/dashboards/grafana.json`, and pick your Prometheus data source. A
+  **Cluster** and an **Arena** selector filter every panel. Without a
+  `cluster` label on your series — a single Prometheus that does not add one —
+  leave Cluster on All. To provision it instead, point a file provider at the
+  directory holding the JSON.
 
 Useful queries:
 
