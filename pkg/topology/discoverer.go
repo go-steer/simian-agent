@@ -130,11 +130,38 @@ func (d *Discoverer) Start() {
 	d.mu.Unlock()
 }
 
+// snapshotSyncWait bounds how long Snapshot waits for the informer caches of
+// a controller that has just started.
+const snapshotSyncWait = 30 * time.Second
+
+func (d *Discoverer) waitSynced(ctx context.Context) error {
+	d.mu.Lock()
+	started := d.started
+	d.mu.Unlock()
+	if !started {
+		return nil // nothing will fill the caches; read them as they are
+	}
+	wctx, cancel := context.WithTimeout(ctx, snapshotSyncWait)
+	defer cancel()
+	if !cache.WaitForCacheSync(wctx.Done(), d.syncCheck...) {
+		return fmt.Errorf("topology: informer caches not synced yet")
+	}
+	return nil
+}
+
 // Snapshot returns a TargetTopology for the given namespace. Reads from the
 // informer caches — no API round-trips.
-func (d *Discoverer) Snapshot(_ context.Context, ns string) (*TargetTopology, error) {
+//
+// Until the caches have synced, a snapshot would read a partial list — a
+// healthy workload with none of its pods yet, which the health gate reports
+// as 0/1 ready and skips the cycle for. So a started Discoverer waits for
+// them, up to snapshotSyncWait.
+func (d *Discoverer) Snapshot(ctx context.Context, ns string) (*TargetTopology, error) {
 	if ns == "" {
 		return nil, fmt.Errorf("topology: namespace is required")
+	}
+	if err := d.waitSynced(ctx); err != nil {
+		return nil, err
 	}
 
 	out := &TargetTopology{
