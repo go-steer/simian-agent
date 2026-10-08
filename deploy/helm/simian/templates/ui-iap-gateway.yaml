@@ -1,0 +1,101 @@
+{{- if and .Values.ui.enabled .Values.ui.iap.gateway.enabled }}
+{{- if ne .Values.ui.auth "iap" }}
+{{- fail "ui.iap.gateway.enabled needs ui.auth=iap: the load balancer would expose the UI without the controller checking IAP's assertion" }}
+{{- end }}
+{{- if .Values.ui.iap.ingress.enabled }}
+{{- fail "ui.iap.gateway and ui.iap.ingress are two ways to the same load balancer; enable one" }}
+{{- end }}
+{{- if not (and .Values.ui.iap.gateway.host .Values.ui.iap.gateway.certificateMap) }}
+{{- fail "ui.iap.gateway.enabled needs ui.iap.gateway.host and ui.iap.gateway.certificateMap" }}
+{{- end }}
+# The web UI behind Identity-Aware Proxy on GKE, through the Gateway API.
+# Only the UI's port is routed; the MCP endpoint stays inside the cluster.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: simian-ui
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "simian.labels" . | nindent 4 }}
+  annotations:
+    networking.gke.io/certmap: {{ .Values.ui.iap.gateway.certificateMap }}
+spec:
+  gatewayClassName: gke-l7-global-external-managed
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: {{ .Values.ui.iap.gateway.host | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+  {{- with .Values.ui.iap.gateway.staticIPName }}
+  addresses:
+    - type: NamedAddress
+      value: {{ . }}
+  {{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: simian-ui
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "simian.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: simian-ui
+  hostnames:
+    - {{ .Values.ui.iap.gateway.host | quote }}
+  rules:
+    - backendRefs:
+        - name: simian-controller
+          port: {{ .Values.ui.port }}
+---
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: simian-ui
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "simian.labels" . | nindent 4 }}
+spec:
+  default:
+    iap:
+      enabled: true
+      {{- if or (dig "oauthClient" "clientID" "" .Values.ui.iap) (dig "oauthClient" "secretName" "" .Values.ui.iap) }}
+      {{- if not (and (dig "oauthClient" "clientID" "" .Values.ui.iap) (dig "oauthClient" "secretName" "" .Values.ui.iap)) }}
+      {{- fail "ui.iap.oauthClient needs both clientID and secretName" }}
+      {{- end }}
+      clientID: {{ (dig "oauthClient" "clientID" "" .Values.ui.iap) | quote }}
+      oauth2ClientSecret:
+        name: {{ (dig "oauthClient" "secretName" "" .Values.ui.iap) }}
+      {{- else }}
+      # no clientID: IAP's Google-managed OAuth client, for the project's
+      # organization only
+      {{- end }}
+  targetRef:
+    group: ""
+    kind: Service
+    name: simian-controller
+---
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: simian-ui
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "simian.labels" . | nindent 4 }}
+spec:
+  default:
+    config:
+      type: HTTP
+      httpHealthCheck:
+        portSpecification: USE_FIXED_PORT
+        port: {{ .Values.ui.port }}
+        requestPath: /healthz
+  targetRef:
+    group: ""
+    kind: Service
+    name: simian-controller
+{{- end }}

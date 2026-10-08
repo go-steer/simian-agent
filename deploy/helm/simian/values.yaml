@@ -153,7 +153,7 @@ metrics:
 #
 # auth: none — read-only, for a port-forward or in-cluster access; nobody can
 #   inject faults from the browser, because nobody can be identified.
-# auth: iap — behind Identity-Aware Proxy ("In a browser: the web UI" in docs/observability.md). Every
+# auth: iap — behind Identity-Aware Proxy (docs/web-ui-iap.md). Every
 #   request must carry IAP's signed assertion; IAP decides who may view, and
 #   iap.writers who may also inject and clear faults, each recorded in the
 #   audit trail in their name. Only this port is exposed; MCP stays in the
@@ -170,6 +170,44 @@ ui:
     # Emails, or "domain:example.com". Empty: everyone IAP lets in may view,
     # nobody may write.
     writers: []
+    # On GKE: an external HTTPS load balancer with IAP in front of the UI's
+    # port — an Ingress, a Google-managed certificate for host, an HTTP to
+    # HTTPS redirect, and a BackendConfig turning IAP on with a /healthz
+    # health check. Needs ui.auth=iap. IAP's Google-managed OAuth client
+    # admits users in the project's organization; grant them
+    # roles/iap.httpsResourceAccessor to view.
+    ingress:
+      enabled: false
+      # The DNS name users open; it must resolve to the load balancer's IP
+      # before the certificate can be issued.
+      host: ""
+      # A reserved global static IP's name (gcloud compute addresses create
+      # NAME --global), so the address — and host's DNS record — outlive the
+      # Ingress. Empty: an ephemeral address.
+      staticIPName: ""
+    # On GKE, the same with the Gateway API instead of an Ingress — for a
+    # cluster with the Gateway API on (--gateway-api=standard), and to use a
+    # certificate you already have in Certificate Manager (a wildcard, say):
+    # a Gateway (gke-l7-global-external-managed) serving certificateMap, an
+    # HTTPRoute for host, a GCPBackendPolicy turning IAP on with the
+    # Google-managed OAuth client, and a HealthCheckPolicy on /healthz. Use
+    # either ingress or gateway, not both.
+    gateway:
+      enabled: false
+      host: ""
+      # A Certificate Manager certificate map with an entry covering host.
+      certificateMap: ""
+      # A reserved global static IP's name. Empty: an ephemeral address.
+      staticIPName: ""
+    # IAP's Google-managed OAuth client authorizes only accounts in the
+    # project's organization, whatever the IAP access grants say. To admit
+    # others (another Workspace domain, gmail.com), create an OAuth client
+    # with an External consent screen and name it here; its secret goes in a
+    # Secret in the release namespace, under the key "key". Empty: the
+    # Google-managed client.
+    oauthClient:
+      clientID: ""
+      secretName: ""
 
 # MCP server.
 mcp:

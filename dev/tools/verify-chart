@@ -148,9 +148,49 @@ out="$(render sim-ui-iap --set ui.auth=iap --set ui.iap.projectNumber=123456 \
   --set 'ui.iap.writers={alice@example.com,domain:sre.example.com}')"
 expect_arg "ui-iap" "$out" "--ui-auth=iap"
 expect_arg "ui-iap" "$out" "--ui-iap-project-number=123456"
+# A real project number is 12 digits, which --set reads as a float.
+expect_arg "ui-iap-long" "$(render sim-ui-iap-long --set ui.auth=iap --set ui.iap.projectNumber=1067056737933)" \
+  "--ui-iap-project-number=1067056737933"
 expect_arg "ui-iap" "$out" "--ui-writers=alice@example.com"
 expect_arg "ui-iap" "$out" "--ui-writers=domain:sre.example.com"
-for bad in "--set ui.auth=iap" "--set ui.auth=oidc" "--set ui.iap.writers={alice@example.com}"; do
+echo "▸ on GKE the chart can put the UI behind an IAP load balancer, and only behind IAP"
+out="$(render sim-ui-ingress --set ui.auth=iap --set ui.iap.projectNumber=123456 \
+  --set ui.iap.ingress.enabled=true --set ui.iap.ingress.host=simian.example.com)"
+for want in "kind: Ingress" "kind: BackendConfig" "kind: ManagedCertificate" "kind: FrontendConfig" \
+  "requestPath: /healthz" "- simian.example.com" '"ports": {"ui": "simian-ui"}' "name: ui"; do
+  if ! grep -qF -- "$want" <<<"$out"; then
+    echo "✗ ui-ingress: expected '$want' in the render" >&2
+    fail=1
+  fi
+done
+out="$(render sim-ui-gateway --set ui.auth=iap --set ui.iap.projectNumber=123456 \
+  --set ui.iap.gateway.enabled=true --set ui.iap.gateway.host=simian.example.com \
+  --set ui.iap.gateway.certificateMap=star-example-com)"
+for want in "kind: Gateway" "kind: HTTPRoute" "kind: GCPBackendPolicy" "kind: HealthCheckPolicy" \
+  "networking.gke.io/certmap: star-example-com" "requestPath: /healthz" "Google-managed OAuth client"; do
+  if ! grep -qF -- "$want" <<<"$out"; then
+    echo "✗ ui-gateway: expected '$want' in the render" >&2
+    fail=1
+  fi
+done
+out="$(render sim-ui-gateway-client --set ui.auth=iap --set ui.iap.projectNumber=123456 \
+  --set ui.iap.gateway.enabled=true --set ui.iap.gateway.host=simian.example.com \
+  --set ui.iap.gateway.certificateMap=m --set ui.iap.oauthClient.clientID=123-abc.apps.googleusercontent.com \
+  --set ui.iap.oauthClient.secretName=simian-iap-oauth)"
+if ! grep -qF 'clientID: "123-abc.apps.googleusercontent.com"' <<<"$out" || ! grep -qF "name: simian-iap-oauth" <<<"$out"; then
+  echo "✗ ui-gateway: a custom OAuth client was not rendered into the GCPBackendPolicy" >&2
+  fail=1
+fi
+if grep -qF "kind: Ingress" <<<"$(render sim-ui-noingress)"; then
+  echo "✗ ui-ingress: an Ingress rendered by default" >&2
+  fail=1
+fi
+for bad in "--set ui.auth=iap" "--set ui.auth=oidc" "--set ui.iap.writers={alice@example.com}" \
+  "--set ui.iap.ingress.enabled=true --set ui.iap.ingress.host=h" \
+  "--set ui.auth=iap --set ui.iap.projectNumber=1 --set ui.iap.ingress.enabled=true" \
+  "--set ui.iap.gateway.enabled=true --set ui.iap.gateway.host=h --set ui.iap.gateway.certificateMap=m" \
+  "--set ui.auth=iap --set ui.iap.projectNumber=1 --set ui.iap.gateway.enabled=true --set ui.iap.gateway.host=h" \
+  "--set ui.auth=iap --set ui.iap.projectNumber=1 --set ui.iap.gateway.enabled=true --set ui.iap.gateway.host=h --set ui.iap.gateway.certificateMap=m --set ui.iap.ingress.enabled=true --set ui.iap.ingress.host=h"; do
   # shellcheck disable=SC2086 # word-splitting the --set pair is the point
   if helm template sim-ui-bad "$CHART" --set llm.vertex.project=verify-project $bad >/dev/null 2>&1; then
     echo "✗ ui-iap: rendered with $bad; it must refuse" >&2

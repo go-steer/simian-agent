@@ -68,6 +68,9 @@ helm upgrade simian deploy/helm/simian -n simian-system --reuse-values \
 - **Only the UI's port is exposed.** The MCP endpoint stays unauthenticated
   and inside the cluster.
 
+[The web UI behind Identity-Aware Proxy]({{< relref "web-ui-iap.md" >}}) sets
+it up on GKE, from a hostname to the first fault injected from a browser.
+
 Without IAP (`ui.auth=none`, the default) the form is replaced by a note and
 the write endpoints refuse: with no one identified, anyone who could reach the
 port could inject faults.
@@ -274,8 +277,7 @@ Keep it for operators.
 
 ## Not yet
 
-The chart does not yet create the load balancer and IAP configuration in
-front of the UI; that recipe for GKE is next, then the eval scorecard view
-from the web UI's [design]({{< relref "web-ui-design.md" >}}). Simian does not write Kubernetes
+The eval scorecard view from the web UI's
+[design]({{< relref "web-ui-design.md" >}}) is not built yet. Simian does not write Kubernetes
 Events: events in an arena would be readable by any agent with the `view`
 role, and would hand it the answer.

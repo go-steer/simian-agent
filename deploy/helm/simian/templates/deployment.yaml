@@ -55,7 +55,9 @@ spec:
             - --ui-iap-audience={{ . }}
             {{- end }}
             {{- with .Values.ui.iap.projectNumber }}
-            - --ui-iap-project-number={{ . }}
+            {{- /* --set reads a project number as a float (1.067e+12);
+                   print it back as the integer it is. */}}
+            - --ui-iap-project-number={{ if kindIs "float64" . }}{{ printf "%.0f" . }}{{ else }}{{ . }}{{ end }}
             {{- end }}
             {{- range .Values.ui.iap.writers }}
             - --ui-writers={{ . }}
@@ -168,6 +170,13 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "simian.labels" . | nindent 4 }}
+  {{- if and .Values.ui.enabled .Values.ui.iap.ingress.enabled (not .Values.ui.iap.gateway.enabled) }}
+  annotations:
+    # The UI port's backend gets IAP and the /healthz health check (see
+    # ui-iap-ingress.yaml); the load balancer reaches the pods directly.
+    cloud.google.com/backend-config: '{"ports": {"ui": "simian-ui"}}'
+    cloud.google.com/neg: '{"ingress": true}'
+  {{- end }}
 spec:
   type: {{ .Values.mcp.serviceType }}
   selector:
