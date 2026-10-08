@@ -28,6 +28,7 @@ package chaosmesh
 // never emitted (Catalog() only returns entries for installed CRDs).
 var specTemplates = map[string]string{
 	"PodChaos": `action MUST be one of: "pod-kill" | "pod-failure" | "container-kill"
+"container-kill" also needs "containerNames": ["<container>"], from the workload's containers.
 {"action": "pod-kill", "mode": "one",
  "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}}}`,
 
