@@ -8,8 +8,8 @@ apply the ones you ask for. That record is what makes it useful for the thing
 it was built for: measuring the SRE agents that are supposed to diagnose what
 went wrong.
 
-**Latest release:** [v0.2.1](https://github.com/go-steer/simian-agent/releases/latest) ·
-image `ghcr.io/go-steer/simian-agent:0.2.1` · Apache 2.0
+**Latest release:** [v0.3.0](https://github.com/go-steer/simian-agent/releases/latest) ·
+image `ghcr.io/go-steer/simian-agent:0.3.0` · Apache 2.0
 
 ## Try it
 
