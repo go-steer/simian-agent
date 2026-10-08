@@ -69,6 +69,16 @@ fails otherwise). A release is cut by a PR that bumps those, then a signed
 gets a GitHub Release page whose notes list what changed by issue, and, for a
 minor release, the upgrade notes: what an existing install must change.
 
+Patches come from a release branch once main has moved past the release
+with a feature: `release-0.2` starts at `v0.2.0`, fixes are cherry-picked from
+main with `git cherry-pick -x` (so each names the commit it came from) in a PR
+against the branch, merged with rebase so each fix stays its own commit, and
+the patch is tagged on the branch. CI and the kind end-to-end run cover
+`release-*` branches as they do main. Main then moves its README, runbook and
+baked pin to the patch. A chart change on main must keep working with the
+current release's image, or wait for the next minor: render a new flag only
+when its value differs from the binary's default.
+
 The 0.1.x series did not follow this — features and breaking changes shipped
 as patch releases. v0.2.0 is where it starts.
 
