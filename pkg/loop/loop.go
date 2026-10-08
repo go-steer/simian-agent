@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -73,8 +74,16 @@ type Loop struct {
 	Logger     *slog.Logger
 	Hypothesis string
 
+	// Control, when set, is read at every cycle and overrides Namespaces,
+	// Interval, the per-cycle budget and Hypothesis, so autonomous mode can
+	// be turned on, retargeted, paused or retuned while the controller
+	// runs. A change wakes an idle loop; a cycle already running finishes.
+	Control *Control
+
 	refusalMu sync.Mutex
 	refusals  map[string][]time.Time // step key → recent refusal times
+
+	pausedNS []string
 
 	// slotPoll is how often a namespace waiting for a fault slot looks
 	// again. Zero means defaultSlotPoll; tests shorten it.
@@ -86,40 +95,117 @@ const defaultSlotPoll = 5 * time.Second
 // Run drives the loop on a ticker until ctx is done. Returns the context
 // error on shutdown.
 func (l *Loop) Run(ctx context.Context) error {
-	if l.Interval <= 0 {
-		return fmt.Errorf("loop: interval must be positive")
-	}
-	if len(l.Namespaces) == 0 {
-		return fmt.Errorf("loop: at least one namespace is required")
+	if l.Control == nil {
+		if l.Interval <= 0 {
+			return fmt.Errorf("loop: interval must be positive")
+		}
+		if len(l.Namespaces) == 0 {
+			return fmt.Errorf("loop: at least one namespace is required")
+		}
 	}
 	l.seedRefusals()
-	t := time.NewTicker(l.Interval)
-	defer t.Stop()
+	var changed <-chan struct{}
+	if l.Control != nil {
+		changed = l.Control.Changed()
+	}
 	// Run an immediate first cycle on startup so operators don't wait a
 	// full interval to see anything.
 	for cycle := 0; ; cycle++ {
+		started := time.Now()
+		if !l.sync() {
+			// Off, or nowhere to run: wait for an operator to change that.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-changed:
+				continue
+			}
+		}
 		for _, ns := range l.cycleOrder(cycle) {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			// Settings may have changed while the last namespace ran.
+			if !l.sync() || !slices.Contains(l.Namespaces, ns) {
+				continue
+			}
+			if l.paused(ns) {
+				l.skipPaused(ctx, ns)
+				continue
+			}
 			l.runOneSafely(ctx, ns)
 		}
-		// A cycle can outrun its interval: each namespace may wait up to its
-		// share for a slot, and planning takes time on top. The tick that
-		// fired meanwhile is stale. Starting on it began a cycle straight
-		// after the last fault was applied, which only found every slot
-		// taken and skipped each namespace as budget-full.
-		select {
-		case <-t.C:
-		default:
+		// Wait out the rest of the interval from when this cycle started. A
+		// cycle can outrun its interval: each namespace may wait up to its
+		// share for a slot, and planning takes time on top. Starting the next
+		// at once began a cycle straight after the last fault was applied,
+		// which only found every slot taken and skipped each namespace as
+		// budget-full; so a full interval always follows a cycle that ran
+		// long.
+		wait := l.Interval - time.Since(started)
+		if wait <= 0 {
+			wait = l.Interval
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-t.C:
+		timer := time.NewTimer(wait)
+	waiting:
+		for {
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+				break waiting
+			case <-changed:
+				// Turned off, retargeted or retuned: keep the schedule, with
+				// the new interval, unless the loop now has nothing to do.
+				if !l.sync() {
+					timer.Stop()
+					break waiting
+				}
+				timer.Stop()
+				if rest := l.Interval - time.Since(started); rest > 0 {
+					timer = time.NewTimer(rest)
+				} else {
+					break waiting
+				}
+			}
 		}
 	}
 }
+
+// sync copies Control's settings into the loop and reports whether it has
+// anything to run. Only the loop's goroutine calls it.
+func (l *Loop) sync() bool {
+	if l.Control == nil {
+		return len(l.Namespaces) > 0
+	}
+	s, _ := l.Control.Get()
+	l.Namespaces = s.Namespaces
+	l.Interval = s.Interval
+	l.Budget.MaxFaultsPerCycle = s.MaxFaultsPerCycle
+	l.Budget.MaxSeverityPerCycle = s.MaxSeverityPerCycle
+	l.Hypothesis = s.Hypothesis
+	l.pausedNS = s.Paused
+	return s.Enabled && len(s.Namespaces) > 0 && s.Interval > 0
+}
+
+func (l *Loop) paused(ns string) bool {
+	return slices.Contains(l.pausedNS, PauseAll) || slices.Contains(l.pausedNS, ns)
+}
+
+// skipPaused records a paused namespace's turn, so the cycle log shows it
+// was passed over on purpose rather than forgotten.
+func (l *Loop) skipPaused(ctx context.Context, ns string) {
+	if l.Auditor == nil {
+		return
+	}
+	l.Auditor.Emit(ctx, simian.AuditEvent{Event: audit.EventCycleStarted, Mode: simian.SourceAutonomous, Payload: map[string]any{"namespace": ns}})
+	l.Auditor.Emit(ctx, simian.AuditEvent{Event: audit.EventCycleSkipped, Mode: simian.SourceAutonomous,
+		Reason: ReasonPaused, Payload: map[string]any{"namespace": ns}})
+}
+
+// ReasonPaused is a cycle skipped because an operator paused its namespace.
+const ReasonPaused = "paused"
 
 // cycleOrder rotates which namespace goes first. Under a concurrency cap the
 // first namespace of a cycle takes the slot; always starting with the same one

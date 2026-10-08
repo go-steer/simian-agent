@@ -71,14 +71,41 @@ helm upgrade simian deploy/helm/simian -n simian-system --reuse-values \
 [The web UI behind Identity-Aware Proxy]({{< relref "web-ui-iap.md" >}}) sets
 it up on GKE, from a hostname to the first fault injected from a browser.
 
+### Configuration and taking over
+
+A **Configuration** panel shows everyone what the controller runs with: the
+safety limits (faults at once, longest fault, cooldown, blast radius), each
+arena and its excluded workloads, and autonomous mode's settings — each named
+by the chart value that sets it, and, when an admin changed it, by whom and
+when.
+
+The people in `ui.iap.admins` can also, from that panel:
+
+- **turn autonomous mode on or off and configure it** — which arenas, how
+  often, how many faults per cycle, the severity cap, a hypothesis hint —
+  within the safety limits, which only the install changes;
+- **pause and resume** it in one arena or everywhere (a paused arena's
+  cycles are recorded as skipped, `paused`);
+- **clear every running fault** at once.
+
+A change takes effect at the next cycle; one already running finishes. It is
+kept in the controller's `simian-runtime-config` ConfigMap, so it survives a
+restart and a `helm upgrade`; **Revert** returns to the chart's
+`autonomous.*` values. Each change is an `autonomous.configured` audit event
+with who made it and the settings before and after. If the install's limits
+later narrow below a kept setting, the controller starts on the install's
+settings and says so in its log.
+
 Without IAP (`ui.auth=none`, the default) the form is replaced by a note and
 the write endpoints refuse: with no one identified, anyone who could reach the
 port could inject faults.
 
-The page reads a small JSON API under `/api/` (`info`, `me`, `arenas`,
-`catalog`, `active`, `faults`, `cycles`, `topology`), writes with `POST
-/api/faults` and `POST /api/faults/{uid}/clear`, and streams events from
-`/api/events`; other tools can use it too.
+The page reads a small JSON API under `/api/` (`info`, `me`, `config`,
+`arenas`, `catalog`, `active`, `faults`, `cycles`, `topology`), writes with
+`POST /api/faults` and `POST /api/faults/{uid}/clear`, administers with `POST
+/api/admin/autonomous`, `/api/admin/autonomous/reset`, `/api/admin/pause` and
+`/api/admin/clear-all`, and streams events from `/api/events`; other tools can
+use it too.
 
 ## Live: `simian watch`
 
@@ -137,6 +164,7 @@ for its duration.
 | `budget-full` | the concurrency limit was reached (one fault at a time in the recommended configuration) |
 | `no-valid-plan` | the LLM answered, but none of its plans passed validation; the detail says what was wrong |
 | `llm-unavailable` | the LLM call failed (quota, permissions, network) |
+| `paused` | an admin paused autonomous mode in this arena, or everywhere, from the web UI |
 | `interrupted` | the controller was shutting down |
 
 ## What was injected

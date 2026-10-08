@@ -33,6 +33,9 @@ type Identity struct {
 	Email string `json:"email,omitempty"`
 	// CanWrite says whether this user may submit and clear faults.
 	CanWrite bool `json:"can_write"`
+	// CanAdmin says whether this user may configure, pause and resume
+	// autonomous mode and clear every fault at once.
+	CanAdmin bool `json:"can_admin"`
 	// Auth is the mode the UI runs in: "none" or "iap".
 	Auth string `json:"auth"`
 }
@@ -67,6 +70,8 @@ type IAP struct {
 	Audience      string
 	ProjectNumber string
 	Writers       Writers
+	// Admins may also configure autonomous mode and clear all faults.
+	Admins Writers
 	// Validator checks the signature against IAP's keys. Nil uses Google's.
 	Validator *idtoken.Validator
 }
@@ -104,7 +109,7 @@ func (a *IAP) Identify(r *http.Request) (Identity, error) {
 	if email == "" {
 		return Identity{}, errors.New("IAP assertion: no email claim")
 	}
-	return Identity{Email: email, CanWrite: a.Writers.Allow(email), Auth: "iap"}, nil
+	return Identity{Email: email, CanWrite: a.Writers.Allow(email), CanAdmin: a.Admins.Allow(email), Auth: "iap"}, nil
 }
 
 // checkIAPShape rejects a token that is not ES256 with a 64-byte signature
@@ -131,8 +136,9 @@ func checkIAPShape(tok string) error {
 	return nil
 }
 
-// Writers is who may submit and clear faults: exact emails, and
-// "domain:example.com" for everyone in a domain. Empty allows nobody.
+// Writers is a list of people — who may submit and clear faults, or who may
+// administer: exact emails, and "domain:example.com" for everyone in a
+// domain. Empty allows nobody.
 type Writers []string
 
 func (w Writers) Allow(email string) bool {

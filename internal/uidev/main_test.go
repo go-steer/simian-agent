@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/go-steer/simian-agent/pkg/audit"
+	"github.com/go-steer/simian-agent/pkg/loop"
 	"github.com/go-steer/simian-agent/pkg/simian"
 	"github.com/go-steer/simian-agent/pkg/topology"
 	"github.com/go-steer/simian-agent/pkg/webui"
@@ -114,7 +115,7 @@ func TestServe(t *testing.T) {
 	}
 	ctx := context.Background()
 	w := &world{log: audit.NewFaultLog(0), events: webui.NewBroadcaster(ctx)}
-	var auth webui.Authenticator = as{webui.Identity{Email: "alice@example.com", CanWrite: true, Auth: "iap"}}
+	var auth webui.Authenticator = as{webui.Identity{Email: "alice@example.com", CanWrite: true, CanAdmin: true, Auth: "iap"}}
 	switch who := os.Getenv("SIMIAN_UIDEV_AS"); who {
 	case "":
 	case "none":
@@ -122,7 +123,20 @@ func TestServe(t *testing.T) {
 	default:
 		auth = as{webui.Identity{Email: who, Auth: "iap"}}
 	}
+	control := loop.NewControl(loop.Settings{Namespaces: []string{"boutique"}, Interval: 10 * time.Minute, MaxFaultsPerCycle: 1, MaxSeverityPerCycle: simian.TierNamespace})
 	h := webui.Handler(webui.Deps{
+		Install:  webui.Install{MaxConcurrentFaults: 1, DurationCeiling: "5m0s", MinCooldown: "1m0s", PermittedTiers: []simian.BlastRadiusTier{simian.TierNamespace}, DefaultProbes: true, LLM: "gemini"},
+		Autonomy: &webui.Autonomy{Control: control},
+		Limits: func(context.Context) (loop.Limits, error) {
+			return loop.Limits{MaxConcurrentFaults: 1, PermittedTiers: []simian.BlastRadiusTier{simian.TierNamespace}, Arenas: []string{"bank", "boutique"}}, nil
+		},
+		Excluded: func(_ context.Context, ns string) ([]string, error) {
+			if ns == "boutique" {
+				return []string{"loadgenerator"}, nil
+			}
+			return nil, nil
+		},
+		Auditor: w.log,
 		Version: "dev", Active: w, Faults: w.log, Topology: topo{}, Events: w.events, Auth: auth, Executor: w,
 		Arenas: func(context.Context) ([]string, error) { return []string{"bank", "boutique"}, nil },
 		Catalog: func(context.Context) ([]simian.CatalogEntry, error) {

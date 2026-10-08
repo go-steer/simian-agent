@@ -95,6 +95,12 @@ const (
 	EventLLMUnavailable   = "cycle.llm_unavailable"
 	EventStepSkipped      = "cycle.step_skipped"
 
+	// EventAutonomousConfigured: an operator changed autonomous mode while
+	// the controller ran — turned it on or off, retargeted, retuned, paused
+	// or resumed it, or reverted it to the install's settings. The payload
+	// has the actor, the action, and the settings before and after.
+	EventAutonomousConfigured = "autonomous.configured"
+
 	// EventBaselinePersistFailed: a baseline was established but could not be
 	// saved. It serves from memory until the next restart, after which the
 	// loop's health gate skips every cycle in that namespace.

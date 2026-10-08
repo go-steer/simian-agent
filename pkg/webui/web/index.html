@@ -86,6 +86,51 @@ limitations under the License.
       <div id="workloads"></div>
     </section>
 
+    <section id="config-panel" class="panel wide">
+      <h2>Configuration</h2>
+      <div class="config-grid">
+        <div>
+          <h3>Safety limits <span class="muted">(set where Simian is installed)</span></h3>
+          <table id="limits"></table>
+        </div>
+        <div>
+          <h3>Arenas</h3>
+          <table id="arenas"></table>
+        </div>
+        <div>
+          <h3>Autonomous mode</h3>
+          <table id="autonomy"></table>
+          <div id="autonomy-source" class="muted hint"></div>
+        </div>
+      </div>
+      <form id="admin" hidden>
+        <h3>Change autonomous mode</h3>
+        <div class="row">
+          <label><input type="checkbox" id="a-enabled"> On</label>
+          <span id="a-namespaces"></span>
+        </div>
+        <div class="row">
+          <label>Every <input id="a-interval" size="6"></label>
+          <label>Faults per cycle <input id="a-max" type="number" min="1" style="width:4rem"></label>
+          <label>Severity cap <select id="a-tier"></select></label>
+        </div>
+        <label class="block">Hypothesis hint (optional)
+          <input id="a-hint" style="width:100%"></label>
+        <div class="row">
+          <button type="submit">Apply</button>
+          <button type="button" id="a-reset">Revert to the install's settings</button>
+          <span id="a-result"></span>
+        </div>
+        <h3>Take over</h3>
+        <div class="row" id="a-pauses"></div>
+        <div class="row">
+          <button type="button" id="a-clear-all" class="danger">Clear all faults</button>
+          <span id="a-clear-result"></span>
+        </div>
+        <div class="muted hint">Changes take effect at the next cycle; one already running finishes. They are kept across restarts and recorded in the audit trail in your name. The safety limits above are the ceiling: they change only where Simian is installed.</div>
+      </form>
+    </section>
+
     <section id="events-panel" class="panel">
       <h2>Live events</h2>
       <ol id="events"></ol>

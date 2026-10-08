@@ -62,10 +62,13 @@ spec:
             {{- range .Values.ui.iap.writers }}
             - --ui-writers={{ . }}
             {{- end }}
+            {{- range (dig "admins" (list) .Values.ui.iap) }}
+            - --ui-admins={{ . }}
+            {{- end }}
             {{- else if ne .Values.ui.auth "none" }}
             {{- fail (printf "ui.auth=%q: want none or iap" .Values.ui.auth) }}
-            {{- else if .Values.ui.iap.writers }}
-            {{- fail "ui.iap.writers needs ui.auth=iap: without IAP the UI cannot tell who anyone is" }}
+            {{- else if or .Values.ui.iap.writers (dig "admins" (list) .Values.ui.iap) }}
+            {{- fail "ui.iap.writers and ui.iap.admins need ui.auth=iap: without IAP the UI cannot tell who anyone is" }}
             {{- end }}
             {{- if .Values.metrics.enabled }}
             - --metrics-addr=:{{ .Values.metrics.port }}

@@ -170,6 +170,12 @@ ui:
     # Emails, or "domain:example.com". Empty: everyone IAP lets in may view,
     # nobody may write.
     writers: []
+    # Who may also turn autonomous mode on and off and configure it within
+    # the executor limits, pause and resume it, and clear every fault at once
+    # from the UI's Configuration panel. Their changes are kept in the
+    # simian-runtime-config ConfigMap across restarts and helm upgrades; the
+    # chart's autonomous.* values are what "Revert" returns to. Empty: nobody.
+    admins: []
     # On GKE: an external HTTPS load balancer with IAP in front of the UI's
     # port — an Ingress, a Google-managed certificate for host, an HTTP to
     # HTTPS redirect, and a BackendConfig turning IAP on with a /healthz

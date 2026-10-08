@@ -120,7 +120,7 @@ func (r *Recorder) WatchActive(active ActiveFaults) {
 // on a backend that baselines new series.
 var (
 	sources     = []simian.ManifestSource{simian.SourceAutonomous, simian.SourceDirected}
-	cycleSkips  = []string{"budget-full", "health-gate", "llm-unavailable", "no-valid-plan", "plan-layering-failed", string(simian.ReasonInterrupted)}
+	cycleSkips  = []string{"budget-full", "health-gate", "llm-unavailable", "no-valid-plan", "plan-layering-failed", "paused", string(simian.ReasonInterrupted)}
 	refusalKeys = []simian.RejectionReason{
 		simian.ReasonUnknownGVK, simian.ReasonSchemaInvalid, simian.ReasonNamespaceNotEligible,
 		simian.ReasonWorkloadExcluded, simian.ReasonRBACDenied, simian.ReasonTierNotPermitted,

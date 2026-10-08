@@ -84,7 +84,10 @@ For the Ingress path, replace the four `ui.iap.gateway.*` values with
 `ui.iap.ingress.staticIPName=simian-ui`.
 
 `ui.iap.writers` takes emails and `domain:example.com`. Leave it empty for a
-page everyone can view and nobody can write from.
+page everyone can view and nobody can write from. Add
+`--set 'ui.iap.admins={you@example.com}'` for the people who may also turn
+autonomous mode on, configure, pause and resume it, and clear all faults
+from the page's Configuration panel.
 
 **Check:**
 

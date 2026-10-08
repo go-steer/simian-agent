@@ -34,7 +34,16 @@ description: "Design doc for a single browser surface serving two purposes: live
 > Writes need a custom header, so a cross-site page cannot use the IAP cookie.
 > Every submit goes through the executor, and the audit trail records the
 > actor on `executor.received` and `lease.cleared`. Without IAP the UI is
-> read-only. The scorecard (phase 3) is next.
+> read-only.
+>
+> **Configuration and admin (v0.3, #234):** a Configuration panel shows the
+> running limits, arenas and autonomous settings to everyone. People in
+> `--ui-admins` turn autonomous mode on, configure it within the executor's
+> limits, pause and resume it, and clear all faults. The loop reads its
+> settings at each cycle, so a change takes effect without a restart; changes
+> are kept in a controller-owned ConfigMap and audited as
+> `autonomous.configured`. The executor's safety limits stay install-only.
+> The scorecard (phase 3) is next.
 
 ## Why a web UI
 

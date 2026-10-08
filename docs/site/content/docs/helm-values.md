@@ -83,6 +83,11 @@ otherwise looks exactly like a planner that produced nothing.
 
 ## Autonomous mode
 
+The `autonomous.*` values are the install's settings. With the web UI behind
+IAP, `ui.iap.admins` may change them at runtime within the `executor.*`
+limits; their changes are kept in the `simian-runtime-config` ConfigMap and
+win over these until reverted from the page.
+
 | Value | Default | Notes |
 |---|---|---|
 | `autonomous.enabled` | `false` | When true, the controller runs the autonomous planning loop. |
@@ -132,6 +137,7 @@ without a log pipeline, and what `simian audit export` reads directly.
 | `ui.iap.audience` | `""` | The backend service's audience, `/projects/NUMBER/global/backendServices/ID`, checked exactly. |
 | `ui.iap.projectNumber` | `""` | Without an exact audience: accept any backend service in this project. |
 | `ui.iap.writers` | `[]` | Who may inject and clear faults from the page: emails, or `domain:example.com`. Empty: nobody. Refused without `ui.auth=iap`. |
+| `ui.iap.admins` | `[]` | Who may also turn autonomous mode on and off and configure it (within the executor limits), pause and resume it, and clear all faults, from the Configuration panel. Kept in the `simian-runtime-config` ConfigMap across restarts and upgrades. Refused without `ui.auth=iap`. |
 | | | The defaults render no UI flags, so the chart still starts a 0.2.x image; `ui.auth=iap` and a non-default port need v0.3. |
 
 ## Metrics

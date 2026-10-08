@@ -46,9 +46,7 @@ type submitRequest struct {
 
 func writeRoutes(mux *http.ServeMux, d Deps) {
 	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
-		id := identityFrom(r.Context())
-		id.CanWrite = id.CanWrite && d.Executor != nil
-		writeJSON(w, id)
+		writeJSON(w, d.effective(identityFrom(r.Context())))
 	})
 	mux.HandleFunc("GET /api/catalog", func(w http.ResponseWriter, r *http.Request) {
 		if d.Catalog == nil {
