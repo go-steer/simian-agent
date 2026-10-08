@@ -16,10 +16,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release-*"]
     paths-ignore: ['**/*.md']
   pull_request:
-    branches: [main]
+    branches: [main, "release-*"]
     paths-ignore: ['**/*.md']
 
 # Cancel in-progress runs when a new commit lands on the same branch
