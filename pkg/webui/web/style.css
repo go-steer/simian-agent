@@ -13,88 +13,482 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-:root {
-  --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6b7280; --line: #e3e6eb;
-  --ok: #1a7f37; --warn: #b26a00; --bad: #c62828; --info: #1f5fbf; --chip: #eef1f5;
+
+/* style.css — what is inside Simian's panes: which hue each pane wears,
+ * and the cards, tables, badges and forms app.js renders. The panes
+ * themselves are panel.css, where they stand is room.css, the colours
+ * are palette.css.
+ *
+ * Status colours (--ok, --warn, --bad, --info) are kept apart from the
+ * pane hues: red is for something that went wrong — a refusal, a failed
+ * recovery, a workload short of replicas — and for nothing else.
+ */
+
+[hidden] {
+  display: none !important;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #12151b; --panel: #1b2029; --text: #e6e9ef; --muted: #9aa3b2; --line: #2b313c;
-    --ok: #4cc26b; --warn: #e0a33a; --bad: #ef5350; --info: #6aa3ff; --chip: #262c37;
+
+/* ─── Pane hues ──────────────────────────────────────────────────── */
+
+.panel-anchor[data-pane='inject'] > .panel { --hue: var(--hue-inject); }
+.panel-anchor[data-pane='active'] > .panel { --hue: var(--hue-active); }
+.panel-anchor[data-pane='auto'] > .panel { --hue: var(--hue-auto); }
+.panel-anchor[data-pane='faults'] > .panel { --hue: var(--hue-faults); }
+.panel-anchor[data-pane='workloads'] > .panel { --hue: var(--hue-workloads); }
+.panel-anchor[data-pane='events'] > .panel { --hue: var(--hue-events); }
+
+/* Light rooms: chrome text a shade darker than the edge, for contrast on
+   white. */
+body[data-theme='cloud-light'] .panel {
+  --hue-ink: color-mix(in srgb, var(--hue) 80%, var(--text));
+}
+
+/* ─── Type ───────────────────────────────────────────────────────── */
+
+.panel-body,
+.dialog-body {
+  font-size: 12px;
+}
+
+.panel-body h3,
+.dialog-body h3 {
+  margin: 14px 0 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--hue-ink);
+}
+
+.count {
+  font-weight: 700;
+  opacity: 0.85;
+}
+
+.muted {
+  color: var(--text-dim);
+}
+
+.empty {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+code {
+  font-family: var(--mono);
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+/* ─── Badges ─────────────────────────────────────────────────────── */
+
+.badge {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, currentcolor 45%, transparent);
+  border-radius: 3px;
+  font-size: 10.5px;
+  line-height: 1.55;
+  white-space: nowrap;
+  color: var(--text-dim);
+  background: color-mix(in srgb, currentcolor 8%, transparent);
+}
+
+.badge.ok { color: var(--ok); }
+.badge.warn,
+.badge.paused { color: var(--warn); }
+.badge.bad { color: var(--bad); }
+.badge.info { color: var(--info); }
+
+.kind {
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* ─── Active faults ──────────────────────────────────────────────── */
+
+.card {
+  margin-bottom: 8px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--hue) 40%, transparent);
+  border-left: 3px solid var(--hue);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--hue) 6%, transparent);
+}
+
+.card .top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 8px;
+  margin-bottom: 3px;
+}
+
+.card .remaining {
+  margin-left: auto;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--hue-ink);
+}
+
+.card > .muted {
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+/* ─── Autonomous mode ────────────────────────────────────────────── */
+
+.plan .hypothesis {
+  margin: 4px 0 8px;
+  color: var(--text);
+}
+
+.plan ol {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.plan li {
+  margin-bottom: 5px;
+}
+
+.plan .why {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.cycle {
+  display: grid;
+  grid-template-columns: 6.5em 7.5em minmax(0, 1fr);
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--hue) 18%, transparent);
+}
+
+.cycle .badge,
+#events .badge {
+  justify-self: start;
+  align-self: start;
+}
+
+/* ─── Tables ─────────────────────────────────────────────────────── */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 5px 7px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid color-mix(in srgb, var(--hue, var(--accent)) 18%, transparent);
+}
+
+th {
+  position: sticky;
+  top: -9px;
+  z-index: 1;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--hue-ink, var(--text-dim));
+  background: var(--panel-fill, var(--bg-surface));
+}
+
+tbody tr:hover td {
+  background: color-mix(in srgb, var(--hue, var(--accent)) 7%, transparent);
+}
+
+td.num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+tr.short td {
+  color: var(--bad);
+  font-weight: 700;
+}
+
+#faults td .muted {
+  font-size: 10.5px;
+}
+
+/* ─── Live events ────────────────────────────────────────────────── */
+
+#events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+}
+
+#events li {
+  display: grid;
+  grid-template-columns: 6.5em minmax(0, 13em) minmax(0, 1fr);
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--hue) 16%, transparent);
+}
+
+#events li.empty {
+  display: block;
+}
+
+#events .ev {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* ─── Forms ──────────────────────────────────────────────────────── */
+
+form .row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-bottom: 9px;
+}
+
+form label {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+form label.block {
+  display: block;
+  margin-top: 8px;
+}
+
+form .modes {
+  display: inline-flex;
+  gap: 10px;
+}
+
+input,
+textarea,
+select,
+button {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--hue, var(--accent)) 45%, transparent);
+  border-radius: 3px;
+  padding: 3px 6px;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+button:focus-visible {
+  outline: 1px solid var(--hue, var(--accent));
+  outline-offset: 1px;
+  box-shadow: 0 0 10px -2px color-mix(in srgb, var(--hue, var(--accent)) 70%, transparent);
+}
+
+select option {
+  background: var(--bg-surface);
+  color: var(--text);
+}
+
+input[type='radio'],
+input[type='checkbox'] {
+  accent-color: var(--hue, var(--accent));
+  vertical-align: -2px;
+}
+
+textarea {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+button {
+  cursor: pointer;
+  padding: 4px 12px;
+  letter-spacing: 0.06em;
+  transition: background-color 0.12s linear, box-shadow 0.12s linear;
+}
+
+button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--hue, var(--accent)) 16%, transparent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The one filled button in each form: Inject (in the danger hue) and
+   Apply (in the dialog's). */
+button[type='submit'] {
+  border-color: var(--hue, var(--accent));
+  background: var(--hue, var(--accent));
+  color: var(--room-on-hue);
+  font-weight: 700;
+  text-transform: uppercase;
+  box-shadow: 0 0 14px -4px var(--hue, var(--accent));
+}
+
+button[type='submit']:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--hue, var(--accent)) 82%, #fff);
+}
+
+/* Destructive: outlined in the status red, filled only under the
+   pointer. */
+button.clear,
+button.danger {
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 70%, transparent);
+}
+
+button.clear {
+  margin-left: 4px;
+  padding: 0 8px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+}
+
+button.clear:hover:not(:disabled),
+button.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bad) 18%, transparent);
+}
+
+.hint {
+  margin-top: 4px;
+  font-size: 10.5px;
+  white-space: pre-wrap;
+}
+
+details summary {
+  cursor: pointer;
+  margin-top: 4px;
+  font-size: 10.5px;
+}
+
+#f-exact > label:first-child {
+  display: inline-block;
+}
+
+#f-result.ok,
+#a-result.ok,
+#a-clear-result.ok { color: var(--ok); }
+
+#f-result.bad,
+#a-result.bad,
+#a-clear-result.bad { color: var(--bad); }
+
+/* ─── Configuration dialog ───────────────────────────────────────────
+   A modal above the room, in the panes' neon chrome. */
+
+dialog.neon-dialog {
+  --hue: var(--accent);
+
+  width: min(1100px, 94vw);
+  max-height: 88vh;
+  padding: 0;
+  display: none;
+  flex-direction: column;
+  border: var(--panel-border-w) solid transparent;
+  border-radius: 8px;
+  background:
+    linear-gradient(var(--panel-fill), var(--panel-fill)) padding-box,
+    var(--panel-edge) border-box;
+  box-shadow: var(--panel-shadow-active);
+  color: var(--text);
+  font-family: var(--mono);
+  overflow: hidden;
+}
+
+dialog.neon-dialog[open] {
+  display: flex;
+}
+
+dialog.neon-dialog > .panel-bar {
+  background: var(--bar-fill-active);
+  color: var(--room-on-hue);
+  cursor: default;
+}
+
+dialog.neon-dialog .panel-title {
+  text-shadow: none;
+}
+
+dialog.neon-dialog::backdrop {
+  background: color-mix(in srgb, var(--room-edge) 62%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.dialog-body {
+  overflow: auto;
+  padding: 6px 18px 18px;
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 22px;
+}
+
+.config-grid table td:first-child {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.config-grid th,
+.config-grid td {
+  padding: 4px 6px;
+}
+
+#admin {
+  margin-top: 14px;
+  padding-top: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--hue) 35%, transparent);
+}
+
+#a-namespaces {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+#a-max {
+  width: 4.5em;
+}
+
+#a-hint {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+}
+
+#a-pauses {
+  gap: 8px;
+}
+
+@media (max-width: 899px) {
+  .config-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
-* { box-sizing: border-box; }
-body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
-header { display: flex; align-items: center; gap: 1rem; padding: .75rem 1.25rem; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 1; }
-header h1 { margin: 0; font-size: 1.15rem; }
-.arena { margin-left: auto; color: var(--muted); }
-select { font: inherit; padding: .2rem .4rem; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; }
-.conn { color: var(--muted); font-size: 1.1rem; }
-.conn.live { color: var(--ok); }
-main { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; padding: 1rem 1.25rem; max-width: 1500px; margin: 0 auto; }
-header, footer { max-width: 1500px; margin-left: auto; margin-right: auto; }
-header { box-shadow: 0 0 0 100vmax var(--panel); clip-path: inset(0 -100vmax); }
-@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .9rem 1rem; min-width: 0; }
-.panel.wide { grid-column: 1 / -1; }
-h2 { margin: 0 0 .6rem; font-size: 1rem; }
-h3 { margin: 1rem 0 .4rem; font-size: .85rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-.count { color: var(--muted); font-weight: normal; }
-.muted { color: var(--muted); }
-.empty { color: var(--muted); font-style: italic; }
-footer { padding: 0 1.25rem 1.25rem; font-size: .85rem; }
-code { background: var(--chip); padding: 0 .3rem; border-radius: 4px; }
 
-.card { border: 1px solid var(--line); border-left: 4px solid var(--info); border-radius: 8px; padding: .55rem .7rem; margin-bottom: .5rem; }
-.card .top { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; }
-.card .remaining { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
-.badge { display: inline-block; padding: 0 .45rem; border-radius: 999px; font-size: .78rem; background: var(--chip); white-space: nowrap; }
-.badge.ok { color: var(--ok); } .badge.warn { color: var(--warn); } .badge.bad { color: var(--bad); } .badge.info { color: var(--info); }
-.kind { font-weight: 600; }
+/* ─── Small screens (the flat layout) ────────────────────────────── */
 
-.plan .hypothesis { margin: .2rem 0 .5rem; }
-.plan ol { margin: 0; padding-left: 1.2rem; }
-.plan li { margin-bottom: .35rem; }
-.plan .why { color: var(--muted); font-size: .85rem; }
+@media (max-width: 899px) {
+  #faults {
+    overflow-x: auto;
+  }
 
-table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-weight: 600; font-size: .8rem; }
-td.num { font-variant-numeric: tabular-nums; }
-tr.short td { color: var(--bad); font-weight: 600; }
+  #faults table {
+    min-width: 760px;
+  }
+}
 
-.cycle .badge, #events .badge { justify-self: start; align-self: start; }
-.cycle { display: grid; grid-template-columns: 5.5rem 6rem 1fr; gap: .5rem; padding: .25rem 0; border-bottom: 1px solid var(--line); }
-#events { list-style: none; margin: 0; padding: 0; max-height: 28rem; overflow-y: auto; font-size: .85rem; }
-#events li { display: grid; grid-template-columns: 5.5rem 14rem 1fr; gap: .5rem; padding: .2rem 0; border-bottom: 1px solid var(--line); }
-#events .ev { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-
-#me { font-size: .85rem; }
-form .row { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-bottom: .6rem; }
-form label { color: var(--muted); font-size: .85rem; }
-form label.block { display: block; margin-top: .5rem; }
-form .modes { margin-left: auto; }
-input, textarea, button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: .2rem .4rem; }
-textarea { display: block; width: 100%; margin-top: .25rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; }
-button { cursor: pointer; padding: .3rem .9rem; }
-button[type=submit] { background: var(--bad); color: #fff; border-color: var(--bad); font-weight: 600; }
-button.clear { margin-left: .5rem; font-size: .8rem; padding: 0 .6rem; }
-.hint { font-size: .8rem; margin-top: .25rem; white-space: pre-wrap; }
-#f-result.ok { color: var(--ok); } #f-result.bad { color: var(--bad); }
-
-.config-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.5rem; }
-@media (max-width: 900px) { .config-grid { grid-template-columns: 1fr; } }
-.config-grid table td:first-child { color: var(--muted); }
-#admin { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: .5rem; }
-button.danger { color: var(--bad); border-color: var(--bad); }
-#a-result.ok, #a-clear-result.ok { color: var(--ok); } #a-result.bad, #a-clear-result.bad { color: var(--bad); }
-.badge.paused { color: var(--warn); }
-
-button.icon { border: none; background: none; font-size: 1.25rem; padding: 0 .25rem; color: var(--muted); }
-button.icon:hover { color: var(--text); }
-dialog#config-dialog { width: min(1100px, 94vw); max-height: 88vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 12px;
-  background: var(--panel); color: var(--text); padding: 1rem 1.25rem; }
-dialog#config-dialog::backdrop { background: rgba(0, 0, 0, .45); }
-.dialog-head { display: flex; align-items: center; justify-content: space-between; }
-.dialog-head button { border: none; background: none; font-size: 1.1rem; color: var(--muted); }
-details summary { cursor: pointer; font-size: .8rem; margin-top: .25rem; }

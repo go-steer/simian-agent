@@ -1,0 +1,497 @@
+/*
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* room.css — where the panes stand: a room built from CSS perspective
+ * transforms (body.room), or an ordinary responsive grid (body.flat).
+ *
+ * The room is adapted from mast-web web/spatial.css at commit da7cf52
+ * (github.com/go-steer/mast-web, Apache-2.0): the camera, the grid
+ * floor / ceiling / wall and their drift, the horizon bloom, the floor
+ * casts, the recede behind a centred panel, and the radar. Dropped: the
+ * audio toggle, the busy/dead cast and blip states, the sidebar inset.
+ * One change: the floor and ceiling hang from rigs whose height room.js
+ * sets (--floor-y / --ceil-y), because Simian's arrangement is sized to
+ * the window and a fixed floor would run through the lower panels on a
+ * tall screen.
+ *
+ * The flat layout is the idea of mast-web's solo.css (same commit):
+ * keep everything a panel paints, drop everything that places it.
+ *
+ * Panels stay ordinary DOM in both: forms, tables, focus and selection
+ * work at any camera angle.
+ */
+
+/* ─── Camera ─────────────────────────────────────────────────────── */
+
+#scene-viewport {
+  position: absolute;
+  inset: 0;
+  perspective: 1250px;
+  perspective-origin: 50% 44%;
+  outline: none;
+  touch-action: none;
+
+  /* Clip rather than hide: focus() can still scroll a hidden scrollport,
+     and a room scrolled sideways loses its HUD. Safe for the 3D, since
+     this element carries perspective, not preserve-3d. */
+  overflow: clip;
+}
+
+#scene-world {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  pointer-events: none;
+
+  --cam-yaw: 0deg;
+  --cam-pitch: 0deg;
+  --cam-dolly: 0px;
+  --cam-scale: 1;
+
+  transform: scale(var(--cam-scale)) translateZ(var(--cam-dolly)) rotateX(var(--cam-pitch))
+    rotateY(var(--cam-yaw));
+  transition: transform 0.08s linear;
+}
+
+body.dragging-camera #scene-world {
+  transition: none;
+}
+
+body.room.dragging-camera,
+body.room.dragging-camera * {
+  cursor: grabbing !important;
+}
+
+/* ─── Grid planes ────────────────────────────────────────────────── */
+
+.plane-rig {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  transform-style: preserve-3d;
+  pointer-events: none;
+}
+
+#floor-rig {
+  transform: translateY(var(--floor-y, 420px));
+}
+
+#ceiling-rig {
+  transform: translateY(var(--ceil-y, -560px));
+}
+
+.scene-plane {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 4000px;
+  height: 4000px;
+  margin: -2000px 0 0 -2000px;
+  background-image:
+    repeating-linear-gradient(to right, var(--grid-line) 0 2px, transparent 2px var(--grid-step)),
+    repeating-linear-gradient(to bottom, var(--grid-line) 0 2px, transparent 2px var(--grid-step));
+  mask-image: radial-gradient(ellipse at center, #000 0%, #000 22%, transparent 62%);
+  pointer-events: none;
+
+  --grid-step: 130px;
+}
+
+#grid-floor {
+  transform: rotateX(90deg);
+  opacity: 0.7;
+  filter: drop-shadow(0 0 7px var(--glow));
+  animation: grid-drift 21s linear infinite;
+
+  /* The floor is the orbit target, so it takes the pointer. */
+  pointer-events: auto;
+  cursor: grab;
+}
+
+#grid-ceiling {
+  transform: rotateX(90deg);
+  opacity: 0.12;
+  animation: grid-drift 27s linear infinite;
+}
+
+/* One full cell toward the camera, so the loop point is invisible. The
+   130px has to track --grid-step. */
+@keyframes grid-drift {
+  from {
+    transform: rotateX(90deg) translateY(0);
+  }
+
+  to {
+    transform: rotateX(90deg) translateY(130px);
+  }
+}
+
+#grid-wall {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6000px;
+  height: 2400px;
+  margin: -1200px 0 0 -3000px;
+  transform: translateZ(-1500px);
+  opacity: 0.14;
+
+  --grid-step: 210px;
+}
+
+#horizon {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 2600px;
+  height: 340px;
+  margin: -140px 0 0 -1300px;
+  background: radial-gradient(ellipse at center, var(--glow) 0%, transparent 70%);
+  transform: translateZ(-1400px);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* ─── Floor casts: the pool of neon each panel spills onto the grid ─ */
+
+#panel-casts {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  transform: translateY(calc(var(--floor-y, 420px) - 6px));
+  transform-style: preserve-3d;
+  pointer-events: none;
+}
+
+.panel-cast {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1180px;
+  height: 1180px;
+  margin: -590px 0 0 -590px;
+  transform: translate3d(var(--cx, 0), 0, var(--cz, 0)) rotateX(90deg) scale(var(--cspread, 1));
+  background-image: radial-gradient(
+    ellipse 42% 100% at 50% 50%,
+    color-mix(in srgb, var(--hue) 100%, transparent) 0%,
+    color-mix(in srgb, var(--hue) 62%, transparent) 38%,
+    transparent 100%
+  );
+  opacity: var(--cast-opacity);
+  pointer-events: none;
+  transition:
+    transform 0.45s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.6s ease;
+}
+
+.panel-cast.cast-active {
+  opacity: var(--cast-opacity-active);
+}
+
+/* A pane with faults running breathes on the floor. */
+.panel-cast.cast-busy {
+  animation: cast-breathe 2.6s ease-in-out infinite;
+}
+
+@keyframes cast-breathe {
+  0%,
+  100% {
+    opacity: calc(var(--cast-opacity) * 0.9);
+  }
+
+  50% {
+    opacity: calc(var(--cast-opacity) * 1.8);
+  }
+}
+
+/* While one pane is centred the rest fall back into the room, far
+   enough to read as background, near enough to still show. */
+body.room.has-centred .panel-anchor:not(.centred) {
+  transform: translate3d(var(--tx), var(--ty), calc(var(--tz) - 240px)) rotateY(var(--ry))
+    rotateX(var(--rx));
+  opacity: var(--panel-recede);
+
+  --fog-boost: 0.19;
+}
+
+/* ─── Radar ──────────────────────────────────────────────────────────
+   An overhead plan of the room: one blip per pane in its own hue, and a
+   wedge for the way the camera faces. */
+
+#hud-radar {
+  position: absolute;
+  right: 14px;
+  bottom: calc(var(--status-h) + 10px);
+  z-index: 3;
+  width: 112px;
+  height: 112px;
+  border: 1px solid var(--frame);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  backdrop-filter: blur(3px);
+  box-shadow:
+    0 0 18px -8px var(--glow),
+    inset 0 0 22px -10px var(--glow);
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.radar-grid {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0.5;
+  background:
+    radial-gradient(
+      circle at 50% 100%,
+      transparent 0 31%,
+      var(--frame) 31% calc(31% + 1px),
+      transparent calc(31% + 1px) 64%,
+      var(--frame) 64% calc(64% + 1px),
+      transparent calc(64% + 1px)
+    ),
+    linear-gradient(to right, transparent calc(50% - 0.5px), var(--frame) 50%, transparent);
+}
+
+.radar-sweep {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: conic-gradient(
+    from -70deg,
+    transparent 0deg,
+    color-mix(in srgb, var(--accent) 4%, transparent) 40deg,
+    color-mix(in srgb, var(--accent) 15%, transparent) 68deg,
+    color-mix(in srgb, var(--accent) 24%, transparent) 70deg,
+    transparent 71deg
+  );
+  animation: radar-sweep 4.6s linear infinite;
+}
+
+@keyframes radar-sweep {
+  to {
+    rotate: 360deg;
+  }
+}
+
+.radar-wedge {
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  width: 80px;
+  height: 100px;
+  margin-left: -40px;
+  transform-origin: 50% 100%;
+  rotate: var(--radar-yaw, 0deg);
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--accent) 30%, transparent),
+    color-mix(in srgb, var(--accent) 5%, transparent) 78%,
+    transparent
+  );
+  clip-path: polygon(50% 100%, 12% 0, 88% 0);
+  transition: rotate 0.12s linear;
+}
+
+.radar-eye {
+  position: absolute;
+  left: 50%;
+  bottom: 5px;
+  width: 5px;
+  height: 5px;
+  margin-left: -2.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 7px var(--glow);
+}
+
+.radar-blips {
+  position: absolute;
+  inset: 0;
+}
+
+.radar-blip {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  left: var(--bx);
+  top: var(--by);
+  border-radius: 50%;
+  background: var(--hue);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--hue) 70%, transparent);
+  transition:
+    left 0.5s cubic-bezier(0.18, 1.16, 0.32, 1),
+    top 0.5s cubic-bezier(0.18, 1.16, 0.32, 1);
+}
+
+.radar-blip.blip-active {
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--hue) 34%, transparent),
+    0 0 12px var(--hue);
+}
+
+.radar-blip.blip-busy {
+  animation: radar-ping 1.5s ease-out infinite;
+}
+
+@keyframes radar-ping {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--hue) 62%, transparent);
+  }
+
+  70%,
+  100% {
+    box-shadow: 0 0 0 9px transparent;
+  }
+}
+
+/* ─── Flat layout ────────────────────────────────────────────────────
+   The same panels in a grid between the HUD and the status bar, with no
+   camera, no placement and no drift. Most-watched first. */
+
+body.flat #scene-viewport {
+  top: var(--hud-h);
+  bottom: var(--status-h);
+  perspective: none;
+  overflow: auto;
+  touch-action: auto;
+}
+
+body.flat #scene-world {
+  position: static;
+  transform: none;
+  transition: none;
+  pointer-events: auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-areas:
+    'active auto events'
+    'inject inject workloads'
+    'faults faults faults';
+  gap: 18px;
+  padding: 18px 20px 22px;
+  max-width: 2000px;
+  margin: 0 auto;
+}
+
+body.flat .plane-rig,
+body.flat #grid-wall,
+body.flat #horizon,
+body.flat #panel-casts,
+body.flat #hud-radar {
+  display: none;
+}
+
+body.flat .panel-anchor {
+  position: static;
+  transform: none;
+  transition: none;
+  opacity: 1;
+  min-width: 0;
+}
+
+body.flat .panel-anchor[data-pane='inject'] { grid-area: inject; }
+body.flat .panel-anchor[data-pane='active'] { grid-area: active; }
+body.flat .panel-anchor[data-pane='auto'] { grid-area: auto; }
+body.flat .panel-anchor[data-pane='faults'] { grid-area: faults; }
+body.flat .panel-anchor[data-pane='workloads'] { grid-area: workloads; }
+body.flat .panel-anchor[data-pane='events'] { grid-area: events; }
+
+body.flat .panel {
+  position: relative;
+  width: auto;
+  height: 100%;
+  min-height: 180px;
+  margin: 0;
+  transform: none;
+  animation: none;
+  transition: none;
+}
+
+body.flat .panel::after,
+body.flat .panel .panel-controls {
+  display: none;
+}
+
+body.flat .panel-body {
+  zoom: 1;
+  max-height: 34rem;
+}
+
+body.flat .panel-anchor[data-pane='faults'] .panel-body {
+  max-height: none;
+}
+
+/* The flat layout's hidden pane collapses with its anchor. */
+body.flat .panel-anchor:has(> .panel[hidden]) {
+  display: none;
+}
+
+@media (max-width: 1399px) {
+  body.flat #scene-world {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      'active auto'
+      'inject inject'
+      'events workloads'
+      'faults faults';
+  }
+}
+
+@media (max-width: 899px) {
+  body.flat #scene-world {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'active' 'auto' 'events' 'inject' 'workloads' 'faults';
+    padding: 12px;
+    gap: 14px;
+  }
+
+  #app-hud .hud-wide {
+    display: none;
+  }
+}
+
+/* ─── Reduced motion ─────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  #grid-floor,
+  #grid-ceiling {
+    animation: none;
+  }
+
+  .radar-sweep {
+    animation: none;
+    opacity: 0.28;
+  }
+
+  .radar-blip,
+  .panel-cast,
+  #scene-world {
+    transition: none;
+  }
+
+  .radar-blip.blip-busy,
+  .panel-cast.cast-busy {
+    animation: none;
+  }
+}

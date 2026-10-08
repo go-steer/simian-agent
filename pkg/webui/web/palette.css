@@ -1,0 +1,163 @@
+/*
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* palette.css — the colours and the room's lighting knobs, per theme.
+ *
+ * Adapted from mast-web web/styles.css at commit da7cf52
+ * (github.com/go-steer/mast-web, Apache-2.0): the Go brand :root palette,
+ * the cloud-light theme, the shared light-room block and the derived
+ * --glow / --frame / --grid-line. mast-web's other nine themes and all of
+ * its transcript, markdown and modal styling are left out.
+ *
+ * Simian adds one thing: a hue per pane (--hue-inject … --hue-workloads)
+ * so a panel's colour says what it is, and a status palette (--ok, --warn,
+ * --bad, --info) kept apart from the pane hues, so red inside a panel
+ * always means something went wrong and never "this is the Inject pane".
+ *
+ * A theme is a body[data-theme] block here plus an entry in room.js's
+ * THEMES list. The default theme is the absence of the attribute.
+ */
+
+:root {
+  /* Go brand palette (mast-web docs/color-palette.md). */
+  --gopher-blue: #00add8;
+  --light-blue: #5dc9e2;
+  --aqua: #00a29c;
+  --deep-teal: #00758d;
+  --fuchsia: #ce3262;
+  --brand-yellow: #fddd00;
+  --cool-gray: #dbd9d6;
+
+  --bg: #0d1316;
+  --bg-surface: #0a1418;
+  --bg-elevated: #0f1f25;
+  --border: var(--gopher-blue);
+  --border-soft: var(--deep-teal);
+  --text: var(--cool-gray);
+  --text-dim: #8a9499;
+  --accent: var(--gopher-blue);
+  --green: var(--aqua);
+  --red: var(--fuchsia);
+  --yellow: var(--brand-yellow);
+  --blue: var(--light-blue);
+
+  /* Status, for what is inside the panels. --bad is a true red rather
+     than the brand fuchsia, which is the Inject pane's hue. */
+  --ok: #4cd07d;
+  --warn: #ffb547;
+  --bad: #ff4f5e;
+  --info: var(--light-blue);
+
+  /* Pane hues: what each panel's neon edge, title bar, floor pool and
+     radar blip are painted in. */
+  --hue-inject: var(--fuchsia);
+  --hue-active: var(--brand-yellow);
+  --hue-auto: #a770ef;
+  --hue-faults: var(--gopher-blue);
+  --hue-events: var(--aqua);
+  --hue-workloads: #6fd08c;
+
+  --glow-amt: 34%;
+  --frame-amt: 46%;
+  --scan: rgb(255 255 255 / 2.5%);
+  --brand-image: none;
+  --brand-color: var(--accent);
+
+  /* Room lighting model (mast-web styles.css). */
+  --room-core: #0a1a22;
+  --room-mid: #04070a;
+  --room-edge: #000;
+  --room-vignette: rgb(0 0 0 / 72%);
+  --room-surface: rgb(0 0 0 / 94%);
+  --room-surface-bar: rgb(0 0 0 / 70%);
+  --room-on-hue: #000;
+  --room-tint: 6%;
+  --room-tint-bar: 22%;
+  --cast-opacity: 0.55;
+  --cast-opacity-active: 0.85;
+  --room-fog: var(--room-mid);
+  --fog-max: 0.62;
+  --sheen: rgb(255 255 255 / 8%);
+  --flash: rgb(255 255 255 / 70%);
+  --panel-recede: 0.42;
+
+  color-scheme: dark;
+}
+
+/* Google Cloud's brand palette (mast-web's cloud-light): builds from
+   white, GM2 600/700 weights so every hue reads as text on white. */
+body[data-theme='cloud-light'] {
+  --bg: #f8f9fc;
+  --bg-surface: #fff;
+  --bg-elevated: #eef1f8;
+  --border: #dadce0;
+  --border-soft: #b9bfcc;
+  --text: #212226;
+  --text-dim: #5f6368;
+  --accent: #1a73e8;
+  --green: #188038;
+  --red: #d50000;
+  --yellow: #dc6d00;
+  --blue: #1a73e8;
+
+  --ok: #188038;
+  --warn: #b06000;
+  --bad: #d50000;
+  --info: #1a73e8;
+
+  --hue-inject: #c2185b; /* Pink 700: danger, and not the status red */
+  --hue-active: #e37400; /* Yellow 900, which is orange on white */
+  --hue-auto: #9334e6; /* Purple 600 */
+  --hue-faults: #1a73e8; /* Blue 600 */
+  --hue-events: #007b83; /* Teal 700 */
+  --hue-workloads: #188038; /* Green 700 */
+
+  --glow-amt: 13%;
+  --frame-amt: 30%;
+  --scan: transparent;
+
+  /* The shared light-room block from mast-web styles.css, with Cloud's
+     blue-tinted horizon. */
+  --room-core: var(--bg-surface);
+  --room-mid: var(--bg);
+  --room-edge: color-mix(in srgb, var(--accent) 14%, var(--bg));
+  --room-vignette: color-mix(in srgb, var(--accent) 12%, transparent);
+  --room-surface: color-mix(in srgb, var(--bg-surface) 96%, transparent);
+  --room-surface-bar: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
+  --room-on-hue: #fff;
+  --room-tint: 3%;
+  --room-tint-bar: 12%;
+  --cast-opacity: 0.28;
+  --cast-opacity-active: 0.42;
+  --panel-recede: 0.66;
+  --fog-max: 0.5;
+  --sheen: color-mix(in srgb, var(--accent) 9%, transparent);
+  --flash: color-mix(in srgb, var(--accent) 55%, #fff);
+
+  color-scheme: light;
+}
+
+body {
+  /* Derived on body rather than :root so they pick up the theme's
+     --accent (themes override it on body). */
+  --glow: color-mix(in srgb, var(--accent) var(--glow-amt), transparent);
+  --frame: color-mix(in srgb, var(--accent) var(--frame-amt), transparent);
+  --grid-line: var(--accent);
+}
+
+body[data-theme='cloud-light'] {
+  --grid-line: color-mix(in srgb, var(--accent) 26%, var(--border));
+}

@@ -43,7 +43,14 @@ description: "Design doc for a single browser surface serving two purposes: live
 > settings at each cycle, so a change takes effect without a restart; changes
 > are kept in a controller-owned ConfigMap and audited as
 > `autonomous.configured`. The executor's safety limits stay install-only.
-> The scorecard (phase 3) is next.
+>
+> **The look (v0.4, #242):** the panes float in mast-web's spatial room —
+> neon panels over a CSS-perspective grid, an orbiting camera, panes dragged
+> by their title bars — with a flat grid of the same panels as a toggle
+> (the default under reduced motion and on narrow screens), and a dark and
+> a light theme. The room's CSS and camera code are taken from mast-web
+> (da7cf52), trimmed, with their origin noted in each file. Several
+> controllers in one UI (#243) is next, then the scorecard (phase 3).
 
 ## Why a web UI
 

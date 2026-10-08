@@ -65,6 +65,8 @@ function verdict(v) {
 function renderActive(list) {
   state.active = list;
   $("active-count").textContent = list.length ? "(" + list.length + ")" : "";
+  $("st-active").textContent = "active: " + list.length;
+  $("st-active").className = "status-item" + (list.length ? " status-live" : "");
   $("active").innerHTML = list.length
     ? list.map((f) => `
       <div class="card">
@@ -217,6 +219,8 @@ function renderConfig(c) {
       : "The install's settings (chart values autonomous.*).";
   }
   if (au) state.autonomous = au.settings.enabled ? au.settings.namespaces || [] : [];
+  $("st-auto").textContent = "autonomous: " + (!au ? "–" : !au.settings.enabled ? "off"
+    : isPaused(au.settings, "*") ? "paused" : (au.settings.namespaces || []).join(", ") || "on");
   if (c.you && c.you.can_admin && au) {
     $("admin").hidden = false;
     if (!state.adminFilled) fillAdmin(c);
@@ -322,8 +326,13 @@ function refreshSoon() {
 
 function connect() {
   const es = new EventSource("/api/events");
-  es.onopen = () => $("conn").classList.add("live");
-  es.onerror = () => $("conn").classList.remove("live"); // EventSource reconnects by itself
+  const live = (on) => {
+    $("conn").classList.toggle("live", on);
+    $("st-stream").textContent = on ? "stream: live" : "stream: reconnecting";
+    $("st-stream").className = "status-item" + (on ? "" : " status-bad");
+  };
+  es.onopen = () => live(true);
+  es.onerror = () => live(false); // EventSource reconnects by itself
   es.onmessage = (m) => {
     addEvent(JSON.parse(m.data));
     refreshSoon();
