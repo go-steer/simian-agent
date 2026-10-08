@@ -37,6 +37,9 @@ limitations under the License.
   <!-- First thing in the body, so the stored layout and theme are set
        before anything paints. -->
   <script src="prefs.js"></script>
+  <!-- Chaos's ambient glow: three blurred spheres behind everything
+       (chrome.css; hidden under the other themes). -->
+  <div id="ambient" aria-hidden="true"><span></span><span></span><span></span></div>
   <!-- Camera viewport. #scene-world is the only element that moves when
        you orbit; every pane is a child of it. In the flat layout the same
        element is a plain grid. -->

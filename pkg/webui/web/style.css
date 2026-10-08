@@ -28,14 +28,16 @@
   display: none !important;
 }
 
-/* ─── Pane hues ──────────────────────────────────────────────────── */
+/* ─── Pane hues ──────────────────────────────────────────────────────
+   --hue paints a pane's chrome; --mark is its identity cue. They are the
+   same except under Chaos, where --hue is the one accent (panel.css). */
 
-.panel-anchor[data-pane='inject'] > .panel { --hue: var(--hue-inject); }
-.panel-anchor[data-pane='active'] > .panel { --hue: var(--hue-active); }
-.panel-anchor[data-pane='auto'] > .panel { --hue: var(--hue-auto); }
-.panel-anchor[data-pane='faults'] > .panel { --hue: var(--hue-faults); }
-.panel-anchor[data-pane='workloads'] > .panel { --hue: var(--hue-workloads); }
-.panel-anchor[data-pane='events'] > .panel { --hue: var(--hue-events); }
+.panel-anchor[data-pane='inject'] > .panel { --hue: var(--hue-inject); --mark: var(--hue-inject); }
+.panel-anchor[data-pane='active'] > .panel { --hue: var(--hue-active); --mark: var(--hue-active); }
+.panel-anchor[data-pane='auto'] > .panel { --hue: var(--hue-auto); --mark: var(--hue-auto); }
+.panel-anchor[data-pane='faults'] > .panel { --hue: var(--hue-faults); --mark: var(--hue-faults); }
+.panel-anchor[data-pane='workloads'] > .panel { --hue: var(--hue-workloads); --mark: var(--hue-workloads); }
+.panel-anchor[data-pane='events'] > .panel { --hue: var(--hue-events); --mark: var(--hue-events); }
 
 /* Light rooms: chrome text a shade darker than the edge, for contrast on
    white. */
@@ -492,3 +494,201 @@ dialog.neon-dialog::backdrop {
   }
 }
 
+/* ─── Chaos ──────────────────────────────────────────────────────────
+   Inside the glass: sans prose, mono data; badges as tinted chips; the
+   pink primary buttons and rose danger ones of the mockup; cards and
+   rules as faint white (or slate) lines rather than pane-coloured ones;
+   and the Live events list and the JSON spec as dark terminals, in both
+   variants. */
+
+body[data-theme^='chaos'] :is(.panel-body, .dialog-body) {
+  font-size: 12.5px;
+}
+
+body[data-theme^='chaos'] :is(.panel-body, .dialog-body) h3 {
+  margin: 16px 0 8px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+}
+
+body[data-theme^='chaos'] .empty {
+  font-style: normal;
+}
+
+body[data-theme^='chaos'] :is(code, .badge, .remaining, td.num, th, .kind, .card > .muted, .cycle > .muted, form label, .hint) {
+  font-family: var(--mono);
+}
+
+body[data-theme^='chaos'] .badge {
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, currentcolor 35%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, currentcolor 10%, transparent);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+}
+
+body[data-theme^='chaos'] .kind {
+  font-weight: 700;
+}
+
+body[data-theme^='chaos'] .card {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--accent);
+  border-radius: 12px;
+  background: var(--glass-inset);
+}
+
+body[data-theme^='chaos'] .card .remaining {
+  color: var(--accent-ink);
+}
+
+body[data-theme^='chaos'] :is(.cycle, th, td) {
+  border-bottom-color: var(--rule);
+}
+
+body[data-theme^='chaos'] th {
+  font-weight: 600;
+  color: var(--text-dim);
+  background: var(--glass-solid);
+}
+
+body[data-theme^='chaos'] tbody tr:hover td {
+  background: rgb(236 72 153 / 5%);
+}
+
+body[data-theme^='chaos'] :is(input, textarea, select, button) {
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  padding: 5px 9px;
+  background: var(--glass-inset);
+}
+
+body[data-theme='chaos-dark'] :is(input, textarea, select) {
+  background: rgb(3 7 18 / 45%);
+  border-color: rgb(255 255 255 / 10%);
+}
+
+body[data-theme='chaos-light'] :is(input, textarea, select) {
+  background: rgb(255 255 255 / 80%);
+  border-color: rgb(15 23 42 / 12%);
+}
+
+body[data-theme^='chaos'] :is(input, textarea, select, button):focus-visible {
+  outline: 1px solid rgb(236 72 153 / 60%);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 3px rgb(236 72 153 / 15%);
+}
+
+body[data-theme^='chaos'] button {
+  padding: 6px 14px;
+  letter-spacing: 0.03em;
+}
+
+body[data-theme^='chaos'] button:hover:not(:disabled) {
+  border-color: rgb(236 72 153 / 40%);
+  background: rgb(236 72 153 / 8%);
+}
+
+/* Primary (Inject, Apply): pink-tinted, as the mockup's Inject Fault. */
+body[data-theme^='chaos'] button[type='submit'] {
+  border-color: rgb(236 72 153 / 40%);
+  background: rgb(236 72 153 / 12%);
+  color: var(--accent-ink);
+  font-weight: 700;
+  text-transform: none;
+  box-shadow: none;
+}
+
+body[data-theme^='chaos'] button[type='submit']::before {
+  content: '↯ ';
+}
+
+body[data-theme^='chaos'] button[type='submit']:hover:not(:disabled) {
+  border-color: rgb(236 72 153 / 65%);
+  background: rgb(236 72 153 / 22%);
+  box-shadow: 0 0 18px -4px rgb(236 72 153 / 50%);
+}
+
+/* Danger (Clear, Clear all faults): the same shape in rose. */
+body[data-theme^='chaos'] :is(button.clear, button.danger) {
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  color: var(--bad);
+  font-weight: 600;
+}
+
+body[data-theme^='chaos'] button.clear {
+  padding: 1px 9px;
+}
+
+body[data-theme^='chaos'] :is(button.clear, button.danger):hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--bad) 65%, transparent);
+  background: color-mix(in srgb, var(--bad) 20%, transparent);
+  box-shadow: 0 0 16px -4px color-mix(in srgb, var(--bad) 55%, transparent);
+}
+
+body[data-theme^='chaos'] input:is([type='radio'], [type='checkbox']) {
+  accent-color: var(--accent);
+}
+
+/* The terminals. Their own ink, so a dark box in the light theme still
+   reads: the custom properties are scoped to the box. */
+body[data-theme^='chaos'] :is(#events, #f-spec) {
+  --text: #e2e8f0;
+  --text-dim: #94a3b8;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --bad: #fb7185;
+  --info: #22d3ee;
+
+  border: 1px solid rgb(255 255 255 / 6%);
+  border-radius: 10px;
+  background: var(--terminal);
+  color: var(--text);
+  font-family: var(--mono);
+}
+
+body[data-theme^='chaos'] #events {
+  min-height: 100%;
+  padding: 6px 12px;
+}
+
+body[data-theme^='chaos'] #events li {
+  border-bottom-color: rgb(255 255 255 / 5%);
+}
+
+body[data-theme='chaos-light'] #f-spec {
+  border-color: rgb(15 23 42 / 30%);
+}
+
+body[data-theme^='chaos'] dialog.neon-dialog {
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  background: var(--glass-solid);
+  backdrop-filter: blur(16px);
+  box-shadow: var(--glass-shadow), 0 0 60px -10px rgb(236 72 153 / 25%);
+  font-family: var(--sans);
+}
+
+body[data-theme^='chaos'] dialog.neon-dialog > .panel-bar {
+  background: transparent;
+}
+
+body[data-theme^='chaos'] dialog.neon-dialog::backdrop {
+  background: rgb(3 7 18 / 45%);
+  backdrop-filter: blur(6px);
+}
+
+body[data-theme='chaos-light'] dialog.neon-dialog::backdrop {
+  background: rgb(15 23 42 / 18%);
+}
+
+body[data-theme^='chaos'] #admin {
+  border-top-color: var(--rule);
+}
