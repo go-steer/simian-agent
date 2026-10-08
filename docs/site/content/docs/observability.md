@@ -86,7 +86,13 @@ The people in `ui.iap.admins` can also, from that panel:
   within the safety limits, which only the install changes;
 - **pause and resume** it in one arena or everywhere (a paused arena's
   cycles are recorded as skipped, `paused`);
-- **clear every running fault** at once.
+- **clear every running fault** at once;
+- **halt**: pause autonomous mode everywhere and then clear every running
+  fault, in one request, so the loop cannot start a fault in between. It is
+  one `autonomous.configured` event with action `halt`, plus a
+  `lease.cleared` per fault, each with who did it; it takes effect even if
+  it cannot be kept across a restart (the response says so). Resume is a
+  separate, deliberate step.
 
 A change takes effect at the next cycle; one already running finishes. It is
 kept in the controller's `simian-runtime-config` ConfigMap, so it survives a
@@ -103,8 +109,8 @@ port could inject faults.
 The page reads a small JSON API under `/api/` (`info`, `me`, `config`,
 `arenas`, `catalog`, `active`, `faults`, `cycles`, `topology`), writes with
 `POST /api/faults` and `POST /api/faults/{uid}/clear`, administers with `POST
-/api/admin/autonomous`, `/api/admin/autonomous/reset`, `/api/admin/pause` and
-`/api/admin/clear-all`, and streams events from `/api/events`; other tools can
+/api/admin/autonomous`, `/api/admin/autonomous/reset`, `/api/admin/pause`,
+`/api/admin/clear-all` and `/api/admin/halt`, and streams events from `/api/events`; other tools can
 use it too.
 
 ## Live: `simian watch`
