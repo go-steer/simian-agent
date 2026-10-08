@@ -150,7 +150,23 @@ expect_arg "ui-iap" "$out" "--ui-auth=iap"
 expect_arg "ui-iap" "$out" "--ui-iap-project-number=123456"
 expect_arg "ui-iap" "$out" "--ui-writers=alice@example.com"
 expect_arg "ui-iap" "$out" "--ui-writers=domain:sre.example.com"
-for bad in "--set ui.auth=iap" "--set ui.auth=oidc" "--set ui.iap.writers={alice@example.com}"; do
+echo "▸ on GKE the chart can put the UI behind an IAP load balancer, and only behind IAP"
+out="$(render sim-ui-ingress --set ui.auth=iap --set ui.iap.projectNumber=123456 \
+  --set ui.iap.ingress.enabled=true --set ui.iap.ingress.host=simian.example.com)"
+for want in "kind: Ingress" "kind: BackendConfig" "kind: ManagedCertificate" "kind: FrontendConfig" \
+  "requestPath: /healthz" "- simian.example.com" '"ports": {"ui": "simian-ui"}' "name: ui"; do
+  if ! grep -qF -- "$want" <<<"$out"; then
+    echo "✗ ui-ingress: expected '$want' in the render" >&2
+    fail=1
+  fi
+done
+if grep -qF "kind: Ingress" <<<"$(render sim-ui-noingress)"; then
+  echo "✗ ui-ingress: an Ingress rendered by default" >&2
+  fail=1
+fi
+for bad in "--set ui.auth=iap" "--set ui.auth=oidc" "--set ui.iap.writers={alice@example.com}" \
+  "--set ui.iap.ingress.enabled=true --set ui.iap.ingress.host=h" \
+  "--set ui.auth=iap --set ui.iap.projectNumber=1 --set ui.iap.ingress.enabled=true"; do
   # shellcheck disable=SC2086 # word-splitting the --set pair is the point
   if helm template sim-ui-bad "$CHART" --set llm.vertex.project=verify-project $bad >/dev/null 2>&1; then
     echo "✗ ui-iap: rendered with $bad; it must refuse" >&2

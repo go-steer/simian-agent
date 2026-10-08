@@ -1,0 +1,73 @@
+{{- if and .Values.ui.enabled .Values.ui.iap.ingress.enabled }}
+{{- if ne .Values.ui.auth "iap" }}
+{{- fail "ui.iap.ingress.enabled needs ui.auth=iap: the load balancer would expose the UI without the controller checking IAP's assertion" }}
+{{- end }}
+{{- if not .Values.ui.iap.ingress.host }}
+{{- fail "ui.iap.ingress.enabled needs ui.iap.ingress.host, the DNS name the certificate is issued for" }}
+{{- end }}
+# The web UI behind Identity-Aware Proxy on GKE. Only the UI's port is
+# routed; the MCP endpoint stays inside the cluster.
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: simian-ui
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "simian.labels" . | nindent 4 }}
+spec:
+  iap:
+    enabled: true
+  healthCheck:
+    type: HTTP
+    requestPath: /healthz
+    port: {{ .Values.ui.port }}
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: simian-ui
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "simian.labels" . | nindent 4 }}
+spec:
+  domains:
+    - {{ .Values.ui.iap.ingress.host }}
+---
+apiVersion: networking.gke.io/v1beta1
+kind: FrontendConfig
+metadata:
+  name: simian-ui
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "simian.labels" . | nindent 4 }}
+spec:
+  redirectToHttps:
+    enabled: true
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: simian-ui
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "simian.labels" . | nindent 4 }}
+  annotations:
+    kubernetes.io/ingress.class: gce
+    networking.gke.io/managed-certificates: simian-ui
+    networking.gke.io/v1beta1.FrontendConfig: simian-ui
+    {{- with .Values.ui.iap.ingress.staticIPName }}
+    kubernetes.io/ingress.global-static-ip-name: {{ . }}
+    {{- end }}
+spec:
+  rules:
+    - host: {{ .Values.ui.iap.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: simian-controller
+                port:
+                  name: ui
+{{- end }}

@@ -170,6 +170,21 @@ ui:
     # Emails, or "domain:example.com". Empty: everyone IAP lets in may view,
     # nobody may write.
     writers: []
+    # On GKE: an external HTTPS load balancer with IAP in front of the UI's
+    # port — an Ingress, a Google-managed certificate for host, an HTTP to
+    # HTTPS redirect, and a BackendConfig turning IAP on with a /healthz
+    # health check. Needs ui.auth=iap. IAP's Google-managed OAuth client
+    # admits users in the project's organization; grant them
+    # roles/iap.httpsResourceAccessor to view.
+    ingress:
+      enabled: false
+      # The DNS name users open; it must resolve to the load balancer's IP
+      # before the certificate can be issued.
+      host: ""
+      # A reserved global static IP's name (gcloud compute addresses create
+      # NAME --global), so the address — and host's DNS record — outlive the
+      # Ingress. Empty: an ephemeral address.
+      staticIPName: ""
 
 # MCP server.
 mcp:
