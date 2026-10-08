@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Simian's web UI: a read-only view over the controller's /api/. It polls
-// every few seconds and refreshes at once when the live event stream says
-// something happened. No framework and no build step, on purpose.
+// Simian's web UI: a view over the controller's /api/, and — behind
+// Identity-Aware Proxy, for the people allowed — a form to inject and clear
+// faults through the controller's executor. It polls every few seconds and
+// refreshes at once when the live event stream says something happened. No
+// framework and no build step, on purpose.
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const state = { arena: decodeURIComponent(location.hash.slice(1)), autonomous: [], active: [], faultUIDs: new Set() };
+const state = { arena: decodeURIComponent(location.hash.slice(1)), autonomous: [], active: [], faultUIDs: new Set(), me: {}, catalog: [] };
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const time = (t) => (t && !t.startsWith("0001") ? new Date(t).toLocaleTimeString() : "–");
@@ -28,6 +30,19 @@ async function get(path) {
   const r = await fetch(path, { cache: "no-store" });
   if (!r.ok) throw new Error(path + ": " + r.status);
   return r.json();
+}
+
+// post sends a write. X-Simian-UI is what the server requires of every
+// write, so a page on another site cannot make one with the user's cookie.
+async function post(path, body) {
+  const r = await fetch(path, {
+    method: "POST", cache: "no-store",
+    headers: { "Content-Type": "application/json", "X-Simian-UI": "1" },
+    body: body === undefined ? "" : JSON.stringify(body),
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error(text.trim() || r.status);
+  return text ? JSON.parse(text) : {};
 }
 
 function target(t) {
@@ -59,6 +74,7 @@ function renderActive(list) {
           <span class="badge">${esc(f.manifest.engine)}</span>
           <span class="badge info">${esc(f.manifest.source || "")}</span>
           <span class="remaining" data-deadline="${esc(f.deadline)}">${remaining(f.deadline)}</span>
+          ${state.me.can_write ? `<button class="clear" data-uid="${esc(f.fault_uid)}" title="Take it out now">Clear</button>` : ""}
         </div>
         <div class="muted">${esc(f.fault_uid)} · applied ${time(f.applied_at)} · until ${time(f.deadline)}</div>
       </div>`).join("")
@@ -113,7 +129,7 @@ function renderFaults(rows) {
           <td class="num">${time(r.applied_at || r.received_at)}</td>
           <td class="kind">${esc(r.kind)}</td>
           <td>${esc(target(r.targets))}</td>
-          <td>${esc(r.source)}</td>
+          <td>${esc(r.source)}${r.requested_by ? `<div class="muted">${esc(r.requested_by)}</div>` : ""}${r.cleared_by ? `<div class="muted">cleared by ${esc(r.cleared_by)}</div>` : ""}</td>
           <td><span class="badge ${outcomeCls}">${esc(r.outcome)}</span> <span class="muted">${esc(r.reason)}</span></td>
           <td class="num">${time(r.ended_at)}</td>
           <td>${verdict(r.injected)}</td>
@@ -193,16 +209,122 @@ function connect() {
   };
 }
 
+// The template's JSON example, without its selector: the target is the
+// workload picked in the form, and the executor narrows to it.
+function specFromTemplate(tpl) {
+  const start = (tpl || "").indexOf("{");
+  if (start < 0) return {};
+  let depth = 0;
+  for (let i = start; i < tpl.length; i++) {
+    if (tpl[i] === "{") depth++;
+    else if (tpl[i] === "}" && --depth === 0) {
+      try {
+        const spec = JSON.parse(tpl.slice(start, i + 1));
+        delete spec.selector;
+        return spec;
+      } catch (e) { return {}; }
+    }
+  }
+  return {};
+}
+
+async function loadWorkloads() {
+  const ns = $("f-arena").value;
+  const sel = $("f-workload");
+  sel.innerHTML = "";
+  if (!ns) return;
+  try {
+    for (const w of await get("/api/topology?namespace=" + encodeURIComponent(ns))) sel.add(new Option(w.name, w.name));
+  } catch (e) { sel.add(new Option("(could not list workloads)", "")); }
+}
+
+function fillSpec() {
+  const c = state.catalog[$("f-kind").selectedIndex];
+  if (!c) return;
+  $("f-spec").value = JSON.stringify(specFromTemplate(c.spec_template), null, 2);
+  $("f-hint").textContent = (c.spec_template || "").split("\n").filter((l) => !l.trim().startsWith("{") && !l.trim().startsWith('"') && !l.trim().startsWith("}")).join("\n");
+}
+
+async function setupInject(arenas) {
+  try { state.me = await get("/api/me"); } catch (e) { state.me = {}; }
+  $("me").textContent = state.me.email ? state.me.email + (state.me.can_write ? "" : " · view only") : "read-only";
+  $("inject-panel").hidden = false;
+  if (!state.me.can_write) {
+    $("inject-readonly").hidden = false;
+    $("inject-readonly").innerHTML = state.me.auth === "iap"
+      ? `${esc(state.me.email)} may view but not inject or clear faults. The chart's <code>ui.iap.writers</code> lists who may.`
+      : "Read-only here. Injecting and clearing faults from the browser needs the UI behind Identity-Aware Proxy; from here, use <code>simian chaos</code>.";
+    return;
+  }
+  $("inject").hidden = false;
+  for (const ns of arenas) $("f-arena").add(new Option(ns, ns));
+  $("f-arena").value = state.arena || arenas[0] || "";
+  $("f-arena").onchange = loadWorkloads;
+  loadWorkloads();
+  try { state.catalog = await get("/api/catalog"); } catch (e) { state.catalog = []; }
+  for (const c of state.catalog) $("f-kind").add(new Option(c.resource_kind + " (" + c.engine + ")", c.resource_kind));
+  $("f-kind").onchange = fillSpec;
+  fillSpec();
+  document.querySelectorAll("input[name=mode]").forEach((el) => {
+    el.onchange = () => {
+      const intent = document.querySelector("input[name=mode]:checked").value === "intent";
+      $("f-exact").hidden = intent;
+      $("f-workload-label").hidden = intent; // the LLM picks the target
+      $("f-intent").hidden = !intent;
+    };
+  });
+  $("inject").onsubmit = async (ev) => {
+    ev.preventDefault();
+    const mode = document.querySelector("input[name=mode]:checked").value;
+    const body = { mode, namespace: $("f-arena").value, workload: $("f-workload").value, duration: $("f-duration").value.trim() };
+    let what;
+    if (mode === "intent") {
+      body.intent = $("f-text").value.trim();
+      what = `"${body.intent}" in ${body.namespace}`;
+    } else {
+      const c = state.catalog[$("f-kind").selectedIndex] || {};
+      body.kind = c.resource_kind;
+      body.engine = c.engine;
+      try { body.spec = JSON.parse($("f-spec").value || "{}"); } catch (e) {
+        $("f-result").className = "bad";
+        $("f-result").textContent = "The spec is not valid JSON: " + e.message;
+        return;
+      }
+      what = `${body.kind} into ${body.namespace}/${body.workload || "(no workload)"}`;
+    }
+    if (!confirm(`Inject ${what} for ${body.duration}?`)) return;
+    $("f-result").className = "";
+    $("f-result").textContent = mode === "intent" ? "Asking the LLM…" : "Applying…";
+    try {
+      const res = await post("/api/faults", body);
+      $("f-result").className = "ok";
+      $("f-result").textContent = `Applied ${res.kind} as ${res.fault_uid}.`;
+      refreshSoon();
+    } catch (e) {
+      $("f-result").className = "bad";
+      $("f-result").textContent = "Refused: " + e.message;
+    }
+  };
+  $("active").addEventListener("click", async (ev) => {
+    const b = ev.target.closest("button.clear");
+    if (!b || !confirm(`Clear ${b.dataset.uid} now?`)) return;
+    b.disabled = true;
+    try { await post("/api/faults/" + encodeURIComponent(b.dataset.uid) + "/clear"); refreshSoon(); } catch (e) { alert("Could not clear: " + e.message); b.disabled = false; }
+  });
+}
+
 async function main() {
   try {
     const info = await get("/api/info");
     state.autonomous = info.autonomous || [];
     $("version").textContent = "v" + info.version;
   } catch (e) { /* the panels say what is missing */ }
+  let arenas = [];
   try {
-    const arenas = await get("/api/arenas");
+    arenas = await get("/api/arenas");
     for (const ns of arenas) $("arena").add(new Option(ns, ns));
   } catch (e) { /* All arenas still works */ }
+  await setupInject(arenas);
   $("arena").value = state.arena;
   $("arena").onchange = () => {
     state.arena = $("arena").value;

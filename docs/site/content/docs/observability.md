@@ -25,28 +25,57 @@ port-forward).
 
 ## In a browser: the web UI
 
-The controller serves a read-only page at `/ui/` on its MCP port (chart value
-`ui.enabled`, on by default; v0.3 and later). Through the same port-forward
-the CLI uses:
+The controller serves a page at `/ui/` on its own port, `8082` (chart values
+`ui.*`; v0.3 and later). Reached by port-forward it is read-only:
 
 ```bash
-kubectl -n simian-system port-forward svc/simian-controller 18081:8081 &
-# then open http://localhost:18081/ui/
+kubectl -n simian-system port-forward svc/simian-controller 18082:8082 &
+# then open http://localhost:18082/ui/
 ```
 
 Pick an arena at the top. The page shows the faults running now with their
 countdowns; what autonomous mode decided — the latest hypothesis and plan,
 with each step's rationale and the reason for its duration, then each recent
-cycle's outcome or skip reason; recent faults with how they ended, whether
-the engine confirmed them, whether their effect was seen and whether the
-workload recovered; the arena's workloads against their desired replicas; and
-a live feed of audit events. It updates as events arrive.
+cycle's outcome or skip reason; recent faults with how they ended, who asked
+for them, whether the engine confirmed them, whether their effect was seen and
+whether the workload recovered; the arena's workloads against their desired
+replicas; and a live feed of audit events. It updates as events arrive.
 
-The page reads a small JSON API under `/api/` (`info`, `arenas`, `active`,
-`faults`, `cycles`, `topology`) and a server-sent event stream at
-`/api/events`, which other tools can use too. Like the MCP endpoint it is
-unauthenticated: reach it by port-forward or from inside the cluster, and do
-not expose it more widely without putting authentication in front of it.
+### Injecting and clearing faults from the page
+
+Behind [Identity-Aware Proxy](https://cloud.google.com/iap/docs/concepts-overview)
+(`ui.auth=iap`), the page also has an **Inject a fault** form — the kind and
+spec exactly, or a sentence for the LLM to translate — and a **Clear** button
+on each running fault, for the people listed in `ui.iap.writers`:
+
+```bash
+helm upgrade simian deploy/helm/simian -n simian-system --reuse-values \
+    --set ui.auth=iap --set ui.iap.projectNumber=<project-number> \
+    --set 'ui.iap.writers={you@example.com,domain:sre.example.com}'
+```
+
+- **IAP decides who may see the page; `ui.iap.writers` who may also inject
+  and clear.** An empty list keeps it view-only for everyone.
+- **Every request must carry IAP's signed assertion.** The controller checks
+  its signature against IAP's keys, its issuer, and that its audience is a
+  backend service in your project (`ui.iap.audience` pins the exact one), so
+  nothing that reaches the pod without passing through IAP is let in. Only
+  `/healthz` answers without it, for the load balancer.
+- **Faults from the page go through the executor** like any other — arenas
+  only, no excluded workloads, within the duration and concurrency limits — and
+  the audit trail records who applied and who cleared each one
+  (`requested_by` and `cleared_by` in the JSON audit export).
+- **Only the UI's port is exposed.** The MCP endpoint stays unauthenticated
+  and inside the cluster.
+
+Without IAP (`ui.auth=none`, the default) the form is replaced by a note and
+the write endpoints refuse: with no one identified, anyone who could reach the
+port could inject faults.
+
+The page reads a small JSON API under `/api/` (`info`, `me`, `arenas`,
+`catalog`, `active`, `faults`, `cycles`, `topology`), writes with `POST
+/api/faults` and `POST /api/faults/{uid}/clear`, and streams events from
+`/api/events`; other tools can use it too.
 
 ## Live: `simian watch`
 
@@ -245,8 +274,8 @@ Keep it for operators.
 
 ## Not yet
 
-The web UI is read-only: submitting and clearing faults from it, and the eval
-scorecard view, are the next phases of its
-[design]({{< relref "web-ui-design.md" >}}). Simian does not write Kubernetes
+The chart does not yet create the load balancer and IAP configuration in
+front of the UI; that recipe for GKE is next, then the eval scorecard view
+from the web UI's [design]({{< relref "web-ui-design.md" >}}). Simian does not write Kubernetes
 Events: events in an arena would be readable by any agent with the `view`
 role, and would hand it the answer.

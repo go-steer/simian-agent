@@ -65,6 +65,21 @@ type Deps struct {
 	// it is off.
 	Autonomous []string
 	Events     *Broadcaster
+
+	// Auth decides who a request is from and whether they may write. Nil is
+	// NoAuth: read-only.
+	Auth Authenticator
+	// Executor applies and clears faults submitted from the page; nil turns
+	// the write endpoints off. *executor.Executor.
+	Executor interface {
+		Apply(ctx context.Context, m simian.FaultManifest) (string, error)
+		Clear(ctx context.Context, faultUID string) error
+	}
+	// Catalog lists the fault kinds the engines offer, for the submit form.
+	Catalog func(ctx context.Context) ([]simian.CatalogEntry, error)
+	// Translate turns a plain-English request into a manifest (the LLM);
+	// nil turns the intent mode off.
+	Translate func(ctx context.Context, intent, namespace string, duration time.Duration) (simian.FaultManifest, error)
 }
 
 // Handler serves /ui/ and /api/.
@@ -129,7 +144,18 @@ func Handler(d Deps) http.Handler {
 		writeJSON(w, workloadsOf(snap))
 	})
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) { d.Events.serve(w, r) })
-	return mux
+	writeRoutes(mux, d)
+
+	auth := d.Auth
+	if auth == nil {
+		auth = NoAuth{}
+	}
+	top := http.NewServeMux()
+	// For the load balancer's health check, which reaches the pod without
+	// passing through IAP. It says nothing about the controller's state.
+	top.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	top.Handle("/", authenticated(auth, mux))
+	return top
 }
 
 // workload is what the topology panel shows: how many of a workload's pods

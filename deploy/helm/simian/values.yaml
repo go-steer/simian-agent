@@ -148,12 +148,28 @@ metrics:
     enabled: false       # monitoring.coreos.com/v1 ServiceMonitor (prometheus-operator)
     interval: 30s
 
-# Web UI: a read-only page at /ui/ on the MCP port, with the JSON API and
-# live event stream it reads under /api/. It shows what the MCP endpoint
-# already exposes and inherits its access model — unauthenticated, reached by
-# port-forward or from inside the cluster.
+# Web UI at /ui/ on its own port, with the JSON API and live event stream it
+# reads under /api/, and /healthz for a load balancer.
+#
+# auth: none — read-only, for a port-forward or in-cluster access; nobody can
+#   inject faults from the browser, because nobody can be identified.
+# auth: iap — behind Identity-Aware Proxy ("In a browser: the web UI" in docs/observability.md). Every
+#   request must carry IAP's signed assertion; IAP decides who may view, and
+#   iap.writers who may also inject and clear faults, each recorded in the
+#   audit trail in their name. Only this port is exposed; MCP stays in the
+#   cluster.
 ui:
   enabled: true
+  port: 8082
+  auth: none
+  iap:
+    # The backend service's audience, /projects/NUMBER/global/backendServices/ID
+    # (exact), or just the project number to accept any backend service in it.
+    audience: ""
+    projectNumber: ""
+    # Emails, or "domain:example.com". Empty: everyone IAP lets in may view,
+    # nobody may write.
+    writers: []
 
 # MCP server.
 mcp:
