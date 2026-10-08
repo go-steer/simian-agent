@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
@@ -53,6 +54,7 @@ import (
 	"github.com/go-steer/simian-agent/pkg/metrics"
 	"github.com/go-steer/simian-agent/pkg/planner"
 	"github.com/go-steer/simian-agent/pkg/probe"
+	"github.com/go-steer/simian-agent/pkg/runtimecfg"
 	"github.com/go-steer/simian-agent/pkg/simian"
 	"github.com/go-steer/simian-agent/pkg/sut"
 	"github.com/go-steer/simian-agent/pkg/topology"
@@ -93,6 +95,7 @@ func newServeCmd() *cobra.Command {
 		uiIAPAudience        string
 		uiIAPProjectNumber   string
 		uiWriters            []string
+		uiAdmins             []string
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -394,72 +397,96 @@ func newServeCmd() *cobra.Command {
 				workers.Go(func() { primeMetrics(ctx, recorder, arenaNamespaces, drivers, reapInterval, logger) })
 			}
 
-			if autonomous {
-				if len(autonomousNS) == 0 {
-					return fmt.Errorf("--autonomous requires at least one --autonomous-namespace")
-				}
-				generator := planner.NewGenerator(llm)
-				if debugLLMPayloads {
-					generator.LogResponses = func(attempt int, raw []byte) {
-						logger.Info("planner: LLM raw plan response",
-							slog.Int("attempt", attempt),
-							slog.String("raw_json", string(raw)))
-					}
-				}
-				gate := &loop.BaselineHealthGate{
-					Baselines:    sutMgr,
-					Topology:     disco2,
-					ActiveFaults: exec,
-				}
-				lp := &loop.Loop{
-					Namespaces: autonomousNS,
-					Interval:   cycleInterval,
-					Generator:  generator,
-					Executor:   exec,
-					Topology:   disco2,
-					Baselines:  sutMgr,
-					Recents:    exec,
-					Catalog: func(c context.Context) ([]simian.CatalogEntry, error) {
-						return srv.GatherCatalog(c)
-					},
-					Health: gate,
-					Budget: planner.Budget{
-						MaxFaultsPerCycle:   maxFaultsPerCycle,
-						MaxConcurrentFaults: execCfg.MaxConcurrentFaults,
-						MinCooldown:         execCfg.MinCooldown,
-						MaxSeverityPerCycle: severityCap,
-						MaxFaultDuration:    execCfg.DurationCeiling,
-					},
-					Auditor:    auditor,
-					Logger:     logger,
-					Hypothesis: hypothesisHint,
-				}
-				workers.Go(func() {
-					logger.Info("simian serve: autonomous loop starting",
-						slog.Any("namespaces", autonomousNS),
-						slog.Duration("interval", cycleInterval))
-					if err := lp.Run(ctx); err != nil && err != context.Canceled {
-						logger.Warn("autonomous loop exited", slog.String("err", err.Error()))
-					}
-				})
+			if autonomous && len(autonomousNS) == 0 {
+				return fmt.Errorf("--autonomous requires at least one --autonomous-namespace")
 			}
+			// The install's autonomous settings are the defaults; an admin may
+			// change them from the web UI while the controller runs, kept in a
+			// ConfigMap across restarts. The loop always runs, idle while off.
+			installAutonomy := loop.Settings{
+				Enabled: autonomous, Namespaces: autonomousNS, Interval: cycleInterval,
+				MaxFaultsPerCycle: maxFaultsPerCycle, MaxSeverityPerCycle: severityCap, Hypothesis: hypothesisHint,
+			}
+			autonomy := loop.NewControl(installAutonomy)
+			autonomyStore := runtimecfg.Store{Client: clientset, Namespace: runtimecfg.OwnNamespace("simian-system")}
+			autonomyLimits := func(c context.Context) (loop.Limits, error) {
+				arenas, err := arenaNamespaces(c)
+				return loop.Limits{MaxConcurrentFaults: execCfg.MaxConcurrentFaults, PermittedTiers: permittedTierList(execCfg.PermittedTiers),
+					Arenas: arenas, Install: &installAutonomy}, err
+			}
+			if rec, err := autonomyStore.Load(ctx); err != nil {
+				logger.Warn("simian serve: cannot read autonomous settings kept from the web UI; using the install's",
+					slog.String("error", err.Error()))
+			} else if rec != nil {
+				lim, lerr := autonomyLimits(ctx)
+				if verr := rec.Settings.Validate(lim); lerr != nil || verr != nil {
+					// The install's limits may have narrowed since; the kept
+					// settings must not outrun them.
+					logger.Warn("simian serve: autonomous settings kept from the web UI no longer fit the install's limits; using the install's",
+						slog.Any("error", errors.Join(lerr, verr)), slog.String("set_by", rec.Source.By))
+				} else {
+					autonomy.Set(rec.Settings, rec.Source)
+					logger.Info("simian serve: autonomous settings from the web UI", slog.String("set_by", rec.Source.By),
+						slog.Time("set_at", rec.Source.At), slog.Bool("enabled", rec.Settings.Enabled))
+				}
+			}
+			generator := planner.NewGenerator(llm)
+			if debugLLMPayloads {
+				generator.LogResponses = func(attempt int, raw []byte) {
+					logger.Info("planner: LLM raw plan response",
+						slog.Int("attempt", attempt),
+						slog.String("raw_json", string(raw)))
+				}
+			}
+			lp := &loop.Loop{
+				Control:   autonomy,
+				Generator: generator,
+				Executor:  exec,
+				Topology:  disco2,
+				Baselines: sutMgr,
+				Recents:   exec,
+				Catalog: func(c context.Context) ([]simian.CatalogEntry, error) {
+					return srv.GatherCatalog(c)
+				},
+				Health: &loop.BaselineHealthGate{Baselines: sutMgr, Topology: disco2, ActiveFaults: exec},
+				Budget: planner.Budget{
+					MaxConcurrentFaults: execCfg.MaxConcurrentFaults,
+					MinCooldown:         execCfg.MinCooldown,
+					MaxFaultDuration:    execCfg.DurationCeiling,
+				},
+				Auditor: auditor,
+				Logger:  logger,
+			}
+			workers.Go(func() {
+				s, _ := autonomy.Get()
+				logger.Info("simian serve: autonomous loop starting", slog.Bool("enabled", s.Enabled),
+					slog.Any("namespaces", s.Namespaces), slog.Duration("interval", s.Interval))
+				if err := lp.Run(ctx); err != nil && err != context.Canceled {
+					logger.Warn("autonomous loop exited", slog.String("err", err.Error()))
+				}
+			})
 
 			if ui {
 				// The web UI has its own port, so that putting it behind
 				// Identity-Aware Proxy exposes the page and nothing else: the
 				// MCP endpoint stays unauthenticated and in the cluster.
-				var autonomousIn []string
-				if autonomous {
-					autonomousIn = autonomousNS
-				}
-				auth, err := uiAuthenticator(uiAuth, uiIAPAudience, uiIAPProjectNumber, uiWriters)
+				auth, err := uiAuthenticator(uiAuth, uiIAPAudience, uiIAPProjectNumber, uiWriters, uiAdmins)
 				if err != nil {
 					return err
 				}
 				uiSrv := &http.Server{Addr: uiAddr, ReadHeaderTimeout: 5 * time.Second, Handler: webui.Handler(webui.Deps{
 					Version: version, Active: exec, Faults: faultLog, Cycles: cycleLog, Topology: disco2,
-					Arenas: arenaNamespaces, Autonomous: autonomousIn, Events: broadcaster,
+					Arenas: arenaNamespaces, Events: broadcaster,
 					Auth: auth, Executor: exec, Catalog: srv.GatherCatalog, Translate: srv.TranslateIntent,
+					Install: webui.Install{
+						MaxConcurrentFaults: execCfg.MaxConcurrentFaults, DurationCeiling: execCfg.DurationCeiling.String(),
+						MinCooldown: execCfg.MinCooldown.String(), PermittedTiers: permittedTierList(execCfg.PermittedTiers),
+						DefaultProbes: defaultProbes, LLM: strings.TrimSuffix(llmProviderID+" "+llmModel, " "),
+					},
+					Excluded: func(c context.Context, ns string) ([]string, error) { return excludedWorkloads(c, clientset, ns) },
+					Autonomy: &webui.Autonomy{Control: autonomy, Store: autonomyKeeper{autonomyStore}},
+					Limits:   autonomyLimits,
+					Auditor:  auditor,
 				})}
 				go func() {
 					if err := uiSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -468,7 +495,7 @@ func newServeCmd() *cobra.Command {
 				}()
 				defer func() { _ = uiSrv.Close() }()
 				logger.Info("simian serve: web UI at /ui/", slog.String("addr", uiAddr), slog.String("auth", uiAuth),
-					slog.Int("writers", len(uiWriters)))
+					slog.Int("writers", len(uiWriters)), slog.Int("admins", len(uiAdmins)))
 			}
 
 			if mcpStdio {
@@ -512,6 +539,7 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&uiAuth, "ui-auth", "none", "Web UI authentication: none (read-only, for a port-forward) or iap (Identity-Aware Proxy; --ui-writers may submit and clear faults)")
 	cmd.Flags().StringVar(&uiIAPAudience, "ui-iap-audience", "", "With --ui-auth=iap: the backend service's audience, /projects/NUMBER/global/backendServices/ID")
 	cmd.Flags().StringVar(&uiIAPProjectNumber, "ui-iap-project-number", "", "With --ui-auth=iap and no --ui-iap-audience: accept any backend service in this project number")
+	cmd.Flags().StringSliceVar(&uiAdmins, "ui-admins", nil, "With --ui-auth=iap: who may also configure, pause and resume autonomous mode and clear all faults from the UI — emails, or domain:example.com (repeatable). Empty: nobody")
 	cmd.Flags().StringSliceVar(&uiWriters, "ui-writers", nil, "With --ui-auth=iap: who may submit and clear faults from the UI — emails, or domain:example.com (repeatable). Empty: nobody")
 	cmd.Flags().StringVar(&metricsAddr, "metrics-addr", ":9090", "Serve Prometheus metrics on this address (/metrics); empty disables")
 	cmd.Flags().BoolVar(&debugLLMPayloads, "debug-llm-payloads", false, "Log raw LLM responses (debug only; do not enable in production — see design.md §12.2)")
@@ -616,14 +644,52 @@ func primeMetrics(ctx context.Context, recorder *metrics.Recorder, arenas func(c
 	}
 }
 
+// permittedTierList is the executor's permitted tiers, in order of blast
+// radius.
+func permittedTierList(m map[simian.BlastRadiusTier]bool) []simian.BlastRadiusTier {
+	var out []simian.BlastRadiusTier
+	for _, t := range []simian.BlastRadiusTier{simian.TierNamespace, simian.TierNode, simian.TierExternal} {
+		if m[t] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// autonomyKeeper keeps the web UI's autonomous settings in the runtime
+// ConfigMap.
+type autonomyKeeper struct{ store runtimecfg.Store }
+
+func (k autonomyKeeper) Save(ctx context.Context, s loop.Settings, src loop.Source) error {
+	return k.store.Save(ctx, runtimecfg.Record{Settings: s, Source: src})
+}
+
+func (k autonomyKeeper) Clear(ctx context.Context) error { return k.store.Clear(ctx) }
+
+// excludedWorkloads reads an arena's excluded workloads from its namespace
+// annotation, for the configuration panel.
+func excludedWorkloads(ctx context.Context, k8s kubernetes.Interface, ns string) ([]string, error) {
+	n, err := k8s.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, w := range strings.Split(n.Annotations[executor.ExcludeWorkloadsAnnotation], ",") {
+		if w = strings.TrimSpace(w); w != "" {
+			out = append(out, w)
+		}
+	}
+	return out, nil
+}
+
 // uiAuthenticator builds the web UI's authenticator from its flags. A
 // setting that cannot be honoured stops the controller rather than serving
 // the UI less protected than asked.
-func uiAuthenticator(mode, audience, projectNumber string, writers []string) (webui.Authenticator, error) {
+func uiAuthenticator(mode, audience, projectNumber string, writers, admins []string) (webui.Authenticator, error) {
 	switch mode {
 	case "none", "":
-		if len(writers) > 0 {
-			return nil, fmt.Errorf("--ui-writers needs --ui-auth=iap: without it the UI cannot tell who anyone is")
+		if len(writers) > 0 || len(admins) > 0 {
+			return nil, fmt.Errorf("--ui-writers and --ui-admins need --ui-auth=iap: without it the UI cannot tell who anyone is")
 		}
 		return webui.NoAuth{}, nil
 	case "iap":
@@ -635,7 +701,7 @@ func uiAuthenticator(mode, audience, projectNumber string, writers []string) (we
 			// refuse every genuine assertion at sign-in rather than here.
 			return nil, fmt.Errorf("--ui-iap-project-number=%q: want the project's number, all digits (gcloud projects describe PROJECT --format='value(projectNumber)')", projectNumber)
 		}
-		return &webui.IAP{Audience: audience, ProjectNumber: projectNumber, Writers: writers}, nil
+		return &webui.IAP{Audience: audience, ProjectNumber: projectNumber, Writers: writers, Admins: admins}, nil
 	default:
 		return nil, fmt.Errorf("--ui-auth=%q: want none or iap", mode)
 	}

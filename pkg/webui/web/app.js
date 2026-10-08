@@ -20,7 +20,7 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const state = { arena: decodeURIComponent(location.hash.slice(1)), autonomous: [], active: [], faultUIDs: new Set(), me: {}, catalog: [] };
+const state = { arena: decodeURIComponent(location.hash.slice(1)), autonomous: [], active: [], faultUIDs: new Set(), me: {}, catalog: [], config: null, adminFilled: false };
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const time = (t) => (t && !t.startsWith("0001") ? new Date(t).toLocaleTimeString() : "–");
@@ -182,11 +182,126 @@ function addEvent(e) {
   while ($("events").children.length > 200) $("events").lastChild.remove();
 }
 
+const row = (k, v) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`;
+
+function renderConfig(c) {
+  state.config = c;
+  const x = c.executor || {};
+  $("limits").innerHTML =
+    row("Faults at once", esc(x.max_concurrent_faults) + ' <span class="muted">executor.maxConcurrentFaults</span>') +
+    row("Longest fault", esc(x.duration_ceiling) + ' <span class="muted">executor.durationCeiling</span>') +
+    row("Cooldown", esc(x.min_cooldown) + ' <span class="muted">executor.minCooldown</span>') +
+    row("Blast radius", esc((x.permitted_tiers || []).join(", ")) + ' <span class="muted">executor.permittedTiers</span>') +
+    row("Default probes", x.default_probes ? "on" : "off") +
+    (x.llm ? row("LLM", esc(x.llm)) : "");
+  $("arenas").innerHTML = (c.arenas || []).length
+    ? c.arenas.map((a) => row(a.name, a.excluded.length ? "excluded: " + esc(a.excluded.join(", ")) : '<span class="muted">nothing excluded</span>')).join("")
+    : '<tr><td class="empty">No arenas.</td></tr>';
+  const au = c.autonomous;
+  if (!au) {
+    $("autonomy").innerHTML = row("Autonomous mode", "not configurable here");
+  } else {
+    const s = au.settings;
+    const where = (s.namespaces || []).map((ns) => esc(ns) + (isPaused(s, ns) ? ' <span class="badge paused">paused</span>' : "")).join(", ");
+    $("autonomy").innerHTML =
+      row("State", s.enabled ? (isPaused(s, "*") ? '<span class="badge paused">paused everywhere</span>' : '<span class="badge ok">on</span>') : "off") +
+      row("Arenas", where || '<span class="muted">none</span>') +
+      row("Every", esc(s.interval)) +
+      row("Faults per cycle", esc(s.max_faults_per_cycle)) +
+      row("Severity cap", esc(s.max_severity_per_cycle || "–")) +
+      (s.hypothesis ? row("Hypothesis hint", esc(s.hypothesis)) : "");
+    $("autonomy-source").textContent = au.source && au.source.by
+      ? `Set from this page by ${au.source.by} at ${new Date(au.source.at).toLocaleString()}; the install's settings apply again on revert.`
+      : "The install's settings (chart values autonomous.*).";
+  }
+  if (au) state.autonomous = au.settings.enabled ? au.settings.namespaces || [] : [];
+  if (c.you && c.you.can_admin && au) {
+    $("admin").hidden = false;
+    if (!state.adminFilled) fillAdmin(c);
+    renderPauses(c);
+  }
+}
+
+function isPaused(s, ns) { return (s.paused || []).includes("*") || (s.paused || []).includes(ns); }
+
+function fillAdmin(c) {
+  const s = c.autonomous.settings;
+  $("a-enabled").checked = s.enabled;
+  $("a-namespaces").innerHTML = (c.arenas || []).map((a) =>
+    `<label><input type="checkbox" class="a-ns" value="${esc(a.name)}" ${(s.namespaces || []).includes(a.name) ? "checked" : ""}> ${esc(a.name)}</label>`).join(" ");
+  $("a-interval").value = s.interval;
+  $("a-max").value = s.max_faults_per_cycle;
+  $("a-max").max = (c.executor || {}).max_concurrent_faults || "";
+  $("a-tier").innerHTML = ((c.executor || {}).permitted_tiers || []).map((t) => `<option ${t === s.max_severity_per_cycle ? "selected" : ""}>${esc(t)}</option>`).join("");
+  $("a-hint").value = s.hypothesis || "";
+  state.adminFilled = true;
+}
+
+function renderPauses(c) {
+  const s = c.autonomous.settings;
+  const all = isPaused(s, "*");
+  $("a-pauses").innerHTML = `<button type="button" data-ns="" data-pause="${!all}">${all ? "Resume" : "Pause"} everywhere</button>` +
+    (s.namespaces || []).map((ns) => {
+      const p = isPaused(s, ns) && !all;
+      return `<button type="button" data-ns="${esc(ns)}" data-pause="${!p}" ${all ? "disabled" : ""}>${p ? "Resume" : "Pause"} ${esc(ns)}</button>`;
+    }).join("");
+}
+
+async function adminAction(path, body, out, done) {
+  $(out).className = "";
+  $(out).textContent = "…";
+  try {
+    const res = await post(path, body);
+    $(out).className = "ok";
+    $(out).textContent = done(res);
+    state.adminFilled = false;
+    refresh();
+  } catch (e) {
+    $(out).className = "bad";
+    $(out).textContent = "Refused: " + e.message;
+  }
+}
+
+function setupAdmin() {
+  $("admin").onsubmit = (ev) => {
+    ev.preventDefault();
+    const settings = {
+      enabled: $("a-enabled").checked,
+      namespaces: [...document.querySelectorAll(".a-ns:checked")].map((el) => el.value),
+      interval: $("a-interval").value.trim(),
+      max_faults_per_cycle: parseInt($("a-max").value, 10),
+      max_severity_per_cycle: $("a-tier").value,
+      hypothesis: $("a-hint").value.trim(),
+      paused: (state.config.autonomous.settings.paused || []),
+    };
+    if (!confirm(settings.enabled ? `Run autonomous mode in ${settings.namespaces.join(", ")} every ${settings.interval}?` : "Turn autonomous mode off?")) return;
+    adminAction("/api/admin/autonomous", settings, "a-result", () => "Applied.");
+  };
+  $("a-reset").onclick = () => {
+    if (!confirm("Revert autonomous mode to the install's settings?")) return;
+    adminAction("/api/admin/autonomous/reset", undefined, "a-result", () => "Reverted to the install's settings.");
+  };
+  $("a-pauses").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    const paused = b.dataset.pause === "true";
+    adminAction("/api/admin/pause", { namespace: b.dataset.ns, paused }, "a-result", () => (paused ? "Paused " : "Resumed ") + (b.dataset.ns || "everywhere") + ".");
+  });
+  $("a-clear-all").onclick = () => {
+    const ns = state.arena;
+    if (!confirm(`Clear every running fault${ns ? " in " + ns : ""} now?`)) return;
+    adminAction("/api/admin/clear-all", { namespace: ns }, "a-clear-result", (r) =>
+      `Cleared ${r.cleared.length}${Object.keys(r.failed || {}).length ? ", " + Object.keys(r.failed).length + " could not be cleared" : ""}.`);
+  };
+}
+
 async function refresh() {
-  const [active, faults, cycles, workloads] = await Promise.allSettled([
+  const [active, faults, cycles, workloads, config] = await Promise.allSettled([
     get(q("/api/active")), get(q("/api/faults?limit=40")), get(q("/api/cycles?limit=15")),
     state.arena ? get(q("/api/topology")) : Promise.resolve([]),
+    get("/api/config"),
   ]);
+  if (config.status === "fulfilled") renderConfig(config.value);
   if (active.status === "fulfilled") renderActive(active.value);
   if (faults.status === "fulfilled") renderFaults(faults.value);
   if (cycles.status === "fulfilled") renderCycles(cycles.value);
@@ -325,6 +440,7 @@ async function main() {
     for (const ns of arenas) $("arena").add(new Option(ns, ns));
   } catch (e) { /* All arenas still works */ }
   await setupInject(arenas);
+  setupAdmin();
   $("arena").value = state.arena;
   $("arena").onchange = () => {
     state.arena = $("arena").value;

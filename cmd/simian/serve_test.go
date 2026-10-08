@@ -129,14 +129,14 @@ func TestWaitForWorkersWaitsForThemButNotForever(t *testing.T) {
 // genuine IAP assertion at sign-in; the controller refuses to start instead.
 func TestTheUIRefusesAnIAPProjectNumberThatIsNotOne(t *testing.T) {
 	for _, bad := range []string{"1.067056737933e+12", "gke-demos-345619", "12 34"} {
-		if _, err := uiAuthenticator("iap", "", bad, nil); err == nil {
+		if _, err := uiAuthenticator("iap", "", bad, nil, nil); err == nil {
 			t.Errorf("--ui-iap-project-number=%q was accepted", bad)
 		}
 	}
-	if _, err := uiAuthenticator("iap", "", "1067056737933", []string{"alice@example.com"}); err != nil {
+	if _, err := uiAuthenticator("iap", "", "1067056737933", []string{"alice@example.com"}, nil); err != nil {
 		t.Errorf("a real project number: %v", err)
 	}
-	if _, err := uiAuthenticator("none", "", "", []string{"alice@example.com"}); err == nil {
+	if _, err := uiAuthenticator("none", "", "", nil, []string{"alice@example.com"}); err == nil {
 		t.Error("writers without IAP were accepted")
 	}
 }

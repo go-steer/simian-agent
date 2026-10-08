@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/go-steer/simian-agent/pkg/audit"
+	"github.com/go-steer/simian-agent/pkg/loop"
 	"github.com/go-steer/simian-agent/pkg/simian"
 	"github.com/go-steer/simian-agent/pkg/topology"
 )
@@ -80,6 +81,17 @@ type Deps struct {
 	// Translate turns a plain-English request into a manifest (the LLM);
 	// nil turns the intent mode off.
 	Translate func(ctx context.Context, intent, namespace string, duration time.Duration) (simian.FaultManifest, error)
+
+	// Install is the controller's limits, shown on the configuration panel.
+	Install Install
+	// Excluded lists an arena's excluded workloads.
+	Excluded func(ctx context.Context, namespace string) ([]string, error)
+	// Autonomy lets admins configure, pause and resume autonomous mode;
+	// Limits are the ceilings their settings must fit under.
+	Autonomy *Autonomy
+	Limits   func(ctx context.Context) (loop.Limits, error)
+	// Auditor records admin changes.
+	Auditor simian.Auditor
 }
 
 // Handler serves /ui/ and /api/.
@@ -89,7 +101,7 @@ func Handler(d Deps) http.Handler {
 	mux.Handle("/ui/", http.StripPrefix("/ui/", http.FileServerFS(static)))
 	mux.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/", http.StatusFound) })
 	mux.HandleFunc("GET /api/info", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"version": d.Version, "autonomous": nonNil(d.Autonomous)})
+		writeJSON(w, map[string]any{"version": d.Version, "autonomous": nonNil(d.autonomousNow())})
 	})
 	mux.HandleFunc("GET /api/arenas", func(w http.ResponseWriter, r *http.Request) {
 		if d.Arenas == nil {
@@ -145,6 +157,7 @@ func Handler(d Deps) http.Handler {
 	})
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) { d.Events.serve(w, r) })
 	writeRoutes(mux, d)
+	adminRoutes(mux, d)
 
 	auth := d.Auth
 	if auth == nil {
@@ -156,6 +169,19 @@ func Handler(d Deps) http.Handler {
 	top.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 	top.Handle("/", authenticated(auth, mux))
 	return top
+}
+
+// autonomousNow is the namespaces autonomous mode runs in now: from the
+// admin controls when there are any, else as started.
+func (d Deps) autonomousNow() []string {
+	if d.Autonomy == nil {
+		return d.Autonomous
+	}
+	s, _ := d.Autonomy.Control.Get()
+	if !s.Enabled {
+		return nil
+	}
+	return s.Namespaces
 }
 
 // workload is what the topology panel shows: how many of a workload's pods

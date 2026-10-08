@@ -79,3 +79,11 @@ button[type=submit] { background: var(--bad); color: #fff; border-color: var(--b
 button.clear { margin-left: .5rem; font-size: .8rem; padding: 0 .6rem; }
 .hint { font-size: .8rem; margin-top: .25rem; white-space: pre-wrap; }
 #f-result.ok { color: var(--ok); } #f-result.bad { color: var(--bad); }
+
+.config-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.5rem; }
+@media (max-width: 900px) { .config-grid { grid-template-columns: 1fr; } }
+.config-grid table td:first-child { color: var(--muted); }
+#admin { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: .5rem; }
+button.danger { color: var(--bad); border-color: var(--bad); }
+#a-result.ok, #a-clear-result.ok { color: var(--ok); } #a-result.bad, #a-clear-result.bad { color: var(--bad); }
+.badge.paused { color: var(--warn); }

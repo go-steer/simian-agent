@@ -153,6 +153,8 @@ expect_arg "ui-iap-long" "$(render sim-ui-iap-long --set ui.auth=iap --set ui.ia
   "--ui-iap-project-number=1067056737933"
 expect_arg "ui-iap" "$out" "--ui-writers=alice@example.com"
 expect_arg "ui-iap" "$out" "--ui-writers=domain:sre.example.com"
+expect_arg "ui-iap-admins" "$(render sim-ui-admins --set ui.auth=iap --set ui.iap.projectNumber=123456 \
+  --set 'ui.iap.admins={alice@example.com}')" "--ui-admins=alice@example.com"
 echo "▸ on GKE the chart can put the UI behind an IAP load balancer, and only behind IAP"
 out="$(render sim-ui-ingress --set ui.auth=iap --set ui.iap.projectNumber=123456 \
   --set ui.iap.ingress.enabled=true --set ui.iap.ingress.host=simian.example.com)"
@@ -186,6 +188,7 @@ if grep -qF "kind: Ingress" <<<"$(render sim-ui-noingress)"; then
   fail=1
 fi
 for bad in "--set ui.auth=iap" "--set ui.auth=oidc" "--set ui.iap.writers={alice@example.com}" \
+  "--set ui.iap.admins={alice@example.com}" \
   "--set ui.iap.ingress.enabled=true --set ui.iap.ingress.host=h" \
   "--set ui.auth=iap --set ui.iap.projectNumber=1 --set ui.iap.ingress.enabled=true" \
   "--set ui.iap.gateway.enabled=true --set ui.iap.gateway.host=h --set ui.iap.gateway.certificateMap=m" \
