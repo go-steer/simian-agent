@@ -26,7 +26,7 @@ everything from step 4 on is the same.
 
 | | GKE | kind |
 |---|---|---|
-| Tools | `git`, Go 1.26+, `make`, `kubectl`, `helm` 3, `gcloud` (authenticated) | `git`, Go 1.26+, `make`, `kubectl`, `helm` 3, `docker`, `kind` |
+| Tools | `git`, Go 1.26+, `make`, `kubectl`, `helm` 3, `curl`, `gcloud` (authenticated) | `git`, Go 1.26+, `make`, `kubectl`, `helm` 3, `curl`, `docker`, `kind` |
 | Access | a GCP project where you can create GKE clusters and grant IAM roles | Docker with at least 4 CPUs and 8 GB of memory |
 | LLM | Vertex AI in that project (step 3 grants the controller access) | a Gemini API key, exported as `GEMINI_API_KEY` |
 | Cost | a 3-node `e2-standard-4` cluster while it runs, plus Vertex calls | Gemini API calls only |
@@ -94,6 +94,11 @@ make cluster                          # kind + Calico + Chaos Mesh, about 3 minu
 export KUBECONFIG=$PWD/.kube/e2e.yaml # written by make cluster
 ```
 
+This creates a three-node kind cluster named `simian-e2e-dev`, and writes its
+credentials only to `.kube/e2e.yaml`; `make cluster-down` in step 12 deletes
+that cluster and nothing else. Other kind clusters on the machine are left
+alone.
+
 ### Check (both)
 
 ```bash
@@ -101,7 +106,8 @@ kubectl -n chaos-mesh get pods
 ```
 
 `chaos-controller-manager-…` (three of them), `chaos-dns-server-…`,
-`chaos-dashboard-…` and one `chaos-daemon-…` per node, all `Running`.
+`chaos-dashboard-…` and one `chaos-daemon-…` per worker node (three on GKE,
+two on kind, whose control-plane node runs none), all `Running`.
 **If not:** wait a minute and look again; on GKE the daemons start after the
 nodes report Ready.
 
@@ -156,6 +162,7 @@ tell the CLI where it is:
 
 ```bash
 kubectl -n simian-system port-forward svc/simian-controller 18081:8081 >/tmp/simian-pf.log 2>&1 &
+echo $! >/tmp/simian-pf.pid
 export SIMIAN_MCP_URL=http://localhost:18081/sse
 sleep 2; curl -s -m 3 -o /dev/null -w "%{http_code}\n" "$SIMIAN_MCP_URL" || true
 ```
@@ -167,9 +174,16 @@ like a failure — the status code is the check.
 local port in both lines. A `404` means something other than Simian answered
 on that port.
 
-The port-forward dies whenever the controller pod is replaced — a `helm
-upgrade`, a node upgrade. Run the first line again when a command reports
-`connection refused`.
+The port-forward breaks whenever the controller pod is replaced — a `helm
+upgrade`, a node upgrade — but does not exit until the next connection
+through it fails, and it keeps the local port until then. To restart it, stop
+the old one first:
+
+```bash
+kill "$(cat /tmp/simian-pf.pid)" 2>/dev/null
+kubectl -n simian-system port-forward svc/simian-controller 18081:8081 >/tmp/simian-pf.log 2>&1 &
+echo $! >/tmp/simian-pf.pid
+```
 
 ## 5. An arena with an application in it
 
@@ -222,12 +236,15 @@ kubectl -n boutique get pods -l app=productcatalogservice   # a pod a few second
 ```
 
 For a live view, run `bin/simian watch --namespace boutique` in a second
-terminal (it redraws; `Ctrl-C` to leave). It shows active faults, recent ones
-and the arena's pods.
+terminal (it redraws; `Ctrl-C` to leave). It shows the active faults, what
+autonomous mode decided (empty until step 9), and the recent faults and how
+they ended.
 
 ## 7. Read what happened
 
-After the minute is up, ask the controller for its record:
+Once the minute is up, ask the controller for its record. The controller
+checks deadlines on a 30-second sweep, so a fault can end up to half a minute
+after its deadline; until then its row shows `open`.
 
 ```bash
 kubectl -n simian-system exec deploy/simian-controller -- \
@@ -270,8 +287,12 @@ The controller turns the sentence into a concrete fault (here a
 **Check:** a fault UID, and after two minutes a `StressChaos` row in the audit
 export with `expired deadline-reached`.
 **If not:** a `permission denied` from Vertex on GKE usually means the grant
-in step 3 has not propagated yet — wait two minutes and retry. On kind, check
-the API key in the `simian-llm` secret.
+in step 3 has not propagated yet — wait two minutes and retry. On kind, the
+controller's log says what Gemini answered
+(`kubectl -n simian-system logs deploy/simian-controller | grep -i gemini`);
+an error about the API key means the key in the `simian-llm` secret is wrong
+or is not a Gemini API key. Recreate the secret as in step 3 and restart the
+controller (`kubectl -n simian-system rollout restart deploy/simian-controller`).
 
 ## 9. Let it plan on its own
 
@@ -284,7 +305,9 @@ watch a few:
 helm upgrade simian deploy/helm/simian -n simian-system --reuse-values \
     --set autonomous.enabled=true --set 'autonomous.namespaces={boutique}' \
     --set autonomous.cycleInterval=3m --wait
+kill "$(cat /tmp/simian-pf.pid)" 2>/dev/null
 kubectl -n simian-system port-forward svc/simian-controller 18081:8081 >/tmp/simian-pf.log 2>&1 &
+echo $! >/tmp/simian-pf.pid
 ```
 
 (The upgrade replaces the controller pod, hence the new port-forward. If the
@@ -323,7 +346,8 @@ kubectl -n simian-system exec deploy/simian-controller -- \
 
 A skipped cycle says why: `health-gate` (something in the arena is not Ready,
 often the previous fault's pod still restarting), `budget-full` (one fault at
-a time), `no-valid-plan` (the LLM's plans failed validation).
+a time), `no-valid-plan` (the LLM's plans failed validation). A cycle shown
+as `open` is still planning or applying.
 
 Turn it off again before you leave it unattended, unless that is the point:
 
@@ -338,13 +362,16 @@ The controller serves Prometheus metrics on port `9090`:
 
 ```bash
 kubectl -n simian-system port-forward svc/simian-controller 19090:9090 >/tmp/simian-metrics-pf.log 2>&1 &
+echo $! >/tmp/simian-metrics-pf.pid
 sleep 2; curl -s http://localhost:19090/metrics | grep '^simian_'
 ```
 
 **Check:** `simian_build_info{version="0.2.0"} 1`, and counters for the arena
 such as `simian_faults_applied_total{arena="boutique",…,kind="PodChaos",…}` and
 `simian_cycles_total{arena="boutique",outcome="completed",…}`. They exist from
-the start, at `0` until something happens.
+the start, at `0` until something happens. They count since the controller
+started, and turning autonomous mode off at the end of step 9 restarted it, so
+expect zeros here; the audit export in step 7 is the lasting record.
 
 ### On GKE: in Cloud Monitoring
 
@@ -396,8 +423,12 @@ the [eval substrate]({{< relref "eval-substrate.md" >}}).
 
 ### On GKE
 
+Autonomous mode is off since step 9, but its last fault may still be running.
+Wait until `bin/simian chaos --list-active --namespace boutique` shows none,
+so the uninstall does not leave a Chaos Mesh experiment behind; then:
+
 ```bash
-kill %1 %2 2>/dev/null   # the port-forwards, if still running in this shell
+kill "$(cat /tmp/simian-pf.pid)" "$(cat /tmp/simian-metrics-pf.pid)" 2>/dev/null   # the port-forwards
 helm uninstall simian -n simian-system
 kubectl -n simian-system delete pvc simian-audit   # the audit volume is kept on uninstall
 dev/tools/grant-vertex-access --revoke
@@ -410,7 +441,7 @@ rm -f .kube/quickstart.yaml
 ### On kind
 
 ```bash
-kill %1 %2 2>/dev/null
+kill "$(cat /tmp/simian-pf.pid)" "$(cat /tmp/simian-metrics-pf.pid)" 2>/dev/null   # the port-forwards
 make cluster-down
 ```
 
