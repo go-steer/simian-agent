@@ -475,3 +475,28 @@ func TestAnHTTPChaosOnAGRPCPortFailsValidation(t *testing.T) {
 		t.Errorf("err = %v, want a gRPC rejection", err)
 	}
 }
+
+// #215: on the v0.2.0-rc.1 soak the planner chose a container-kill with no
+// containerNames; Chaos Mesh refused it and the cycle was lost.
+func TestAContainerKillWithoutContainerNamesFailsValidation(t *testing.T) {
+	in := sampleInput()
+	in.Topology.Workloads = append(in.Topology.Workloads, topology.Workload{Kind: "Deployment", Name: "ledgerwriter",
+		Labels:     map[string]string{"app": "ledgerwriter"},
+		Containers: []topology.ContainerSummary{{Name: "ledgerwriter"}, {Name: "istio-proxy"}}})
+	step := func(spec string) string {
+		return strings.NewReplacer(
+			`"name": "cartservice"`, `"name": "ledgerwriter"`,
+			`"spec": {"action": "pod-kill", "mode": "one"}`, `"spec": `+spec,
+		).Replace(wellFormedPlanJSON())
+	}
+	_, err := parseAttackPlan([]byte(step(`{"action": "container-kill", "mode": "one"}`)), in)
+	if err == nil || !strings.Contains(err.Error(), "containerNames") || !strings.Contains(err.Error(), "ledgerwriter istio-proxy") {
+		t.Errorf("container-kill with no containerNames: err = %v, want a rejection listing the containers", err)
+	}
+	if _, err := parseAttackPlan([]byte(step(`{"action": "container-kill", "mode": "one", "containerNames": ["ledgerwriter"]}`)), in); err != nil {
+		t.Errorf("container-kill naming a container was rejected: %v", err)
+	}
+	if _, err := parseAttackPlan([]byte(step(`{"action": "pod-kill", "mode": "one"}`)), in); err != nil {
+		t.Errorf("pod-kill was rejected: %v", err)
+	}
+}
