@@ -83,7 +83,9 @@ function renderActive(list) {
 
 function renderCycles(cycles) {
   if (!state.autonomous.length) {
-    $("plan").innerHTML = '<div class="empty">Autonomous mode is off. Turn it on with the chart\'s <code>autonomous.enabled</code>.</div>';
+    $("plan").innerHTML = state.me.can_admin
+      ? '<div class="empty">Autonomous mode is off. Turn it on from ⚙ Configuration.</div>'
+      : '<div class="empty">Autonomous mode is off.</div>';
   } else {
     const latest = cycles.find((c) => c.hypothesis);
     $("plan").innerHTML = latest
@@ -232,6 +234,8 @@ function fillAdmin(c) {
   $("a-interval").value = s.interval;
   $("a-max").value = s.max_faults_per_cycle;
   $("a-max").max = (c.executor || {}).max_concurrent_faults || "";
+  $("a-max-hint").textContent = (c.executor || {}).max_concurrent_faults
+    ? `up to ${c.executor.max_concurrent_faults}, the faults allowed at once (executor.maxConcurrentFaults)` : "";
   $("a-tier").innerHTML = ((c.executor || {}).permitted_tiers || []).map((t) => `<option ${t === s.max_severity_per_cycle ? "selected" : ""}>${esc(t)}</option>`).join("");
   $("a-hint").value = s.hypothesis || "";
   state.adminFilled = true;
@@ -263,6 +267,8 @@ async function adminAction(path, body, out, done) {
 }
 
 function setupAdmin() {
+  $("settings").onclick = () => { state.adminFilled = false; if (state.config) renderConfig(state.config); $("config-dialog").showModal(); };
+  $("config-close").onclick = () => $("config-dialog").close();
   $("admin").onsubmit = (ev) => {
     ev.preventDefault();
     const settings = {
