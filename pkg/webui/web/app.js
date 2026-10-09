@@ -691,17 +691,25 @@ function connect() {
 // The template's JSON example, without its selector: the target is the
 // workload picked in the form, and the executor narrows to it.
 function specFromTemplate(tpl) {
-  const start = (tpl || "").indexOf("{");
-  if (start < 0) return {};
-  let depth = 0;
-  for (let i = start; i < tpl.length; i++) {
-    if (tpl[i] === "{") depth++;
-    else if (tpl[i] === "}" && --depth === 0) {
-      try {
-        const spec = JSON.parse(tpl.slice(start, i + 1));
-        delete spec.selector;
-        return spec;
-      } catch (e) { return {}; }
+  // The template mixes prose with an example. Prose can hold brace
+  // fragments that are not JSON — StressChaos's hint says
+  // `"stressors": {"cpu": {...}}` — so take the first balanced {…} block
+  // that parses, not merely the first one.
+  const t = tpl || "";
+  for (let start = t.indexOf("{"); start >= 0; start = t.indexOf("{", start + 1)) {
+    let depth = 0;
+    for (let i = start; i < t.length; i++) {
+      if (t[i] === "{") depth++;
+      else if (t[i] === "}" && --depth === 0) {
+        try {
+          const spec = JSON.parse(t.slice(start, i + 1));
+          if (spec && typeof spec === "object" && !Array.isArray(spec)) {
+            delete spec.selector;
+            return spec;
+          }
+        } catch (e) { /* prose, not the example: try the next block */ }
+        break;
+      }
     }
   }
   return {};
@@ -1002,6 +1010,13 @@ function review() {
   try { spec = JSON.parse($("f-spec").value || "{}"); } catch (e) {
     $("f-result").className = "bad";
     $("f-result").textContent = "The spec is not valid JSON: " + e.message;
+    return;
+  }
+  if (c.engine === "chaos-mesh" && Object.keys(spec).length === 0) {
+    // Chaos Mesh rejects a spec without even a mode, after the executor has
+    // accepted it — better said here, with where to start.
+    $("f-result").className = "bad";
+    $("f-result").textContent = `The spec is empty. ${c.resource_kind} needs at least a "mode" and its settings — open ▸ template for an example.`;
     return;
   }
   $("f-result").textContent = "";
