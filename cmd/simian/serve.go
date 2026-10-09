@@ -96,6 +96,8 @@ func newServeCmd() *cobra.Command {
 		uiIAPProjectNumber   string
 		uiWriters            []string
 		uiAdmins             []string
+		uiAllowedOrigins     []string
+		uiName               string
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -475,7 +477,8 @@ func newServeCmd() *cobra.Command {
 					return err
 				}
 				uiSrv := &http.Server{Addr: uiAddr, ReadHeaderTimeout: 5 * time.Second, Handler: webui.Handler(webui.Deps{
-					Version: version, Active: exec, Faults: faultLog, Cycles: cycleLog, Topology: disco2,
+					Version: version, Name: uiName, AllowedOrigins: uiAllowedOrigins,
+					Active: exec, Faults: faultLog, Cycles: cycleLog, Topology: disco2,
 					Arenas: arenaNamespaces, Events: broadcaster,
 					Auth: auth, Executor: exec, Catalog: srv.GatherCatalog, Translate: srv.TranslateIntent,
 					Install: webui.Install{
@@ -539,6 +542,8 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&uiAuth, "ui-auth", "none", "Web UI authentication: none (read-only, for a port-forward) or iap (Identity-Aware Proxy; --ui-writers may submit and clear faults)")
 	cmd.Flags().StringVar(&uiIAPAudience, "ui-iap-audience", "", "With --ui-auth=iap: the backend service's audience, /projects/NUMBER/global/backendServices/ID")
 	cmd.Flags().StringVar(&uiIAPProjectNumber, "ui-iap-project-number", "", "With --ui-auth=iap and no --ui-iap-audience: accept any backend service in this project number")
+	cmd.Flags().StringSliceVar(&uiAllowedOrigins, "ui-allowed-origins", nil, "Other pages that may call this controller's UI API from the browser with the user's credentials — another Simian's UI or the standalone UI, e.g. https://simian-2.example.com (repeatable). Empty: same origin only")
+	cmd.Flags().StringVar(&uiName, "ui-name", "", "How this controller is labelled in a UI that watches several Simians, e.g. its cluster's name")
 	cmd.Flags().StringSliceVar(&uiAdmins, "ui-admins", nil, "With --ui-auth=iap: who may also configure, pause and resume autonomous mode and clear all faults from the UI — emails, or domain:example.com (repeatable). Empty: nobody")
 	cmd.Flags().StringSliceVar(&uiWriters, "ui-writers", nil, "With --ui-auth=iap: who may submit and clear faults from the UI — emails, or domain:example.com (repeatable). Empty: nobody")
 	cmd.Flags().StringVar(&metricsAddr, "metrics-addr", ":9090", "Serve Prometheus metrics on this address (/metrics); empty disables")

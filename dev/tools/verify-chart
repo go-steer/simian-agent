@@ -150,6 +150,12 @@ if ! grep -qF "name: simian-runtime-config" <<<"$out" || ! grep -qF 'resourceNam
   fail=1
 fi
 
+echo "▸ a UI that watches several Simians: name and allowed origins render only when set"
+out="$(render sim-ui-multi --set ui.name=simian-iap --set 'ui.allowedOrigins={https://simian-2.example.com}')"
+expect_arg "ui-multi" "$out" "--ui-name=simian-iap"
+expect_arg "ui-multi" "$out" "--ui-allowed-origins=https://simian-2.example.com"
+reject_arg "ui-multi-default" "$(render sim-ui-multi-default)" "--ui-name="
+
 echo "▸ behind IAP the UI checks IAP's assertion, and writers may inject"
 out="$(render sim-ui-iap --set ui.auth=iap --set ui.iap.projectNumber=123456 \
   --set 'ui.iap.writers={alice@example.com,domain:sre.example.com}')"

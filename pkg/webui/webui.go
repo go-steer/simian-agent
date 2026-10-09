@@ -47,6 +47,12 @@ var webFS embed.FS
 // Deps are what the UI reads. Any may be nil; its panel then says so.
 type Deps struct {
 	Version string
+	// Name is how this controller is labelled in a UI that watches several,
+	// e.g. its cluster; empty leaves the UI to use the host.
+	Name string
+	// AllowedOrigins are the pages, other than this controller's own, that
+	// may call it from the browser with the user's credentials.
+	AllowedOrigins []string
 	// Active lists the faults held right now. *executor.Executor.
 	Active interface {
 		ListActive(ctx context.Context, namespace string) ([]simian.ActiveFault, error)
@@ -101,7 +107,7 @@ func Handler(d Deps) http.Handler {
 	mux.Handle("/ui/", http.StripPrefix("/ui/", http.FileServerFS(static)))
 	mux.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/", http.StatusFound) })
 	mux.HandleFunc("GET /api/info", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"version": d.Version, "autonomous": nonNil(d.autonomousNow())})
+		writeJSON(w, map[string]any{"version": d.Version, "name": d.Name, "autonomous": nonNil(d.autonomousNow())})
 	})
 	mux.HandleFunc("GET /api/arenas", func(w http.ResponseWriter, r *http.Request) {
 		if d.Arenas == nil {
@@ -168,7 +174,7 @@ func Handler(d Deps) http.Handler {
 	// passing through IAP. It says nothing about the controller's state.
 	top.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 	top.Handle("/", authenticated(auth, mux))
-	return top
+	return withCORS(d.AllowedOrigins, top)
 }
 
 // autonomousNow is the namespaces autonomous mode runs in now: from the
