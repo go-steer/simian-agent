@@ -49,6 +49,12 @@ spec:
             {{- range (dig "allowedOrigins" (list) .Values.ui) }}
             - --ui-allowed-origins={{ . }}
             {{- end }}
+            {{- range (dig "controllers" (list) .Values.ui) }}
+            {{- if not (and (kindIs "map" .) .name .url) }}
+            {{- fail "ui.controllers: each entry needs a name and a url, e.g. {name: simian-2, url: https://simian-2.example.com}" }}
+            {{- end }}
+            - --ui-controllers={{ .name }}={{ .url }}
+            {{- end }}
             {{- if ne (int .Values.ui.port) 8082 }}
             - --ui-addr=:{{ .Values.ui.port }}
             {{- end }}

@@ -165,9 +165,95 @@ kubectl -n simian-system exec deploy/simian-controller -- \
   `/healthz` answers without one. `ui.iap.audience` pins the exact backend
   service instead of any in the project.
 - **Writes** need the `X-Simian-UI` header, which a page on another site
-  cannot send with your IAP cookie.
+  cannot send with your IAP cookie — unless the controller lists that page
+  in `ui.allowedOrigins` ([several Simians](#several-simians-in-one-ui)).
 - **Every fault from the page goes through the executor**: arenas only, no
   excluded workloads, within the duration and concurrency limits.
+
+## Several Simians in one UI
+
+One page can watch and drive several Simians — one controller per cluster,
+say. The browser calls each controller directly, signed in to each one's IAP
+as you, so each still checks who you are and records what you do in its own
+audit trail; nothing sits in between. Pick one from the switcher next to the
+arena, or click it in the strip along the bottom, which shows every Simian's
+state, running faults, autonomous mode and your role there.
+
+**1. Choose the page.** Either one of the controllers' own pages, with the
+others listed in its chart values:
+
+```bash
+helm upgrade simian deploy/helm/simian -n simian-system --reuse-values \
+    --set 'ui.controllers[0].name=simian-2' \
+    --set 'ui.controllers[0].url=https://simian-2.example.com'
+```
+
+or the standalone UI — the same image, running `simian web` instead of
+`simian serve`, behind IAP of its own like any page:
+
+```bash
+simian web --addr :8080 \
+    --controllers simian-1=https://simian.example.com \
+    --controllers simian-2=https://simian-2.example.com
+```
+
+Either way users can add more by URL in the page (**⧉**, or the name in the
+header), kept in their browser. A URL is the controller UI's origin, e.g.
+`https://simian-2.example.com`.
+
+**2. Let the page call each controller.** Every controller the page should
+reach lists the page's origin in `ui.allowedOrigins`:
+
+```bash
+helm upgrade simian deploy/helm/simian -n simian-system --reuse-values \
+    --set 'ui.allowedOrigins={https://simian.example.com}'
+```
+
+Only listed origins get CORS headers, with credentials; any other page gets
+answers it cannot read.
+
+**3. Let IAP pass the CORS preflight.** Reads go straight through, but
+injecting, clearing and halting send `X-Simian-UI`, so the browser asks first
+with an `OPTIONS` request that carries no cookie — and IAP turns that away
+unless told not to. On each controller's backend service (`$BACKEND` from
+step 4):
+
+```bash
+cat > iap-cors.yaml <<'YAML'
+access_settings:
+  cors_settings:
+    allow_http_options: true
+YAML
+gcloud iap settings set iap-cors.yaml --resource-type=backend-services \
+    --service="$BACKEND" --project "$GOOGLE_CLOUD_PROJECT"
+```
+
+The controller answers the preflight itself, for listed origins only; the
+real request still needs IAP's assertion. Whether `GCPBackendPolicy` (the
+Gateway path) or `BackendConfig` (Ingress) can set this instead of
+`gcloud iap settings` is still to be confirmed on GKE.
+
+**4. Sign in once per controller.** IAP signs you in only on a visit to the
+controller's own page, not on a call from another page. A Simian you have
+not signed in to shows **not allowed / sign in**, with a **Sign in to …**
+button that opens its page in a new tab; come back and the page tries again.
+The same state means the controller does not list this page in
+`ui.allowedOrigins` — the browser does not say which, so the page names
+both.
+
+**Check:** the strip shows each Simian **live** with your role there;
+inject a fault on one, and its audit export (step 5) has your email in
+`requested_by` — on that controller, not the page's.
+
+**If not:** writes fail with *did not answer this page* while reads work:
+the preflight is not getting through IAP (step 3). Every call fails: sign
+in to that Simian, then check its `ui.allowedOrigins` lists the page's
+origin exactly (scheme, host and any port).
+
+Controllers on hostnames under one domain (`simian.example.com`,
+`simian-2.example.com`) are one site to the browser; across different
+sites, a browser that blocks third-party cookies may not send IAP's cookie
+with the call.
 
 ## Accounts outside the organization
 

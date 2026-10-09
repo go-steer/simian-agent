@@ -150,11 +150,20 @@ if ! grep -qF "name: simian-runtime-config" <<<"$out" || ! grep -qF 'resourceNam
   fail=1
 fi
 
-echo "▸ a UI that watches several Simians: name and allowed origins render only when set"
+echo "▸ a UI that watches several Simians: name, allowed origins and controllers render only when set"
 out="$(render sim-ui-multi --set ui.name=simian-iap --set 'ui.allowedOrigins={https://simian-2.example.com}')"
 expect_arg "ui-multi" "$out" "--ui-name=simian-iap"
 expect_arg "ui-multi" "$out" "--ui-allowed-origins=https://simian-2.example.com"
 reject_arg "ui-multi-default" "$(render sim-ui-multi-default)" "--ui-name="
+out="$(render sim-ui-controllers --set 'ui.controllers[0].name=simian-2' --set 'ui.controllers[0].url=https://simian-2.example.com' \
+  --set 'ui.controllers[1].name=simian-3' --set 'ui.controllers[1].url=https://simian-3.example.com')"
+expect_arg "ui-controllers" "$out" "--ui-controllers=simian-2=https://simian-2.example.com"
+expect_arg "ui-controllers" "$out" "--ui-controllers=simian-3=https://simian-3.example.com"
+reject_arg "ui-controllers-default" "$(render sim-ui-controllers-default)" "--ui-controllers="
+if helm template sim-ui-controllers-bad "$CHART" --set llm.vertex.project=verify-project --set 'ui.controllers[0].name=simian-2' >/dev/null 2>&1; then
+  echo "✗ ui-controllers-bad: an entry without a url should fail to render" >&2
+  fail=1
+fi
 
 echo "▸ behind IAP the UI checks IAP's assertion, and writers may inject"
 out="$(render sim-ui-iap --set ui.auth=iap --set ui.iap.projectNumber=123456 \
