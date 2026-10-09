@@ -44,7 +44,7 @@ image:
   # silently change the running binary.
   # Must be at least the chart's appVersion: the chart renders flags
   # (e.g. --audit-file) an older binary refuses. verify-chart checks it.
-  tag: "0.4.0-rc.4"
+  tag: "0.4.0-rc.5"
   # IfNotPresent matches the chart default; explicit for clarity.
   pullPolicy: IfNotPresent
 
@@ -178,6 +178,12 @@ resources:
 # ============================================================
 # Hardening log — what is "baked" and as of when
 # ============================================================
+#
+# 2026-10-09 (chart 0.4.0-rc.5):
+#   - image pin moved to 0.4.0-rc.5: an inject answers within 15s and is
+#     followed live (#254); the IAP load balancer's timeout is 300s
+#     (ui.iap.timeoutSec); the Inject pane is a terminal, with a
+#     conversation for Describe it (#255).
 #
 # 2026-10-09 (chart 0.4.0-rc.4):
 #   - image pin moved to 0.4.0-rc.4: an emergency halt for admins (#251,
