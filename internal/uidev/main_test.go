@@ -18,14 +18,18 @@
 //	SIMIAN_UIDEV=:18090 go test ./internal/uidev -run TestServe -timeout 0
 //
 // SIMIAN_UIDEV_AS sets the signed-in user (default a writer); "none" serves
-// it as behind a port-forward. Skipped unless SIMIAN_UIDEV is set.
+// it as behind a port-forward. SIMIAN_UIDEV_SLOW (e.g. 20s) makes an apply
+// outlast the server's wait, so the page sees a 202. Skipped unless
+// SIMIAN_UIDEV is set.
 package uidev
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -54,35 +58,119 @@ func (w *world) emit(ctx context.Context, e simian.AuditEvent) {
 	w.events.Emit(ctx, e)
 }
 
+// Apply plays the executor's sequence of audit events, with the shapes
+// pkg/executor emits, at a pace a person can watch: received, validated,
+// (precheck), driver.applied with its deadline and verified_by,
+// lease.registered, then — before Apply returns, as the real one waits for
+// them — fault.injected and one fault.efficacy per settle probe. At the
+// deadline the lease expires and recovery is checked, as the reaper and
+// CheckRecovery do. Workload loadgenerator is refused as excluded; a second
+// fault while one runs is refused for the budget (maxConcurrentFaults 1);
+// redis-cart does not recover. SIMIAN_UIDEV_SLOW (a duration) holds the
+// settle wait that long, so a submit outlasts the 15s the server waits and
+// answers 202.
 func (w *world) Apply(ctx context.Context, m simian.FaultManifest) (string, error) {
 	w.mu.Lock()
 	w.n++
-	uid := fmt.Sprintf("f-01UIDEV%04d", w.n)
-	if m.Targets[0].Name == "loadgenerator" {
-		// Refused, and recorded as the executor records it, so the page
-		// has a refused row to show.
-		w.mu.Unlock()
-		m.UID = uid
-		rec := m.AuditRecord()
-		if a := simian.ActorFrom(ctx); a != "" {
-			rec["actor"] = a
-		}
-		w.emit(ctx, simian.AuditEvent{Event: audit.EventExecutorReceived, FaultUID: uid, Mode: m.Source, Payload: rec})
-		w.emit(ctx, simian.AuditEvent{Event: audit.EventExecutorRejected, FaultUID: uid, Mode: m.Source, Reason: string(simian.ReasonWorkloadExcluded),
-			Payload: map[string]any{"error": "executor[safety:workload-excluded]: workload Deployment/loadgenerator is excluded from chaos"}})
-		return "", &simian.ExecutorError{Stage: simian.StageSafety, Reason: simian.ReasonWorkloadExcluded, Message: "workload Deployment/loadgenerator is excluded from chaos"}
+	if m.UID == "" {
+		m.UID = fmt.Sprintf("f-01UIDEV%04d", w.n)
 	}
-	m.UID = uid
-	now := time.Now().UTC()
-	w.active = append(w.active, simian.ActiveFault{FaultUID: uid, Manifest: m, AppliedAt: now, Deadline: now.Add(m.Duration)})
+	uid := m.UID
+	busy := len(w.active) > 0
 	w.mu.Unlock()
 	rec := m.AuditRecord()
 	if a := simian.ActorFrom(ctx); a != "" {
 		rec["actor"] = a
 	}
 	w.emit(ctx, simian.AuditEvent{Event: audit.EventExecutorReceived, FaultUID: uid, Mode: m.Source, Payload: rec})
-	w.emit(ctx, simian.AuditEvent{Event: audit.EventDriverApplied, FaultUID: uid, Mode: m.Source, Payload: m.AuditRecord()})
+	refuse := func(stage simian.ExecutorStage, reason simian.RejectionReason, msg string) error {
+		err := &simian.ExecutorError{Stage: stage, Reason: reason, Message: msg}
+		w.emit(ctx, simian.AuditEvent{Event: audit.EventExecutorRejected, FaultUID: uid, Mode: m.Source, Reason: string(reason),
+			Payload: map[string]any{"error": err.Error()}})
+		return err
+	}
+	target := m.Targets[0]
+	switch {
+	case target.Name == "loadgenerator":
+		return "", refuse(simian.StageSafety, simian.ReasonWorkloadExcluded,
+			fmt.Sprintf("workload %q in namespace %q is excluded", target.Name, target.Namespace))
+	case m.Duration > 5*time.Minute:
+		return "", refuse(simian.StageSafety, simian.ReasonDurationOverCeiling,
+			fmt.Sprintf("duration %s exceeds ceiling 5m0s", m.Duration))
+	case busy:
+		return "", refuse(simian.StageSafety, simian.ReasonBudgetExceeded, "max concurrent faults reached (1)")
+	}
+	m.Targets[0].Labels = map[string]string{"app": target.Name}
+	var probes []string
+	if m.ResourceKind == "NetworkChaos" {
+		probes = []string{"simian-fast-before", "simian-delayed"}
+	}
+	validated := map[string]any{"target_labels_from_workload": []string{target.Namespace + "/" + target.Name}}
+	if len(probes) > 0 {
+		validated["default_probes"] = probes
+	}
+	w.emit(ctx, simian.AuditEvent{Event: audit.EventExecutorValidated, FaultUID: uid, Mode: m.Source, Payload: validated})
+	time.Sleep(300 * time.Millisecond)
+	if len(probes) > 0 {
+		w.emit(ctx, simian.AuditEvent{Event: audit.EventFaultPrecheck, FaultUID: uid, Mode: m.Source,
+			Payload: map[string]any{"probe": probes[0], "type": "tcp", "mode": "sot", "passed": true, "attempts": 1, "elapsed_ms": 140}})
+	}
+	now := time.Now().UTC()
+	deadline := now.Add(m.Duration)
+	w.mu.Lock()
+	w.active = append(w.active, simian.ActiveFault{FaultUID: uid, Manifest: m, AppliedAt: now, Deadline: deadline})
+	w.mu.Unlock()
+	applied := m.AuditRecord()
+	applied["engine_uid"] = "8d1c" + uid[len(uid)-6:]
+	applied["deadline"] = deadline.Format(time.RFC3339)
+	applied["verified_by"] = append([]string{"engine-status"}, probes[min(1, len(probes)):]...)
+	w.emit(ctx, simian.AuditEvent{Event: audit.EventDriverApplied, FaultUID: uid, Mode: m.Source, Payload: applied})
+	w.emit(ctx, simian.AuditEvent{Event: audit.EventLeaseRegistered, FaultUID: uid, Mode: m.Source})
+	time.AfterFunc(m.Duration, func() { w.expire(uid) })
+
+	time.Sleep(time.Second)
+	w.emit(ctx, simian.AuditEvent{Event: audit.EventFaultInjected, FaultUID: uid, Mode: m.Source,
+		Payload: map[string]any{"passed": true, "observed": "AllInjected=True", "elapsed_ms": 900}})
+	if slow, err := time.ParseDuration(os.Getenv("SIMIAN_UIDEV_SLOW")); err == nil {
+		time.Sleep(slow)
+	} else {
+		time.Sleep(time.Second)
+	}
+	if len(probes) > 1 {
+		w.emit(ctx, simian.AuditEvent{Event: audit.EventFaultEfficacy, FaultUID: uid, Mode: m.Source,
+			Payload: map[string]any{"probe": probes[1], "type": "tcp", "mode": "settle", "passed": true, "observed": "connect 312ms", "expected": ">= 125ms", "attempts": 2, "elapsed_ms": 2100}})
+	}
 	return uid, nil
+}
+
+// expire is the reaper at the deadline, then CheckRecovery: Chaos Mesh
+// faults only, and only for a fault that ran out (a cleared one is not
+// checked).
+func (w *world) expire(uid string) {
+	ctx := context.Background()
+	w.mu.Lock()
+	var af *simian.ActiveFault
+	for i, f := range w.active {
+		if f.FaultUID == uid {
+			af = &f
+			w.active = append(w.active[:i], w.active[i+1:]...)
+			break
+		}
+	}
+	w.mu.Unlock()
+	if af == nil {
+		return // cleared before its deadline
+	}
+	w.emit(ctx, simian.AuditEvent{Event: audit.EventLeaseExpired, FaultUID: uid, Reason: "deadline-reached"})
+	if af.Manifest.Engine != simian.EngineChaosMesh {
+		return
+	}
+	time.Sleep(2 * time.Second)
+	p := map[string]any{"passed": true, "waited": "2s"}
+	if t := af.Manifest.Targets[0]; t.Name == "redis-cart" {
+		p = map[string]any{"passed": false, "waited": "5m0s", "unready": []string{t.Namespace + "/redis-cart-x: CrashLoopBackOff"}}
+	}
+	w.emit(ctx, simian.AuditEvent{Event: audit.EventFaultRecovered, FaultUID: uid, Mode: af.Manifest.Source, Payload: p})
 }
 
 func (w *world) Clear(ctx context.Context, uid string) error {
@@ -159,8 +247,14 @@ func TestServe(t *testing.T) {
 			}, nil
 		},
 		Translate: func(_ context.Context, intent, ns string, d time.Duration) (simian.FaultManifest, error) {
+			if strings.Contains(intent, "nonsense") {
+				return simian.FaultManifest{}, errors.New("translate: the model's answer is not a fault: no catalog kind matches")
+			}
+			time.Sleep(1200 * time.Millisecond) // the LLM takes a moment
 			return simian.FaultManifest{Engine: simian.EngineChaosMesh, APIVersion: "chaos-mesh.org/v1alpha1", ResourceKind: "NetworkChaos",
-				Spec: map[string]any{"action": "delay"}, Targets: []simian.TargetRef{{Namespace: ns, Name: "cartservice"}}, Duration: d, Rationale: intent}, nil
+				Spec:    map[string]any{"action": "delay", "mode": "all", "delay": map[string]any{"latency": "300ms", "correlation": "0", "jitter": "50ms"}},
+				Targets: []simian.TargetRef{{Namespace: ns, Name: "cartservice"}}, Duration: d,
+				Rationale: "Asked: \"" + intent + "\". cartservice sits on the checkout path (frontend → checkout → cart), so delaying its traffic slows checkout without taking it down."}, nil
 		},
 	})
 	t.Logf("serving the UI at http://localhost%s/ui/", addr)

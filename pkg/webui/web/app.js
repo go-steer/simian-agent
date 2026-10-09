@@ -26,23 +26,97 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const time = (t) => (t && !t.startsWith("0001") ? new Date(t).toLocaleTimeString() : "–");
 const q = (path) => path + (state.arena ? (path.includes("?") ? "&" : "?") + "namespace=" + encodeURIComponent(state.arena) : "");
 
-async function get(path) {
-  const r = await fetch(path, { cache: "no-store" });
-  if (!r.ok) throw new Error(path + ": " + r.status);
-  return r.json();
+// ─── Talking to Simian ──────────────────────────────────────────────
+// Behind IAP and a load balancer, not every answer comes from Simian: the
+// load balancer times out (504 "upstream request timeout") or cannot reach
+// it (502/503, often an HTML page), and an expired sign-in turns into a
+// redirect to Google. Those must not read as Simian refusing, so they are
+// thrown as a NotSimian error that says what happened. Simian's own
+// errors are plain text and never 503, 504 or a redirect.
+
+class NotSimian extends Error {
+  constructor(why, status, body) {
+    const [head, tail] = NOT_SIMIAN[why];
+    super(head + (status ? ` (HTTP ${status}${snippet(body)})` : "") + ". " + tail);
+    this.why = why;
+    this.status = status;
+    this.body = body;
+    // A sign-in redirect is answered before the request reaches Simian.
+    this.reachedSimian = why !== "signin";
+  }
 }
 
-// post sends a write. X-Simian-UI is what the server requires of every
-// write, so a page on another site cannot make one with the user's cookie.
-async function post(path, body) {
-  const r = await fetch(path, {
-    method: "POST", cache: "no-store",
+// What happened, then what it means.
+const NOT_SIMIAN = {
+  timeout: ["The connection to Simian failed: the load balancer in front of it timed out waiting for the answer", "That is not Simian refusing."],
+  gateway: ["The connection to Simian failed: the load balancer could not reach it", "Simian may be restarting; that is not Simian refusing."],
+  signin: ["Your sign-in has expired: Identity-Aware Proxy answered instead of Simian", "Reload the page to sign in again."],
+  network: ["The connection to Simian failed: the request did not complete", "The network dropped, or your sign-in expired (reload the page if it keeps happening)."],
+  foreign: ["Something other than Simian answered (a proxy or load balancer page)", "That is not Simian refusing."],
+};
+
+function snippet(body) {
+  const t = String(body || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  return t && t.length < 80 ? ` “${t}”` : "";
+}
+
+// notSimian says whether a failed response came from something in front
+// of Simian, and if so what kind of thing went wrong.
+function notSimian(status, type, text) {
+  const html = /html/i.test(type) || /^\s*</.test(text);
+  // What Envoy and Google's front ends say; Simian's own 502s carry a Go
+  // error instead.
+  const proxyText = /^\s*(upstream|no healthy upstream)|bad gateway|service unavailable/i.test(text);
+  if (status === 401 || (html && /accounts\.google\.com|ServiceLogin/i.test(text))) return "signin";
+  if (status === 504 || status === 408 || (status === 502 && /upstream request timeout|gateway time-?out/i.test(text))) return "timeout";
+  if (status === 503 || (status === 502 && (html || proxyText || !text.trim()))) return "gateway";
+  if (html) return "foreign";
+  return "";
+}
+
+// call fetches from Simian. Redirects are not followed: none of /api/
+// redirects, so one is IAP sending the browser to sign in.
+async function call(path, init) {
+  let r;
+  try {
+    r = await fetch(path, Object.assign({ cache: "no-store", redirect: "manual" }, init));
+  } catch (e) {
+    throw new NotSimian("network", 0, "");
+  }
+  if (r.type === "opaqueredirect" || (r.status >= 300 && r.status < 400)) throw new NotSimian("signin", r.status || 0, "");
+  const text = await r.text();
+  const type = r.headers.get("Content-Type") || "";
+  const why = notSimian(r.status, type, text);
+  if (why) throw new NotSimian(why, r.status, text);
+  if (!r.ok) {
+    const e = new Error(text.trim() || String(r.status));
+    e.status = r.status;
+    throw e;
+  }
+  return { status: r.status, data: text ? JSON.parse(text) : {} };
+}
+
+// refusal words a failed write: Simian's refusal, or — when something in
+// front of Simian answered — what actually happened.
+const refusal = (e) => (e instanceof NotSimian ? e.message : "Refused: " + e.message);
+
+async function get(path) {
+  return (await call(path)).data;
+}
+
+// send makes a write and answers {status, data}. X-Simian-UI is what the
+// server requires of every write, so a page on another site cannot make
+// one with the user's cookie.
+function send(path, body) {
+  return call(path, {
+    method: "POST",
     headers: { "Content-Type": "application/json", "X-Simian-UI": "1" },
     body: body === undefined ? "" : JSON.stringify(body),
   });
-  const text = await r.text();
-  if (!r.ok) throw new Error(text.trim() || r.status);
-  return text ? JSON.parse(text) : {};
+}
+
+async function post(path, body) {
+  return (await send(path, body)).data;
 }
 
 function target(t) {
@@ -396,7 +470,7 @@ function setupHalt() {
       refresh();
     } catch (e) {
       $("halt-result").className = "bad";
-      $("halt-result").textContent = "Refused: " + e.message;
+      $("halt-result").textContent = refusal(e);
       $("halt-go").disabled = false;
     }
   };
@@ -440,7 +514,7 @@ async function adminAction(path, body, out, done) {
     refresh();
   } catch (e) {
     $(out).className = "bad";
-    $(out).textContent = "Refused: " + e.message;
+    $(out).textContent = refusal(e);
   }
 }
 
@@ -505,10 +579,19 @@ function connect() {
     $("st-stream").textContent = on ? "stream: live" : "stream: reconnecting";
     $("st-stream").className = "status-item" + (on ? "" : " status-bad");
   };
-  es.onopen = () => live(true);
-  es.onerror = () => live(false); // EventSource reconnects by itself
+  let dropped = false;
+  es.onopen = () => {
+    live(true);
+    // Back after a drop: the stream replays recent events, and
+    // /api/faults fills in anything older for the faults being followed.
+    if (dropped) backfillAll();
+    dropped = false;
+  };
+  es.onerror = () => { live(false); dropped = true; }; // EventSource reconnects by itself
   es.onmessage = (m) => {
-    addEvent(JSON.parse(m.data));
+    const e = JSON.parse(m.data);
+    onStream(e);
+    addEvent(e);
     refreshSoon();
   };
 }
@@ -569,52 +652,598 @@ async function setupInject(arenas) {
   for (const c of state.catalog) $("f-kind").add(new Option(c.resource_kind + " (" + c.engine + ")", c.resource_kind));
   $("f-kind").onchange = fillSpec;
   fillSpec();
-  document.querySelectorAll("input[name=mode]").forEach((el) => {
-    el.onchange = () => {
-      const intent = document.querySelector("input[name=mode]:checked").value === "intent";
-      $("f-exact").hidden = intent;
-      $("f-workload-label").hidden = intent; // the LLM picks the target
-      $("f-intent").hidden = !intent;
-    };
+  document.querySelectorAll("input[name=mode]").forEach((el) => { el.onchange = showMode; });
+  showMode();
+  $("f-text").addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
+      ev.preventDefault();
+      $("inject").requestSubmit();
+    }
   });
-  $("inject").onsubmit = async (ev) => {
+  $("inject").onsubmit = (ev) => {
     ev.preventDefault();
-    const mode = document.querySelector("input[name=mode]:checked").value;
-    const body = { mode, namespace: $("f-arena").value, workload: $("f-workload").value, duration: $("f-duration").value.trim() };
-    let what;
-    if (mode === "intent") {
-      body.intent = $("f-text").value.trim();
-      what = `"${body.intent}" in ${body.namespace}`;
-    } else {
-      const c = state.catalog[$("f-kind").selectedIndex] || {};
-      body.kind = c.resource_kind;
-      body.engine = c.engine;
-      try { body.spec = JSON.parse($("f-spec").value || "{}"); } catch (e) {
-        $("f-result").className = "bad";
-        $("f-result").textContent = "The spec is not valid JSON: " + e.message;
-        return;
-      }
-      what = `${body.kind} into ${body.namespace}/${body.workload || "(no workload)"}`;
-    }
-    if (!confirm(`Inject ${what} for ${body.duration}?`)) return;
-    $("f-result").className = "";
-    $("f-result").textContent = mode === "intent" ? "Asking the LLM…" : "Applying…";
-    try {
-      const res = await post("/api/faults", body);
-      $("f-result").className = "ok";
-      $("f-result").textContent = `Applied ${res.kind} as ${res.fault_uid}.`;
-      refreshSoon();
-    } catch (e) {
-      $("f-result").className = "bad";
-      $("f-result").textContent = "Refused: " + e.message;
-    }
+    if (mode() === "intent") describe();
+    else review();
   };
+  $("f-log").addEventListener("click", onCardClick);
+  $("f-log-clear").onclick = () => {
+    $("f-log").innerHTML = "";
+    welcome();
+    attendInject();
+  };
+  welcome();
   $("active").addEventListener("click", async (ev) => {
     const b = ev.target.closest("button.clear");
     if (!b || !confirm(`Clear ${b.dataset.uid} now?`)) return;
     b.disabled = true;
     try { await post("/api/faults/" + encodeURIComponent(b.dataset.uid) + "/clear"); refreshSoon(); } catch (e) { alert("Could not clear: " + e.message); b.disabled = false; }
   });
+}
+
+const mode = () => document.querySelector("input[name=mode]:checked").value;
+
+function showMode() {
+  const intent = mode() === "intent";
+  $("f-exact").hidden = intent;
+  $("f-workload-label").hidden = intent; // the LLM picks the target
+  $("f-kind-label").hidden = intent; // and the kind
+  $("f-intent").hidden = !intent;
+  $("f-submit").textContent = intent ? "Send" : "Inject…";
+  $("f-submit").classList.toggle("send", intent);
+  $("f-submit").title = intent
+    ? "Ask the LLM for a fault; it proposes one and nothing is applied until you inject it"
+    : "Review the fault in the log, then inject it from there";
+  $("f-result").textContent = "";
+}
+
+// ─── The log ────────────────────────────────────────────────────────
+// A terminal both modes write to: what you asked, what Simian proposed,
+// and each stage of a fault as the audit trail records it. Newest at the
+// bottom; the last LOG_MAX lines; nothing kept after the page goes.
+
+const LOG_MAX = 100;
+const clock = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+
+// say appends a line. who is "you", "simian", or "" for a fault's stage
+// (mark is then its ✓/✗); cls colours it: ok, bad, warn, info, dim.
+function say({ who = "", mark = "", cls = "", html = "", tag = "", detail = "" }) {
+  const log = $("f-log");
+  const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  const li = document.createElement("li");
+  li.className = "ln" + (who ? " " + who : " stage") + (cls ? " " + cls : "");
+  li.title = new Date().toLocaleString();
+  const lead = who ? `<span class="who">${who} ›</span>` : `<span class="mark">${mark}</span>`;
+  li.innerHTML = `<span class="ts">${clock()}</span> ${lead} <span class="msg">${html}` +
+    (tag ? ` <span class="uid">${esc(tag)}</span>` : "") +
+    (detail ? `<span class="detail">${esc(detail)}</span>` : "") + "</span>";
+  log.append(li);
+  while (log.children.length > LOG_MAX) log.firstElementChild.remove();
+  if (stick) log.scrollTop = log.scrollHeight;
+  return li;
+}
+
+// update rewrites a line said earlier: "translating…" becomes the answer.
+function update(li, { cls = "", html = "", detail = "" }) {
+  li.classList.remove("working", "ok", "bad", "warn", "info", "dim");
+  if (cls) li.classList.add(...cls.split(" "));
+  li.querySelector(".msg").innerHTML = html + (detail ? `<span class="detail">${esc(detail)}</span>` : "");
+}
+
+function welcome() {
+  say({ who: "simian", cls: "dim", html: "Ready. Name a fault (Exact) or say what should go wrong (Describe it). It goes through the CLI's safety checks, and the audit trail records it in your name." });
+  // In the room the pane is small where it stands; say how to get more.
+  setTimeout(() => {
+    if (document.body.classList.contains("room") && $("f-log").clientHeight < 150 && !$("inject-panel").closest(".panel-anchor").classList.contains("centred")) {
+      say({ who: "simian", cls: "dim", html: "Short on room here: □ at the top right (or a double-click on the title) brings this pane to the middle; the corner grip resizes it." });
+    }
+  }, 800);
+}
+
+// The inject pane's glow: amber while a fault it started is being
+// followed, rose when the last thing it did failed.
+let injectTrouble = false;
+function attendInject(trouble) {
+  if (trouble !== undefined) injectTrouble = trouble;
+  const following = [...follows.values()].some((f) => !f.done);
+  attend("inject-panel", injectTrouble ? "bad" : following ? "warn" : "");
+}
+
+const shortDur = (d) => String(d || "").replace(/(\d)m0s$/, "$1m").replace(/(\d)h0m$/, "$1h");
+const short = (uid) => "…" + String(uid).slice(-6);
+
+// ─── Proposals ──────────────────────────────────────────────────────
+// Both modes stage the fault as a card in the log before anything is
+// applied: the LLM's proposal, or the exact fault for review. The card's
+// Inject button is the confirmation.
+
+const proposals = new Map();
+let proposalSeq = 0;
+
+function card(p, from) {
+  const id = "p" + ++proposalSeq;
+  proposals.set(id, Object.assign({ from }, p));
+  const spec = JSON.stringify(p.spec || {}, null, 2);
+  const oneLine = JSON.stringify(p.spec || {});
+  const li = say({ who: "simian", html: from === "llm" ? "Here is the fault I would inject. Nothing is applied until you press Inject." : "Ready to inject. Check it, then press Inject." });
+  const box = document.createElement("li");
+  box.className = "ln card-ln";
+  box.innerHTML = `<div class="proposal" data-id="${id}">
+      <div class="p-head"><span class="p-label">${from === "llm" ? "proposal" : "review"}</span><span class="kind">${esc(p.kind)}</span><span class="badge">${esc(p.engine)}</span></div>
+      <dl class="p-grid">
+        <dt>target</dt><dd>${esc(p.namespace)}/${esc(p.workload || "(whole arena)")}</dd>
+        <dt>for</dt><dd>${esc(shortDur(p.duration))}</dd>
+        ${p.rationale ? `<dt>why</dt><dd class="p-why">${esc(p.rationale)}</dd>` : ""}
+      </dl>
+      <details class="p-spec"><summary>spec <span class="p-peek">${esc(oneLine.length > 60 ? oneLine.slice(0, 57) + "…" : oneLine)}</span></summary><pre>${esc(spec)}</pre></details>
+      <div class="p-actions">
+        <button type="button" class="p-inject" title="Inject this fault now">↯ Inject</button>
+        ${from === "llm" ? '<button type="button" class="p-edit" title="Copy it into the Exact form to change it first">Edit as exact</button>' : ""}
+        <button type="button" class="p-discard">Discard</button>
+        <span class="p-state"></span>
+      </div>
+    </div>`;
+  li.after(box);
+  roomToRead(box);
+  const log = $("f-log");
+  log.scrollTop = log.scrollHeight;
+  return id;
+}
+
+// roomToRead: in the room the pane is small where it stands. The first
+// time a card will not fit in the log, bring the pane to the middle (□,
+// Escape or a double-click puts it back); after that, only the tip.
+let centredOnce = false;
+function roomToRead(box) {
+  const room = window.SimianRoom;
+  const anchor = $("inject-panel").closest(".panel-anchor");
+  if (centredOnce || !room || !document.body.classList.contains("room") || anchor.classList.contains("centred")) return;
+  if (box.offsetHeight + 40 <= $("f-log").clientHeight) return;
+  centredOnce = true;
+  const pane = (room.panes || []).find((p) => p.id === "inject");
+  if (pane) room.centre(pane);
+}
+
+// settle marks a card used, so its buttons cannot act twice.
+function settleCard(el, text) {
+  el.classList.add("used");
+  el.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+  el.querySelector(".p-state").textContent = text;
+  proposals.delete(el.dataset.id);
+}
+
+// Only the newest card is live: staging another retires the rest.
+function retireCards() {
+  document.querySelectorAll("#f-log .proposal:not(.used)").forEach((el) => settleCard(el, "superseded"));
+}
+
+async function onCardClick(ev) {
+  const b = ev.target.closest(".p-actions button");
+  if (!b) return;
+  const el = b.closest(".proposal");
+  const p = proposals.get(el.dataset.id);
+  if (!p) return;
+  if (b.classList.contains("p-discard")) {
+    settleCard(el, "discarded");
+    say({ who: "simian", cls: "dim", html: "Discarded. Nothing was applied." });
+  } else if (b.classList.contains("p-edit")) {
+    settleCard(el, "copied to Exact");
+    await editAsExact(p);
+  } else if (b.classList.contains("p-inject")) {
+    settleCard(el, "submitted");
+    submit(p);
+  }
+}
+
+async function editAsExact(p) {
+  document.querySelector("input[name=mode][value=manifest]").checked = true;
+  showMode();
+  if ($("f-arena").value !== p.namespace) {
+    $("f-arena").value = p.namespace;
+    await loadWorkloads();
+  }
+  const wl = $("f-workload");
+  if (p.workload && ![...wl.options].some((o) => o.value === p.workload)) wl.add(new Option(p.workload, p.workload));
+  wl.value = p.workload || "";
+  const i = state.catalog.findIndex((c) => c.resource_kind === p.kind && (!p.engine || c.engine === p.engine));
+  if (i >= 0) {
+    $("f-kind").selectedIndex = i;
+    fillSpec();
+  }
+  $("f-spec").value = JSON.stringify(p.spec || {}, null, 2);
+  $("f-duration").value = shortDur(p.duration);
+  say({ who: "simian", cls: "dim", html: "Copied into the Exact form: change what you like, then Inject…" });
+  $("f-spec").focus();
+}
+
+// review stages the Exact form's fault as a card.
+function review() {
+  const c = state.catalog[$("f-kind").selectedIndex] || {};
+  let spec;
+  try { spec = JSON.parse($("f-spec").value || "{}"); } catch (e) {
+    $("f-result").className = "bad";
+    $("f-result").textContent = "The spec is not valid JSON: " + e.message;
+    return;
+  }
+  $("f-result").textContent = "";
+  const p = { engine: c.engine, kind: c.resource_kind, namespace: $("f-arena").value, workload: $("f-workload").value, spec, duration: $("f-duration").value.trim() };
+  retireCards();
+  say({ who: "you", html: `${esc(p.kind)} → ${esc(p.namespace)}/${esc(p.workload || "(whole arena)")} for ${esc(p.duration)}` });
+  card(p, "exact");
+}
+
+// describe asks the LLM for a proposal; it applies nothing.
+let translating = false;
+async function describe() {
+  const intent = $("f-text").value.trim();
+  if (!intent) {
+    $("f-result").className = "bad";
+    $("f-result").textContent = "Say what should go wrong first.";
+    return;
+  }
+  if (translating) return;
+  $("f-result").textContent = "";
+  translating = true;
+  $("f-submit").disabled = true;
+  retireCards();
+  const body = { namespace: $("f-arena").value, intent, duration: $("f-duration").value.trim() };
+  say({ who: "you", html: esc(intent) });
+  const li = say({ who: "simian", cls: "working", html: `translating with the LLM <span class="muted">(${esc(body.namespace)}, ${esc(body.duration)})</span>` });
+  try {
+    const { data } = await send("/api/translate", body);
+    update(li, { cls: "dim", html: `translated <span class="muted">(${esc(body.namespace)}, ${esc(body.duration)})</span>` });
+    card(data, "llm");
+  } catch (e) {
+    if (e instanceof NotSimian) {
+      update(li, { cls: "bad", html: esc(e.message) + " Nothing was applied: a translation never applies anything. Try again." });
+    } else {
+      update(li, { cls: "bad", html: "I could not turn that into a fault. Nothing was applied; try saying it another way, or use Exact.", detail: e.message });
+    }
+  } finally {
+    translating = false;
+    $("f-submit").disabled = false;
+  }
+}
+
+// resetAfterSuccess clears what was sent, keeping where it went: the
+// describe text goes; Exact keeps arena, workload and duration and gets
+// the kind's template back.
+function resetAfterSuccess() {
+  $("f-text").value = "";
+  fillSpec();
+}
+
+// ─── Submitting and following ───────────────────────────────────────
+// A submit is an exact one (mode "manifest"), however it was staged. The
+// server answers 200 when the executor has finished (applied, injected,
+// its effect seen), 422 with the executor's refusal, or 202 "applying"
+// when it takes longer than its wait. Either way the fault is followed on
+// the event stream by its UID until it has ended and its recovery is
+// known, with /api/faults to fill in anything the stream missed.
+
+const follows = new Map(); // fault UID → what is known of it
+const byUID = new Map(); // fault UID → the stream's events for it, as they came
+const FOLLOW_FOR = 10 * 60 * 1000;
+let awaiting = null; // a submit whose UID is not known yet
+
+// remember keeps the stream's events per fault, so a fault followed once
+// its UID is known replays what came first.
+function remember(e) {
+  if (!e.fault_uid) return;
+  if (!byUID.has(e.fault_uid)) {
+    byUID.set(e.fault_uid, []);
+    if (byUID.size > 400) byUID.delete(byUID.keys().next().value);
+  }
+  byUID.get(e.fault_uid).push(e);
+}
+
+// onStream is every event from /api/events.
+function onStream(e) {
+  const fresh = e.fault_uid && !byUID.has(e.fault_uid);
+  remember(e);
+  if (fresh && awaiting && e.event === "executor.received" && isOurs(e, awaiting)) adopt(e.fault_uid);
+  const f = follows.get(e.fault_uid);
+  if (f && !f.done) stage(f, e);
+}
+
+// isOurs: the executor received the fault this page just submitted — in
+// this user's name, of this kind, at this target — under a UID the stream
+// had not shown before.
+function isOurs(e, a) {
+  const p = e.payload || {};
+  const t = (p.targets || [])[0] || {};
+  return p.actor === state.me.email && p.kind === a.p.kind && t.namespace === a.p.namespace && (t.name || "") === (a.p.workload || "");
+}
+
+function adopt(uid) {
+  const a = awaiting;
+  if (!a || a.uid) return;
+  a.uid = uid;
+  if (a.lost) {
+    clearTimeout(a.lost);
+    say({ who: "simian", cls: "info", html: `Found it on the event stream: <b>${esc(uid)}</b>. Following it live.` });
+    awaiting = null;
+  }
+  follow(uid, a.p);
+}
+
+async function submit(p) {
+  const body = { mode: "manifest", namespace: p.namespace, workload: p.workload, engine: p.engine, kind: p.kind, spec: p.spec, duration: shortDur(p.duration) };
+  say({ who: "you", html: `inject ${esc(p.kind)} → ${esc(p.namespace)}/${esc(p.workload || "(whole arena)")} for ${esc(body.duration)}` });
+  const li = say({ who: "simian", cls: "working", html: "submitting to the executor" });
+  attendInject(false);
+  const a = { p, uid: "", at: Date.now() };
+  awaiting = a;
+  const started = Date.now();
+  try {
+    const { status, data } = await send("/api/faults", body);
+    if (awaiting === a) awaiting = null;
+    const secs = Math.round((Date.now() - started) / 1000);
+    if (status === 202) {
+      update(li, { cls: "warn", html: `<b>${esc(data.fault_uid)}</b> is still applying (waiting for the engine and the probes) after ${secs}s. Following it live.` });
+    } else {
+      update(li, { cls: "ok", html: `Applied as <b>${esc(data.fault_uid)}</b>: the executor accepted it and its checks passed (${secs}s).` });
+    }
+    resetAfterSuccess();
+    const f = follow(data.fault_uid, p);
+    if (status === 202) backfill(f);
+  } catch (e) {
+    if (e instanceof NotSimian) {
+      update(li, { cls: "bad", html: esc(e.message) });
+      if (!e.reachedSimian) {
+        if (awaiting === a) awaiting = null;
+        say({ who: "simian", cls: "dim", html: "Nothing was applied: the request never reached Simian." });
+      } else if (a.uid) {
+        if (awaiting === a) awaiting = null;
+        say({ who: "simian", cls: "warn", html: `The fault was received as <b>${esc(a.uid)}</b> before the connection failed; still following it. Check Active faults too.` });
+        backfill(follows.get(a.uid));
+      } else {
+        say({ who: "simian", cls: "warn", html: "The fault may still have been applied — check Active faults. Watching the event stream for it…" });
+        a.lost = setTimeout(() => {
+          if (awaiting !== a) return;
+          awaiting = null;
+          say({ who: "simian", cls: "dim", html: "No sign of it on the event stream after a minute and a half, so it was probably not applied. Active faults and Recent faults have the last word." });
+        }, 90 * 1000);
+      }
+      attendInject(true);
+      return;
+    }
+    if (awaiting === a) awaiting = null;
+    const f = a.uid && follows.get(a.uid);
+    if (f && f.seen.has("refused")) {
+      update(li, { cls: "dim", html: "submitted; the executor refused it" });
+    } else if (e.status === 422) {
+      update(li, { cls: "dim", html: "submitted; the executor refused it" });
+      refused(f, e.message, "");
+    } else {
+      update(li, { cls: "bad", html: "Simian did not apply it.", detail: e.message });
+    }
+    if (f) finish(f);
+    attendInject(true);
+  }
+}
+
+// follow starts (or continues) watching a fault by its UID.
+function follow(uid, p) {
+  if (follows.has(uid)) return follows.get(uid);
+  const f = { uid, p, seen: new Set(), done: false, verifiedBy: null, ended: "", timers: [] };
+  follows.set(uid, f);
+  f.timers.push(setTimeout(() => {
+    if (!f.done) finish(f, "Stopped following after 10 minutes; Recent faults has the rest.");
+  }, FOLLOW_FOR));
+  f.timers.push(setInterval(() => backfill(f), 8000));
+  for (const e of byUID.get(uid) || []) stage(f, e);
+  attendInject();
+  return f;
+}
+
+function finish(f, why) {
+  if (f.done) return;
+  f.done = true;
+  f.timers.forEach((t) => { clearTimeout(t); clearInterval(t); });
+  if (f.waiting) f.waiting.remove();
+  if (why) say({ who: "simian", cls: "dim", html: esc(why), tag: short(f.uid) });
+  attendInject();
+}
+
+// once says a stage's line the first time it is seen, whichever of the
+// stream and /api/faults tells of it first.
+function once(f, key, line) {
+  if (f.seen.has(key)) return;
+  f.seen.add(key);
+  return say(Object.assign({ tag: short(f.uid) }, line));
+}
+
+const passedOf = (e) => (e.payload || {}).passed;
+
+// stage turns one audit event for a followed fault into its line.
+function stage(f, e) {
+  const p = e.payload || {};
+  switch (e.event) {
+    case "executor.received":
+      once(f, "received", { mark: "·", cls: "dim", html: "received by the executor" });
+      break;
+    case "executor.validated": {
+      const probes = p.default_probes || [];
+      once(f, "validated", { mark: "✓", cls: "ok", html: "safety checks passed" + (probes.length ? ` <span class="muted">· probes ${esc(probes.join(", "))}</span>` : "") });
+      break;
+    }
+    case "fault.precheck":
+      if (passedOf(e) === false) once(f, "precheck", { mark: "✗", cls: "bad", html: `precheck ${esc(p.probe || "")}: the workload was not in the starting state`, detail: p.error || "" });
+      else once(f, "precheck", { mark: "✓", cls: "ok", html: `precheck passed <span class="muted">· ${esc(p.probe || "")}</span>` });
+      break;
+    case "driver.applied": {
+      once(f, "validated", { mark: "✓", cls: "ok", html: "safety checks passed" });
+      if (Array.isArray(p.verified_by)) f.verifiedBy = p.verified_by;
+      const until = p.deadline ? ` until ${time(p.deadline)}` : "";
+      once(f, "applied", { mark: "✓", cls: "ok", html: `applied: ${esc(p.kind || f.p.kind)} created in the cluster${until}` + (p.engine_uid ? ` <span class="muted">· object ${esc(p.engine_uid)}</span>` : "") });
+      if (f.verifiedBy && !f.verifiedBy.length) once(f, "efficacy", { mark: "–", cls: "dim", html: "nothing checks that it took: this engine reports no status and there is no probe for this kind" });
+      break;
+    }
+    case "fault.injected":
+      if (passedOf(e) === true) {
+        once(f, "injected", { mark: "✓", cls: "ok", html: "injected: the engine confirms it took" + (p.observed ? ` <span class="muted">· ${esc(p.observed)}</span>` : "") });
+        if (f.verifiedBy && !f.verifiedBy.some((v) => v !== "engine-status")) {
+          once(f, "efficacy", { mark: "–", cls: "dim", html: "effect seen: no probe for this kind, so the engine's word is the check" });
+        }
+      } else if (passedOf(e) === false) {
+        once(f, "injected", { mark: "✗", cls: "bad", html: "not injected: the engine says it did not take, so Simian takes it back out", detail: p.error || "" });
+      } else {
+        once(f, "injected", { mark: "?", cls: "warn", html: "Simian stopped before the engine answered" });
+      }
+      break;
+    case "fault.efficacy": {
+      const name = p.probe ? ` <span class="muted">· ${esc(p.probe)}${p.observed ? ": " + esc(p.observed) : ""}</span>` : "";
+      if (passedOf(e) === true) once(f, "efficacy:" + (p.probe || ""), { mark: "✓", cls: "ok", html: "effect seen" + name });
+      else if (passedOf(e) === false) once(f, "efficacy:" + (p.probe || ""), { mark: "✗", cls: "bad", html: "effect not seen, so Simian takes it back out" + name, detail: p.expected ? `expected ${p.expected}` : p.error || "" });
+      f.seen.add("efficacy");
+      break;
+    }
+    case "executor.rejected":
+      refused(f, p.error || p.message || "", e.reason);
+      finish(f);
+      attendInject(true);
+      break;
+    case "driver.failed":
+      once(f, "refused", { mark: "✗", cls: "bad", html: "the engine would not create it, so nothing was applied", detail: p.error || "" });
+      finish(f);
+      attendInject(true);
+      break;
+    case "lease.cleared":
+      if (p.left_to_reaper || e.reason === "driver-clear-failed") {
+        once(f, "left", { mark: "!", cls: "warn", html: "Simian could not delete it; the reaper takes it out at the deadline", detail: p.clear_error || p.error || "" });
+        break;
+      }
+      if (e.reason === "explicit-clear") {
+        ended(f, `ended: cleared${p.actor ? " by " + esc(p.actor) : ""} before its deadline`);
+        finish(f, "No recovery check follows a clear; Workloads shows how the targets are doing.");
+      } else {
+        ended(f, `ended: taken back out <span class="muted">· ${esc(e.reason || "")}</span>`);
+        finish(f);
+      }
+      break;
+    case "lease.expired":
+      ended(f, "ended: expired at its deadline");
+      awaitRecovery(f);
+      break;
+    case "fault.recovered":
+      recovered(f, passedOf(e), p.unready || [], p.waited);
+      break;
+  }
+}
+
+function ended(f, html) {
+  f.ended = html;
+  once(f, "ended", { mark: "▪", cls: "info", html });
+}
+
+// awaitRecovery: after a fault runs out, the executor checks that a Chaos
+// Mesh fault's targets come back Ready (up to 5 minutes). Other engines'
+// objects are the fault and go with it, so nothing is checked.
+function awaitRecovery(f) {
+  if (f.seen.has("recovered") || f.done) return;
+  const engine = f.p.engine;
+  if (engine && engine !== "chaos-mesh") {
+    finish(f, "No recovery check for this engine: its objects are the fault and went with it.");
+    return;
+  }
+  if (!f.waiting) f.waiting = say({ who: "simian", cls: "working dim", html: "checking that the workload recovers", tag: short(f.uid) });
+  f.timers.push(setTimeout(() => finish(f, "No recovery verdict was recorded within 6 minutes."), 6 * 60 * 1000));
+}
+
+function recovered(f, passed, unready, waited) {
+  if (f.waiting) { f.waiting.remove(); f.waiting = null; }
+  if (passed === true) {
+    once(f, "recovered", { mark: "✓", cls: "ok", html: "recovered: the targets are Ready again" + (waited ? ` <span class="muted">· after ${esc(waited)}</span>` : "") });
+  } else if (passed === false) {
+    once(f, "recovered", { mark: "✗", cls: "bad", html: "not recovered" + (waited ? ` after ${esc(waited)}` : "") + (unready.length ? ": still not Ready" : ""), detail: unready.join("; ") });
+    attendInject(true);
+  } else {
+    return;
+  }
+  finish(f, "Done.");
+}
+
+// ─── Refusals in plain words ────────────────────────────────────────
+
+const STAGES = {
+  safety: "the safety checks", schema: "schema validation", precheck: "the precheck", probe: "the settle probe",
+  driver: "the engine", lease: "the lease", audit: "the audit trail",
+};
+
+function refusalWords(reason, msg) {
+  const x = (state.config || {}).executor || {};
+  switch (reason) {
+    case "workload-excluded": return "that workload is excluded from chaos in this arena.";
+    case "namespace-not-eligible": return "that namespace is not an arena: it has not opted in to chaos.";
+    case "duration-over-ceiling": return /positive/.test(msg) ? "the duration must be more than zero." : `the duration is longer than this install allows${x.duration_ceiling ? " (" + x.duration_ceiling + ")" : ""}.`;
+    case "budget-exceeded":
+      if (/cooldown/.test(msg)) return `this arena had a fault recently and is cooling down${x.min_cooldown ? " (" + x.min_cooldown + " between faults)" : ""}.`;
+      if (/being applied/.test(msg)) return "another fault is being applied to this arena right now.";
+      return `a fault is already running, and this install allows ${x.max_concurrent_faults || "a limited number"} at a time. Wait for it to end, or clear it.`;
+    case "tier-not-permitted": return `its blast radius is wider than this install permits${(x.permitted_tiers || []).length ? " (" + x.permitted_tiers.join(", ") + ")" : ""}.`;
+    case "target-incompatible": return "the target cannot take this fault as written (for example, it has no container or port the spec names).";
+    case "precheck-failed": return "the workload was not healthy before the fault, so a probe could not have proved anything. Nothing was applied.";
+    case "cannot-gate": return "the probe that would verify this fault could not run, and Simian does not apply a fault it cannot verify.";
+    case "probe-failed": return "it was applied, but the probe saw no effect, so Simian took it back out.";
+    case "injection-failed": return "it was applied, but the engine says it did not take, so Simian took it back out.";
+    case "schema-invalid": return "the spec does not match the engine's schema for this kind.";
+    case "unknown-gvk": return "that kind is not installed in the cluster.";
+    case "rbac-denied": return "Simian's service account is not allowed to create that object.";
+    case "driver-failed": return "the engine would not create the object.";
+    case "lease-failed": return "Simian could not register the fault's lease, so it did not run.";
+    case "interrupted": return "Simian stopped (a restart?) before the outcome was known.";
+    case "probe-not-configured": return "the fault needs a probe, and this install has no prober.";
+    default: return "";
+  }
+}
+
+// refused says why the executor said no. text is the server's (an
+// ExecutorError reads "executor[stage:reason]: message"); reason is the
+// event's, when it came from the stream.
+function refused(f, text, reason) {
+  const m = /executor\[([\w-]+):([\w-]+)\]:\s*(.*)/s.exec(text || "");
+  const stg = m ? m[1] : "";
+  reason = reason || (m ? m[2] : "");
+  const msg = m ? m[3] : text;
+  const words = refusalWords(reason, msg);
+  const backOut = reason === "probe-failed" || reason === "injection-failed";
+  const lead = backOut ? "Taken back out" : "Refused" + (STAGES[stg] ? " by " + STAGES[stg] : "");
+  const line = {
+    mark: "✗", cls: "bad",
+    html: `<b>${lead}</b>${reason ? ` <span class="reason">${esc(reason)}</span>` : ""}: ${esc(words || msg || "the executor said no.")}`,
+    detail: words ? text : "",
+  };
+  if (f) return once(f, "refused", line);
+  return say(line);
+}
+
+// backfill reads /api/faults for a followed fault, for whatever the
+// stream missed (a reconnect, or a page that was busy).
+async function backfill(f) {
+  if (!f || f.done) return;
+  let rows;
+  try { rows = await get("/api/faults?limit=50&namespace=" + encodeURIComponent(f.p.namespace)); } catch (e) { return; }
+  const r = rows.find((x) => x.fault_uid === f.uid);
+  if (!r || f.done) return;
+  const ev = (event, extra) => stage(f, Object.assign({ event, fault_uid: f.uid, payload: {} }, extra));
+  ev("executor.received");
+  if (r.applied_at) ev("driver.applied", { payload: { kind: r.kind, engine_uid: r.engine_uid, deadline: r.deadline } });
+  if (r.injected != null) ev("fault.injected", { payload: { passed: r.injected } });
+  if (r.efficacy != null && !f.seen.has("efficacy")) ev("fault.efficacy", { payload: { passed: r.efficacy } });
+  switch (r.outcome) {
+    case "refused": ev("executor.rejected", { reason: r.reason, payload: { error: r.error } }); return;
+    case "driver-failed": ev("driver.failed", { payload: { error: r.error } }); return;
+    case "cleared":
+      if (r.recovered != null) ev("fault.recovered", { payload: { passed: r.recovered, unready: r.unready } });
+      ev("lease.cleared", { reason: r.reason, payload: { actor: r.cleared_by } });
+      return;
+    case "expired": ev("lease.expired", { reason: r.reason }); break;
+  }
+  if (r.recovered != null) ev("fault.recovered", { payload: { passed: r.recovered, unready: r.unready } });
+}
+
+function backfillAll() {
+  for (const f of follows.values()) backfill(f);
 }
 
 async function main() {

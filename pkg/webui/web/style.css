@@ -389,10 +389,6 @@ details summary {
   font-size: 10.5px;
 }
 
-#f-exact > label:first-child {
-  display: inline-block;
-}
-
 #f-result.ok,
 #a-result.ok,
 #a-clear-result.ok { color: var(--ok); }
@@ -400,6 +396,429 @@ details summary {
 #f-result.bad,
 #a-result.bad,
 #a-clear-result.bad { color: var(--bad); }
+
+/* ─── Inject: the conversation ───────────────────────────────────────
+   The pane is a column: the controls, a terminal log that takes the
+   space there is, and the input under it. The terminal is dark in every
+   theme, with its own ink scoped to the box (as Chaos's Live events). */
+
+#inject:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+#inject > * {
+  flex: 0 0 auto;
+}
+
+#inject .inject-controls {
+  gap: 6px 12px;
+  margin-bottom: 8px;
+}
+
+#f-duration {
+  width: 4.5em;
+}
+
+.term {
+  --text: #dbe2ea;
+  --text-dim: #8b97a8;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --bad: #fb7185;
+  --info: #67e8f9;
+  --you: #f9a8d4;
+
+  display: flex;
+  flex-direction: column;
+  min-height: 6rem;
+  border: 1px solid color-mix(in srgb, var(--hue, var(--accent)) 35%, transparent);
+  border-radius: 4px;
+  background: var(--terminal, rgb(2 6 10 / 82%));
+  color: var(--text);
+  font-family: var(--mono);
+  overflow: hidden;
+}
+
+#inject > .term {
+  flex: 1 1 13rem;
+}
+
+body[data-theme='cloud-light'] .term {
+  --terminal: rgb(23 27 36 / 96%);
+  --you: #f48fb1;
+}
+
+.term-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px 3px 10px;
+  border-bottom: 1px solid rgb(255 255 255 / 7%);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.term-dots {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.term-dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 16%);
+}
+
+.term-dots i:first-child { background: color-mix(in srgb, var(--bad) 70%, transparent); }
+.term-dots i:nth-child(2) { background: color-mix(in srgb, var(--warn) 70%, transparent); }
+.term-dots i:last-child { background: color-mix(in srgb, var(--ok) 70%, transparent); }
+
+.term-title {
+  flex: 1;
+}
+
+.term .term-btn {
+  padding: 0 7px;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.term .term-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: rgb(255 255 255 / 8%);
+}
+
+.term-log {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 6px 10px 8px;
+  overflow-y: auto;
+  list-style: none;
+  font-size: 11px;
+  line-height: 1.5;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 22%) transparent;
+}
+
+/* A line: time, speaker, then the message, wrapping under itself with a
+   hanging indent so a narrow pane still reads as a transcript. */
+.term-log .ln {
+  padding: 1px 0 1px 1.6em;
+  text-indent: -1.6em;
+}
+
+.term-log .ln > span {
+  text-indent: 0;
+}
+
+.term-log .ts {
+  color: color-mix(in srgb, var(--text-dim) 75%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+#f-term {
+  container-type: inline-size;
+}
+
+/* Narrow: no clock (it is in each line's tooltip). */
+@container (max-width: 440px) {
+  .term-log .ts {
+    display: none;
+  }
+}
+
+.term-log .who {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.term-log .you .who { color: var(--you); }
+.term-log .simian .who { color: var(--info); }
+.term-log .you .msg { color: #fff; }
+
+/* A fault's stages: indented under what started them, a mark per line. */
+.term-log .stage .mark {
+  display: inline-block;
+  width: 1em;
+  margin-left: 1.4em;
+  text-align: center;
+  font-weight: 700;
+}
+
+.term-log .msg {
+  overflow-wrap: anywhere;
+}
+
+.term-log .ok .mark { color: var(--ok); }
+.term-log .bad .mark,
+.term-log .bad .msg { color: var(--bad); }
+.term-log .warn .mark,
+.term-log .warn .msg { color: var(--warn); }
+.term-log .info .mark { color: var(--info); }
+.term-log .dim .msg { color: var(--text-dim); }
+.term-log .ok.simian .msg { color: var(--ok); }
+.term-log .msg b { color: var(--text); font-weight: 700; }
+.term-log .bad .msg b,
+.term-log .warn .msg b { color: inherit; }
+
+.term-log .uid {
+  color: color-mix(in srgb, var(--text-dim) 70%, transparent);
+  font-size: 10px;
+}
+
+.term-log .reason {
+  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, currentcolor 40%, transparent);
+  border-radius: 3px;
+  font-size: 10px;
+}
+
+.term-log .detail {
+  display: block;
+  margin-top: 1px;
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.term-log .detail::before {
+  content: '└ ';
+  opacity: 0.6;
+}
+
+.term-log .muted {
+  color: var(--text-dim);
+}
+
+/* Waiting on something: an ellipsis that fills, then empties. */
+.term-log .working .msg::after {
+  content: '…';
+  display: inline-block;
+  width: 0;
+  overflow: hidden;
+  vertical-align: bottom;
+  animation: term-dots 1.2s steps(4, end) infinite;
+}
+
+@keyframes term-dots {
+  to { width: 1.25em; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .term-log .working .msg::after {
+    width: auto;
+    animation: none;
+  }
+}
+
+/* The proposal (or review) card: the one place a fault is confirmed. */
+.term-log .card-ln {
+  padding: 4px 0 6px 1.6em;
+  text-indent: 0;
+}
+
+.proposal {
+  padding: 7px 10px 8px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-left: 2px solid var(--you);
+  border-radius: 6px;
+  background: rgb(255 255 255 / 4%);
+}
+
+.proposal .p-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin-bottom: 4px;
+}
+
+.proposal .p-label {
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--you);
+}
+
+.proposal .kind {
+  color: #fff;
+}
+
+.proposal .p-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 1px 10px;
+  margin: 0 0 4px;
+}
+
+.proposal dt {
+  color: var(--text-dim);
+}
+
+.proposal dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.proposal .p-why {
+  color: color-mix(in srgb, var(--text) 85%, var(--text-dim));
+  font-style: italic;
+}
+
+.proposal details summary {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.proposal .p-peek {
+  opacity: 0.7;
+}
+
+.proposal details[open] .p-peek {
+  display: none;
+}
+
+.proposal pre {
+  max-height: 12rem;
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: 4px;
+  background: rgb(0 0 0 / 30%);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.proposal .p-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.term .proposal button {
+  padding: 2px 10px;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 4px;
+  background: rgb(255 255 255 / 5%);
+  color: var(--text);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  box-shadow: none;
+}
+
+.term .proposal button:hover:not(:disabled) {
+  border-color: rgb(255 255 255 / 35%);
+  background: rgb(255 255 255 / 12%);
+}
+
+.term .proposal button.p-inject {
+  border-color: color-mix(in srgb, var(--you) 60%, transparent);
+  background: color-mix(in srgb, var(--you) 18%, transparent);
+  color: #fff;
+  font-weight: 700;
+}
+
+.term .proposal button.p-inject:hover:not(:disabled) {
+  border-color: var(--you);
+  background: color-mix(in srgb, var(--you) 32%, transparent);
+  box-shadow: 0 0 14px -4px var(--you);
+}
+
+.proposal .p-state {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-style: italic;
+}
+
+.proposal.used {
+  border-left-color: rgb(255 255 255 / 20%);
+  opacity: 0.72;
+}
+
+.proposal.used button {
+  display: none;
+}
+
+/* The input under the log. */
+#inject #f-exact,
+#inject #f-intent {
+  margin-top: 8px;
+}
+
+#inject .spec-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 10px;
+}
+
+#inject .spec-head label {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+#inject .spec-head details {
+  font-size: 10.5px;
+}
+
+#inject .spec-head details summary {
+  margin: 0;
+}
+
+#inject .spec-head details[open] {
+  flex-basis: 100%;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+#inject #f-intent textarea {
+  margin-top: 0;
+}
+
+/* More room for the log where the grid lets the pane grow. */
+body.flat #inject > .term {
+  flex-basis: 17rem;
+}
+
+#inject .inject-send {
+  margin: 8px 0 0;
+  gap: 6px 12px;
+}
+
+#inject .inject-send #f-submit {
+  margin-left: auto;
+}
+
+#inject .inject-send #f-result:empty {
+  display: none;
+}
+
+#inject .inject-send #f-result {
+  flex: 1 1 10em;
+  font-size: 11px;
+}
 
 /* ─── Configuration dialog ───────────────────────────────────────────
    A modal above the room, in the panes' neon chrome. */
@@ -622,6 +1041,10 @@ body[data-theme^='chaos'] button[type='submit']::before {
   content: '↯ ';
 }
 
+body[data-theme^='chaos'] #f-submit.send::before {
+  content: '› ';
+}
+
 body[data-theme^='chaos'] button[type='submit']:hover:not(:disabled) {
   border-color: rgb(236 72 153 / 65%);
   background: rgb(236 72 153 / 22%);
@@ -652,7 +1075,7 @@ body[data-theme^='chaos'] input:is([type='radio'], [type='checkbox']) {
 
 /* The terminals. Their own ink, so a dark box in the light theme still
    reads: the custom properties are scoped to the box. */
-body[data-theme^='chaos'] :is(#events, #f-spec) {
+body[data-theme^='chaos'] :is(#events, #f-spec, #f-text, .term) {
   --text: #e2e8f0;
   --text-dim: #94a3b8;
   --ok: #34d399;
@@ -676,8 +1099,21 @@ body[data-theme^='chaos'] #events li {
   border-bottom-color: rgb(255 255 255 / 5%);
 }
 
-body[data-theme='chaos-light'] #f-spec {
+body[data-theme='chaos-light'] :is(#f-spec, #f-text, .term) {
   border-color: rgb(15 23 42 / 30%);
+}
+
+body[data-theme^='chaos'] .term {
+  --you: #f9a8d4;
+}
+
+body[data-theme^='chaos'] .term .term-btn {
+  padding: 0 8px;
+  border-radius: 6px;
+}
+
+body[data-theme^='chaos'] .proposal {
+  border-radius: 10px;
 }
 
 body[data-theme^='chaos'] dialog.neon-dialog {
