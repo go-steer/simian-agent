@@ -44,7 +44,7 @@ image:
   # silently change the running binary.
   # Must be at least the chart's appVersion: the chart renders flags
   # (e.g. --audit-file) an older binary refuses. verify-chart checks it.
-  tag: "0.4.0-rc.5"
+  tag: "0.4.0-rc.6"
   # IfNotPresent matches the chart default; explicit for clarity.
   pullPolicy: IfNotPresent
 
@@ -178,6 +178,11 @@ resources:
 # ============================================================
 # Hardening log — what is "baked" and as of when
 # ============================================================
+#
+# 2026-10-09 (chart 0.4.0-rc.6):
+#   - image pin moved to 0.4.0-rc.6: one page for several Simians — listed
+#     origins (#257), a switcher, a status strip and simian web (#260);
+#     PodChaos's template names its pod-count modes (#259).
 #
 # 2026-10-09 (chart 0.4.0-rc.5):
 #   - image pin moved to 0.4.0-rc.5: an inject answers within 15s and is
