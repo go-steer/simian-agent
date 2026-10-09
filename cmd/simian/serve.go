@@ -98,11 +98,18 @@ func newServeCmd() *cobra.Command {
 		uiAdmins             []string
 		uiAllowedOrigins     []string
 		uiName               string
+		uiControllers        []string
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the Simian controller (Fault Executor + MCP server)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Before anything touches the cluster, so a mistyped list fails
+			// at once.
+			controllers, err := webui.ParseControllers(uiControllers)
+			if err != nil {
+				return fmt.Errorf("--ui-controllers: %w", err)
+			}
 			ctx, cancel := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer cancel()
 
@@ -477,7 +484,7 @@ func newServeCmd() *cobra.Command {
 					return err
 				}
 				uiSrv := &http.Server{Addr: uiAddr, ReadHeaderTimeout: 5 * time.Second, Handler: webui.Handler(webui.Deps{
-					Version: version, Name: uiName, AllowedOrigins: uiAllowedOrigins,
+					Version: version, Name: uiName, AllowedOrigins: uiAllowedOrigins, Controllers: controllers,
 					Active: exec, Faults: faultLog, Cycles: cycleLog, Topology: disco2,
 					Arenas: arenaNamespaces, Events: broadcaster,
 					Auth: auth, Executor: exec, Catalog: srv.GatherCatalog, Translate: srv.TranslateIntent,
@@ -544,6 +551,7 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&uiIAPProjectNumber, "ui-iap-project-number", "", "With --ui-auth=iap and no --ui-iap-audience: accept any backend service in this project number")
 	cmd.Flags().StringSliceVar(&uiAllowedOrigins, "ui-allowed-origins", nil, "Other pages that may call this controller's UI API from the browser with the user's credentials — another Simian's UI or the standalone UI, e.g. https://simian-2.example.com (repeatable). Empty: same origin only")
 	cmd.Flags().StringVar(&uiName, "ui-name", "", "How this controller is labelled in a UI that watches several Simians, e.g. its cluster's name")
+	cmd.Flags().StringSliceVar(&uiControllers, "ui-controllers", nil, "Other Simians the UI offers to watch from this page, as name=https://origin of each controller's UI, e.g. simian-2=https://simian-2.example.com (repeatable). Each must list this UI's origin in its --ui-allowed-origins")
 	cmd.Flags().StringSliceVar(&uiAdmins, "ui-admins", nil, "With --ui-auth=iap: who may also configure, pause and resume autonomous mode and clear all faults from the UI — emails, or domain:example.com (repeatable). Empty: nobody")
 	cmd.Flags().StringSliceVar(&uiWriters, "ui-writers", nil, "With --ui-auth=iap: who may submit and clear faults from the UI — emails, or domain:example.com (repeatable). Empty: nobody")
 	cmd.Flags().StringVar(&metricsAddr, "metrics-addr", ":9090", "Serve Prometheus metrics on this address (/metrics); empty disables")

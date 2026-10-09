@@ -1142,6 +1142,85 @@ body[data-theme^='chaos'] #admin {
   border-top-color: var(--rule);
 }
 
+/* ─── The Simians dialog ─────────────────────────────────────────────
+   The configuration dialog's chrome: every Simian the page watches, and
+   a form to add one by its URL. */
+
+dialog.sims-dialog {
+  width: min(1000px, 94vw);
+}
+
+.sims-lead {
+  margin: 12px 0 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.sims-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.sims-table th,
+.sims-table td {
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid color-mix(in srgb, var(--hue) 18%, transparent);
+}
+
+.sims-table th {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.sims-table tr.on td {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.sims-table td.url {
+  font-family: var(--mono);
+  word-break: break-all;
+}
+
+.sims-table .why {
+  max-width: 40ch;
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.sims-table td.acts {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.sims-table td.acts button {
+  margin-left: 4px;
+  padding: 2px 9px;
+}
+
+#sims-hidden:not(:empty) {
+  margin-top: 8px;
+}
+
+#sims-add {
+  margin-top: 6px;
+}
+
+#sims-add-result.ok { color: var(--ok); }
+#sims-add-result.bad { color: var(--bad); }
+
+body[data-theme^='chaos'] #sims-add button[type='submit']::before {
+  content: '+ ';
+}
+
+body[data-theme^='chaos'] .sims-table :is(th, td) {
+  border-bottom-color: var(--rule);
+}
+
 /* ─── The halt's confirm ─────────────────────────────────────────────
    The configuration dialog's chrome, narrower, in the status rose. */
 

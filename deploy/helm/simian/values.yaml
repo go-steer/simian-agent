@@ -169,6 +169,12 @@ ui:
   # origins, e.g. https://simian-2.example.com. Behind IAP the load balancer
   # must also let CORS preflights through (docs/web-ui-iap.md).
   allowedOrigins: []
+  # Other Simians this page offers to watch, as {name, url} with url the
+  # origin of each controller's UI, e.g.
+  #   - {name: simian-2, url: https://simian-2.example.com}
+  # Each of them must list this UI's origin in its ui.allowedOrigins; the
+  # user signs in to each once. Users can add more in the page.
+  controllers: []
   auth: none
   iap:
     # The backend service's audience, /projects/NUMBER/global/backendServices/ID

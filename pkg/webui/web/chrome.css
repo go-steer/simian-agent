@@ -402,6 +402,184 @@ body[data-theme^='chaos'] .status-item code {
   background: var(--glass-inset);
 }
 
+/* ─── Several Simians ────────────────────────────────────────────────
+   The HUD's switcher (a name while there is one Simian, a select once
+   there are several), the status bar's strip of every Simian watched,
+   and the alert under the HUD when the selected one does not answer.
+   With one Simian the strip and its separator are gone, so the page
+   looks as it did. A chip's attention follows the panes': amber for a
+   running fault, rose for halted or not answering. */
+
+body:not(.multi) .sim-only {
+  display: none !important;
+}
+
+/* Under ids, so the panes' button styles (style.css) do not reach it. */
+#app-hud .hud-plain {
+  padding: 2px 4px;
+  border: 0;
+  border-bottom: 1px dotted transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+#app-hud .hud-plain:hover,
+#app-hud .hud-plain:focus-visible {
+  border-bottom-color: var(--accent);
+  background: none;
+  color: var(--accent);
+  box-shadow: none;
+  outline: none;
+}
+
+body[data-theme^='chaos'] #app-hud .hud-plain:hover,
+body[data-theme^='chaos'] #app-hud .hud-plain:focus-visible {
+  color: var(--accent-ink);
+}
+
+/* With several, the hints give way to the strip. */
+body.multi #app-status .status-hint,
+body.multi #app-status .status-hint ~ .hud-sep {
+  display: none;
+}
+
+.sim-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+#st-sims .sim-chip {
+  --chip: var(--text-dim);
+
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 6px;
+  max-width: 64ch;
+  padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--chip) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chip) 8%, transparent);
+  color: var(--text-dim);
+  font: inherit;
+  letter-spacing: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+#st-sims .sim-chip:hover,
+#st-sims .sim-chip:focus-visible {
+  border-color: var(--chip);
+  color: var(--text);
+  outline: none;
+}
+
+#st-sims .sim-chip.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+  box-shadow: 0 0 10px -4px var(--accent);
+}
+
+#st-sims .sim-chip.conn-live { --chip: var(--ok); }
+#st-sims .sim-chip.conn-signin,
+#st-sims .sim-chip.conn-blocked { --chip: var(--text-dim); border-style: dashed; }
+#st-sims .sim-chip.attn-warn { --chip: var(--warn); }
+#st-sims .sim-chip.attn-bad { --chip: var(--bad); }
+#st-sims .sim-chip.on.attn-warn { border-color: var(--warn); box-shadow: 0 0 10px -3px var(--warn); }
+#st-sims .sim-chip.on.attn-bad { border-color: var(--bad); box-shadow: 0 0 10px -3px var(--bad); }
+
+.sim-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--chip);
+}
+
+#st-sims .sim-chip.conn-live .sim-dot,
+#st-sims .sim-chip.attn-warn .sim-dot,
+#st-sims .sim-chip.attn-bad .sim-dot {
+  box-shadow: 0 0 6px var(--chip);
+}
+
+.sim-name {
+  flex: none;
+  max-width: 22ch;
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sim-facts {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#st-sims .sim-chip.attn-warn .sim-facts { color: var(--warn); }
+#st-sims .sim-chip.attn-bad .sim-facts { color: var(--bad-ink, var(--bad)); }
+
+.sim-halted {
+  padding: 0 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--bad) 24%, transparent);
+  color: var(--bad-ink, var(--bad));
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+#sim-alert {
+  position: absolute;
+  top: calc(var(--hud-h) + 10px);
+  left: 50%;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  width: min(880px, 92vw);
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--warn) 60%, transparent);
+  border-left: 3px solid var(--warn);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warn) 10%, var(--bg-surface));
+  box-shadow: 0 10px 30px -12px rgb(0 0 0 / 50%), 0 0 18px -8px var(--warn);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  transform: translateX(-50%);
+}
+
+#sim-alert[hidden] {
+  display: none;
+}
+
+#sim-alert-text {
+  flex: 1 1 420px;
+}
+
+.sim-alert-acts {
+  display: inline-flex;
+  gap: 8px;
+}
+
+body[data-theme^='chaos'] #sim-alert {
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--warn) 8%, var(--glass-solid, var(--bg-surface)));
+  backdrop-filter: blur(12px);
+  font-family: var(--sans);
+}
+
 /* ─── Emergency halt ─────────────────────────────────────────────────
    The HALT button (admins) is a danger control in the status rose at
    rest. Halted — autonomous mode paused everywhere — is a filled rose

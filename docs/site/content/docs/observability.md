@@ -106,8 +106,50 @@ Without IAP (`ui.auth=none`, the default) the form is replaced by a note and
 the write endpoints refuse: with no one identified, anyone who could reach the
 port could inject faults.
 
+### Several Simians in one page
+
+The page can watch several Simians — one controller per cluster, say — and
+drive whichever is selected. The header names the one shown, with a switcher
+once there is more than one; a strip along the bottom shows every Simian:
+whether it answers (**live**, **needs sign-in**, **not allowed / sign in**,
+**not reachable**), its running faults, autonomous mode on, off or paused,
+**HALTED**, and your role there. It glows amber for a running fault and rose
+for a halted Simian or one that does not answer; click one to show it. The
+panes, the live events, the Configuration panel and **HALT** all act on the
+selected Simian only. With one Simian the strip is hidden and the page looks
+as it always has.
+
+The list is this page's controller, the others its deployment names
+(`ui.controllers`, or `simian web --controllers`), and any you add by URL
+under **⧉** (or by clicking the name in the header), kept in your browser.
+A listed one can be hidden there and shown again.
+
+The browser calls each controller directly, with your own sign-in to it:
+nothing is proxied, each controller checks who you are, and what you do is
+in that controller's audit trail under your name. So each controller must
+list the page's origin in `ui.allowedOrigins`, and you sign in to each one
+once; a Simian you have not signed in to offers **Sign in to …**, which opens
+its own page in a new tab. Behind IAP, IAP must also let CORS preflights
+through — [Several Simians in one UI]({{< relref "web-ui-iap.md#several-simians-in-one-ui" >}})
+sets it all up.
+
+**The standalone UI.** The same image serves the page with no controller
+behind it — no Kubernetes, no LLM — for a page that fronts several:
+
+```bash
+simian web --addr :8080 \
+    --controllers simian-1=https://simian.example.com \
+    --controllers simian-2=https://simian-2.example.com
+# then open http://localhost:8080/ui/ (or put it behind IAP like any page)
+```
+
+It serves `/ui/`, `/healthz` and `GET /api/controllers`; every other `/api/`
+path is 404, which is how the page knows no Simian serves it and asks which
+to watch.
+
 The page reads a small JSON API under `/api/` (`info`, `me`, `config`,
-`arenas`, `catalog`, `active`, `faults`, `cycles`, `topology`), proposes a fault from a sentence with `POST /api/translate` (nothing is
+`arenas`, `catalog`, `active`, `faults`, `cycles`, `topology`, and
+`controllers`, the deployment's other Simians), proposes a fault from a sentence with `POST /api/translate` (nothing is
 applied), writes with `POST /api/faults` (answered when the executor is
 done, or after 15 seconds with `202` and the fault's UID, the rest
 following on the event stream) and `POST /api/faults/{uid}/clear`, administers with `POST

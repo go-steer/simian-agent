@@ -19,11 +19,20 @@ limitations under the License.
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Simian</title>
-  <!-- Everything the page loads or calls is this origin; no inline
-       script or style. The policy is in the page, rather than a header,
-       so it holds wherever the binary's /ui/ is mounted. -->
+  <!-- Everything the page loads is this origin; no inline script or
+       style. The policy is in the page, rather than a header, so it holds
+       wherever the binary's /ui/ is mounted.
+       connect-src is wider: the page can watch several Simians, and the
+       browser calls each controller directly, at whatever https:// host
+       its operator gave it — the list is the user's and the deployment's,
+       not known when the page is built, so it cannot be spelled out here.
+       Plain http only on this machine, for development (localhost and
+       127.0.0.1, any port). What a controller answers is still its
+       business: it serves CORS only to the origins in its
+       ui.allowedOrigins, and checks IAP on every call. Scripts, styles and
+       everything else stay 'self'. -->
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'">
+    content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; base-uri 'none'; object-src 'none'; form-action 'none'">
   <!-- Cascade order: palette (colours, themes, room lighting), chrome
        (HUD, status bar, overlays), panel (a pane as an object), room
        (the 3D scene, or the flat grid), style (what is inside the panes). -->
@@ -149,6 +158,14 @@ limitations under the License.
     <span class="hud-sep">//</span>
     <span id="version" class="hud-item"></span>
     <span class="hud-sep">|</span>
+    <!-- Which Simian the panes show: its name alone while there is one,
+         a switcher once there are several (app.js, "Several Simians"). -->
+    <span class="hud-item" id="hud-simian"><span class="hud-label sim-only">Simian</span>
+      <button type="button" id="simian-name" class="hud-plain" title="Simians: watch several from this page"></button>
+      <select id="simian" class="hud-btn" aria-label="Simian" hidden></select>
+      <button type="button" id="btn-sims" class="hud-btn hud-toggle" title="Simians: add, remove, sign in" aria-label="Simians" hidden>⧉</button>
+    </span>
+    <span class="hud-sep">|</span>
     <label class="hud-item"><span class="hud-label">Arena</span>
       <select id="arena" class="hud-btn"><option value="">All arenas</option></select>
     </label>
@@ -169,6 +186,17 @@ limitations under the License.
     <span id="conn" class="conn" title="Live event stream">●</span>
   </header>
 
+  <!-- The selected Simian, on another origin, is not answering: why, and
+       what to do. -->
+  <div id="sim-alert" role="alert" hidden>
+    <span id="sim-alert-text"></span>
+    <span class="sim-alert-acts">
+      <button type="button" id="sim-alert-signin" class="hud-btn"></button>
+      <button type="button" id="sim-alert-retry" class="hud-btn">Retry</button>
+      <button type="button" id="sim-alert-pick" class="hud-btn">Simians…</button>
+    </span>
+  </div>
+
   <div id="hud-radar" aria-hidden="true">
     <div class="radar-grid"></div>
     <div class="radar-sweep"></div>
@@ -178,6 +206,10 @@ limitations under the License.
   </div>
 
   <footer id="app-status">
+    <!-- Every Simian the page watches, when there is more than one:
+         click one to watch it. -->
+    <span id="st-sims" class="sim-strip" role="group" aria-label="Simians" hidden></span>
+    <span class="hud-sep sim-only">|</span>
     <span class="status-item" id="st-stream">stream: connecting</span>
     <span class="hud-sep">|</span>
     <span class="status-item" id="st-active">active: –</span>
@@ -237,6 +269,29 @@ limitations under the License.
         </div>
         <div class="muted hint">Changes take effect at the next cycle; one already running finishes. They are kept across restarts and recorded in the audit trail in your name. The safety limits above are the ceiling: they change only where Simian is installed.</div>
       </form>
+    </div>
+  </dialog>
+
+  <!-- The Simians this page watches: pick one, sign in, add or remove. -->
+  <dialog id="sims-dialog" class="neon-dialog sims-dialog" aria-labelledby="sims-title">
+    <header class="panel-bar">
+      <h2 class="panel-title" id="sims-title">Simians</h2>
+      <span class="panel-controls"><button type="button" id="sims-close" class="panel-ctl" aria-label="Close">✕</button></span>
+    </header>
+    <div class="dialog-body">
+      <p id="sims-lead" class="sims-lead"></p>
+      <table id="sims-table" class="sims-table"></table>
+      <div id="sims-hidden" class="muted hint"></div>
+      <form id="sims-add">
+        <h3>Add a Simian</h3>
+        <div class="row">
+          <label>URL <input id="sims-url" type="url" size="34" placeholder="https://simian-2.example.com" required></label>
+          <label>Name <input id="sims-name" size="16" placeholder="optional"></label>
+          <button type="submit">Add</button>
+          <span id="sims-add-result" role="status"></span>
+        </div>
+      </form>
+      <p class="muted hint">Kept in this browser. For a Simian to answer this page, it must list <code id="sims-origin"></code> in <code>ui.allowedOrigins</code>; you sign in to each once.</p>
     </div>
   </dialog>
 

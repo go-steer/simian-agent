@@ -21,6 +21,14 @@
 // it as behind a port-forward. SIMIAN_UIDEV_SLOW (e.g. 20s) makes an apply
 // outlast the server's wait, so the page sees a 202. Skipped unless
 // SIMIAN_UIDEV is set.
+//
+// For a page that watches several Simians, run two or more on different
+// origins (localhost and 127.0.0.1 are different origins):
+// SIMIAN_UIDEV_NAME labels one, SIMIAN_UIDEV_ARENAS gives it its own arenas
+// (comma-separated; default bank,boutique), SIMIAN_UIDEV_ORIGINS lists the
+// other pages that may call it (--ui-allowed-origins) and
+// SIMIAN_UIDEV_CONTROLLERS the others it offers (--ui-controllers,
+// comma-separated name=url).
 package uidev
 
 import (
@@ -29,6 +37,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -198,9 +207,18 @@ func (w *world) ListActive(context.Context, string) ([]simian.ActiveFault, error
 
 type topo struct{}
 
+// workloadsIn is each arena's workloads: the boutique's, or a payments
+// system's for an arena called payments.
+func workloadsIn(ns string) []string {
+	if ns == "payments" {
+		return []string{"fraud-check", "gateway", "ledger", "postgres"}
+	}
+	return []string{"cartservice", "frontend", "loadgenerator", "redis-cart"}
+}
+
 func (topo) Snapshot(_ context.Context, ns string) (*topology.TargetTopology, error) {
 	t := &topology.TargetTopology{Namespace: ns, PodStatus: map[string][]topology.PodSummary{}}
-	for _, n := range []string{"cartservice", "frontend", "loadgenerator", "redis-cart"} {
+	for _, n := range workloadsIn(ns) {
 		t.Workloads = append(t.Workloads, topology.Workload{Kind: "Deployment", Name: n, DesiredReplicas: 1})
 		t.PodStatus[n] = []topology.PodSummary{{Name: n + "-x", Ready: true}}
 	}
@@ -222,12 +240,30 @@ func TestServe(t *testing.T) {
 	default:
 		auth = as{webui.Identity{Email: who, Auth: "iap"}}
 	}
-	control := loop.NewControl(loop.Settings{Namespaces: []string{"boutique"}, Interval: 10 * time.Minute, MaxFaultsPerCycle: 1, MaxSeverityPerCycle: simian.TierNamespace})
+	arenas := []string{"bank", "boutique"}
+	if v := os.Getenv("SIMIAN_UIDEV_ARENAS"); v != "" {
+		arenas = strings.Split(v, ",")
+		sort.Strings(arenas)
+	}
+	auto := arenas[len(arenas)-1]
+	var origins []string
+	if v := os.Getenv("SIMIAN_UIDEV_ORIGINS"); v != "" {
+		origins = strings.Split(v, ",")
+	}
+	var specs []string
+	if v := os.Getenv("SIMIAN_UIDEV_CONTROLLERS"); v != "" {
+		specs = strings.Split(v, ",")
+	}
+	controllers, err := webui.ParseControllers(specs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control := loop.NewControl(loop.Settings{Namespaces: []string{auto}, Interval: 10 * time.Minute, MaxFaultsPerCycle: 1, MaxSeverityPerCycle: simian.TierNamespace})
 	h := webui.Handler(webui.Deps{
 		Install:  webui.Install{MaxConcurrentFaults: 1, DurationCeiling: "5m0s", MinCooldown: "1m0s", PermittedTiers: []simian.BlastRadiusTier{simian.TierNamespace}, DefaultProbes: true, LLM: "gemini"},
 		Autonomy: &webui.Autonomy{Control: control},
 		Limits: func(context.Context) (loop.Limits, error) {
-			return loop.Limits{MaxConcurrentFaults: 1, PermittedTiers: []simian.BlastRadiusTier{simian.TierNamespace}, Arenas: []string{"bank", "boutique"}}, nil
+			return loop.Limits{MaxConcurrentFaults: 1, PermittedTiers: []simian.BlastRadiusTier{simian.TierNamespace}, Arenas: arenas}, nil
 		},
 		Excluded: func(_ context.Context, ns string) ([]string, error) {
 			if ns == "boutique" {
@@ -236,8 +272,9 @@ func TestServe(t *testing.T) {
 			return nil, nil
 		},
 		Auditor: w.log,
+		Name:    os.Getenv("SIMIAN_UIDEV_NAME"), AllowedOrigins: origins, Controllers: controllers,
 		Version: "dev", Active: w, Faults: w.log, Topology: topo{}, Events: w.events, Auth: auth, Executor: w,
-		Arenas: func(context.Context) ([]string, error) { return []string{"bank", "boutique"}, nil },
+		Arenas: func(context.Context) ([]string, error) { return arenas, nil },
 		Catalog: func(context.Context) ([]simian.CatalogEntry, error) {
 			return []simian.CatalogEntry{
 				{Engine: simian.EngineChaosMesh, APIVersion: "chaos-mesh.org/v1alpha1", ResourceKind: "PodChaos",
@@ -251,10 +288,14 @@ func TestServe(t *testing.T) {
 				return simian.FaultManifest{}, errors.New("translate: the model's answer is not a fault: no catalog kind matches")
 			}
 			time.Sleep(1200 * time.Millisecond) // the LLM takes a moment
+			target, why := "cartservice", "cartservice sits on the checkout path (frontend → checkout → cart), so delaying its traffic slows checkout without taking it down."
+			if ns == "payments" {
+				target, why = "ledger", "every payment writes to the ledger, so delaying its traffic slows payments without failing them."
+			}
 			return simian.FaultManifest{Engine: simian.EngineChaosMesh, APIVersion: "chaos-mesh.org/v1alpha1", ResourceKind: "NetworkChaos",
 				Spec:    map[string]any{"action": "delay", "mode": "all", "delay": map[string]any{"latency": "300ms", "correlation": "0", "jitter": "50ms"}},
-				Targets: []simian.TargetRef{{Namespace: ns, Name: "cartservice"}}, Duration: d,
-				Rationale: "Asked: \"" + intent + "\". cartservice sits on the checkout path (frontend → checkout → cart), so delaying its traffic slows checkout without taking it down."}, nil
+				Targets: []simian.TargetRef{{Namespace: ns, Name: target}}, Duration: d,
+				Rationale: "Asked: \"" + intent + "\". " + why}, nil
 		},
 	})
 	t.Logf("serving the UI at http://localhost%s/ui/", addr)

@@ -13,9 +13,10 @@
 // limitations under the License.
 
 // Command simian is the single Simian Agent binary, hosting the controller
-// (`simian serve`), the directed-mode CLI client (`simian chaos`), and
-// stub subcommands for milestones not yet shipped (`simian plan`, `simian
-// provision`, `simian evaluate`).
+// (`simian serve`), the standalone web UI (`simian web`), the
+// directed-mode CLI client (`simian chaos`), and stub subcommands for
+// milestones not yet shipped (`simian plan`, `simian provision`, `simian
+// evaluate`).
 package main
 
 import (
@@ -38,6 +39,7 @@ func main() {
 	}
 
 	root.AddCommand(newServeCmd())
+	root.AddCommand(newWebCmd())
 	root.AddCommand(newChaosCmd())
 	root.AddCommand(newArenaCmd())
 	root.AddCommand(newSutCmd())

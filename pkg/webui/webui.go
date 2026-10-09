@@ -53,6 +53,9 @@ type Deps struct {
 	// AllowedOrigins are the pages, other than this controller's own, that
 	// may call it from the browser with the user's credentials.
 	AllowedOrigins []string
+	// Controllers are the other Simians this deployment offers in the
+	// page's controller list (GET /api/controllers).
+	Controllers []Controller
 	// Active lists the faults held right now. *executor.Executor.
 	Active interface {
 		ListActive(ctx context.Context, namespace string) ([]simian.ActiveFault, error)
@@ -162,6 +165,7 @@ func Handler(d Deps) http.Handler {
 		writeJSON(w, workloadsOf(snap))
 	})
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) { d.Events.serve(w, r) })
+	controllersRoute(mux, d.Controllers)
 	writeRoutes(mux, d)
 	adminRoutes(mux, d)
 

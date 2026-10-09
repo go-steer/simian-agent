@@ -23,6 +23,7 @@ simian sut deploy --help
 | `simian arena` | Manage chaos arena namespaces (create/destroy/describe). The arena is the namespace+RBAC unit of isolation for chaos. |
 | `simian sut` | Manage Systems Under Test (deploy/destroy/list). Built-in SUT: Online Boutique. |
 | `simian serve` | Run the controller: Fault Executor + MCP server + autonomous loop. |
+| `simian web` | Serve the web UI alone, with no controller behind it, for watching several Simians from one page. No Kubernetes, no LLM. |
 | `simian chaos` | Submit a fault either as plain-text intent (LLM-translated) or as a hand-built FaultManifest (deterministic-control). Also list/clear active faults. |
 | `simian plan` | Generate an `AttackPlan` against a real arena and emit it as JSON. Default `--dry-run=true` does not apply. |
 | `simian audit export` | Fold the audit trail into one row per fault: what was asked for, what ran on what, and how it ended — or, with `--cycles`, one row per autonomous cycle: what it decided and why. Reads `--audit-file` output or `kubectl logs`. |
@@ -63,6 +64,40 @@ Set on `simian serve` together:
 | `--max-faults-per-cycle` | 3 | Cap on faults applied per cycle. |
 | `--max-severity-per-cycle` | namespace | Highest blast tier the loop will apply (`namespace\|node\|external`). Validated at startup: an unparseable cap would make the loop skip every step, which is indistinguishable from a planner producing nothing. |
 | `--hypothesis-hint` | empty | Soft preference passed to the LLM each cycle. Useful for biasing toward specific engines. |
+
+### Web UI
+
+Set on `simian serve`:
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--ui` | true | Serve the web UI at `/ui/`, its JSON API and event stream under `/api/`, and `/healthz`, on `--ui-addr`. |
+| `--ui-addr` | :8082 | The UI's listen address. |
+| `--ui-auth` | none | `none`: read-only, for a port-forward. `iap`: behind Identity-Aware Proxy, checking IAP's assertion on every request. |
+| `--ui-iap-audience` | empty | With `--ui-auth=iap`: the backend service's audience, `/projects/NUMBER/global/backendServices/ID`. |
+| `--ui-iap-project-number` | empty | With `--ui-auth=iap` and no audience: accept any backend service in this project. |
+| `--ui-writers` | empty | With `--ui-auth=iap`: who may inject and clear faults — emails or `domain:example.com`. Repeatable. |
+| `--ui-admins` | empty | With `--ui-auth=iap`: who may also configure, pause and resume autonomous mode, clear all faults and halt. Repeatable. |
+| `--ui-name` | empty | How this controller is labelled in a page that watches several Simians; empty shows the host. |
+| `--ui-allowed-origins` | empty | Other pages that may call this controller from the browser with the user's credentials — another Simian's UI or the standalone UI — e.g. `https://simian.example.com`. Repeatable. Empty: same origin only. |
+| `--ui-controllers` | empty | Other Simians this controller's page offers, as `name=https://origin` of each controller's UI (or just the URL; the name is then its host). Repeatable. Each must list this page's origin in its `--ui-allowed-origins`. A malformed entry stops the controller starting. |
+
+### Standalone web UI: `simian web`
+
+The same page with no controller behind it, for one page that fronts several
+Simians. It serves `/ui/`, `/healthz` and `GET /api/controllers`; every
+other `/api/` path is 404, so the page asks which Simian to watch.
+
+```bash
+simian web --addr :8080 \
+    --controllers simian-1=https://simian.example.com \
+    --controllers simian-2=https://simian-2.example.com
+```
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--addr` | :8080 | Listen address. |
+| `--controllers` | empty | Simians the page offers, as `name=https://origin` of each controller's UI. Repeatable. Each must list this page's origin in its `--ui-allowed-origins` (chart `ui.allowedOrigins`). |
 
 ### Envoy SUT injection
 
