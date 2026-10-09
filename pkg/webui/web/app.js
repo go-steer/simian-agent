@@ -814,10 +814,40 @@ function showMode() {
 const LOG_MAX = 100;
 const clock = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 
-// say appends a line. who is "you", "simian", or "" for a fault's stage
-// (mark is then its ✓/✗); cls colours it: ok, bad, warn, info, dim.
-function say({ who = "", mark = "", cls = "", html = "", tag = "", detail = "" }) {
+// Each Simian has its own log. The one on screen is #f-log; the others
+// are kept off-page and swapped in when their Simian is selected, so a
+// fault still being followed on one keeps writing to its own history.
+const logs = new Map();
+
+// logFor is ctl's log: #f-log when it is the one on screen.
+function logFor(ctl) {
+  if (!ctl || ctl === state.ctl) return $("f-log");
+  if (!logs.has(ctl)) logs.set(ctl, document.createElement("ol"));
+  return logs.get(ctl);
+}
+
+// swapLog parks the log on screen with from, and brings to's back — or
+// starts it with a welcome on its first visit.
+function swapLog(from, to) {
   const log = $("f-log");
+  const parked = document.createElement("ol");
+  parked.append(...log.childNodes);
+  if (from) logs.set(from, parked);
+  const back = logs.get(to);
+  logs.delete(to);
+  if (back && back.childNodes.length) {
+    log.append(...back.childNodes);
+  } else {
+    welcome();
+  }
+  log.scrollTop = log.scrollHeight;
+}
+
+// say appends a line to ctl's log (the one on screen by default). who is
+// "you", "simian", or "" for a fault's stage (mark is then its ✓/✗); cls
+// colours it: ok, bad, warn, info, dim.
+function say({ who = "", mark = "", cls = "", html = "", tag = "", detail = "", ctl = null }) {
+  const log = logFor(ctl);
   const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   const li = document.createElement("li");
   li.className = "ln" + (who ? " " + who : " stage") + (cls ? " " + cls : "");
@@ -1157,7 +1187,7 @@ function finish(f, why) {
   f.done = true;
   f.timers.forEach((t) => { clearTimeout(t); clearInterval(t); });
   if (f.waiting) f.waiting.remove();
-  if (why) say({ who: "simian", cls: "dim", html: esc(why), tag: short(f.uid) });
+  if (why) say({ who: "simian", cls: "dim", html: esc(why), tag: short(f.uid), ctl: f.ctl });
   attendInject();
 }
 
@@ -1166,7 +1196,7 @@ function finish(f, why) {
 function once(f, key, line) {
   if (f.seen.has(key)) return;
   f.seen.add(key);
-  return say(Object.assign({ tag: short(f.uid) }, line));
+  return say(Object.assign({ tag: short(f.uid), ctl: f.ctl }, line));
 }
 
 const passedOf = (e) => (e.payload || {}).passed;
@@ -1262,7 +1292,7 @@ function awaitRecovery(f) {
     finish(f, "No recovery check for this engine: its objects are the fault and went with it.");
     return;
   }
-  if (!f.waiting) f.waiting = say({ who: "simian", cls: "working dim", html: "checking that the workload recovers", tag: short(f.uid) });
+  if (!f.waiting) f.waiting = say({ who: "simian", cls: "working dim", html: "checking that the workload recovers", tag: short(f.uid), ctl: f.ctl });
   f.timers.push(setTimeout(() => finish(f, "No recovery verdict was recorded within 6 minutes."), 6 * 60 * 1000));
 }
 
@@ -1514,6 +1544,7 @@ async function discover() {
 async function select(c) {
   if (!c || state.ctl === c) return;
   const first = !state.ctl;
+  const prev = state.ctl;
   state.ctl = c;
   keep(SEL_KEY, c.self ? "" : c.url);
   Object.assign(state, { arenas: [], me: {}, catalog: [], config: null, adminFilled: false, halted: false, faultUIDs: new Set(), autonomous: [], active: [], cycles: [] });
@@ -1525,8 +1556,11 @@ async function select(c) {
     $("hud-halted").hidden = true;
     $("st-halted").hidden = true;
     document.body.classList.remove("halted");
+    // A staged card belongs to the Simian it was staged on.
     retireCards("another Simian selected");
-    if (!$("inject").hidden) say({ who: "simian", cls: "info", html: `Now on <b>${esc(c.name)}</b>: what you inject or clear from here goes to ${esc(c.name)}, in your name there.` });
+    const firstVisit = !logs.has(c);
+    swapLog(prev, c);
+    if (firstVisit && !$("inject").hidden && sims.list.length > 1) say({ who: "simian", cls: "info", html: `This is <b>${esc(c.name)}</b>'s log: what you inject or clear from here goes to ${esc(c.name)}, in your name there.` });
   }
   const loading = `<div class="empty loading">Loading ${esc(c.name)}…</div>`;
   for (const id of ["active", "plan", "cycles", "faults", "workloads"]) $(id).innerHTML = loading;
