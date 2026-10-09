@@ -402,8 +402,114 @@ body[data-theme^='chaos'] .status-item code {
   background: var(--glass-inset);
 }
 
+/* ─── Emergency halt ─────────────────────────────────────────────────
+   The HALT button (admins) is a danger control in the status rose at
+   rest. Halted — autonomous mode paused everywhere — is a filled rose
+   chip for everyone (the admin's doubles as RESUME), a rose line in the
+   status bar, and rose rules on both bars. After the Chaos block, and
+   prefixed with body.simian, so it outranks the themed .hud-btn. */
+
+body.simian {
+  --bad-ink: color-mix(in srgb, var(--bad) 55%, #fff);
+}
+
+body.simian:is([data-theme='chaos-light'], [data-theme='cloud-light']) {
+  --bad-ink: color-mix(in srgb, var(--bad) 82%, #000);
+}
+
+body.simian .hud-btn.hud-halt {
+  border-color: color-mix(in srgb, var(--bad) 55%, transparent);
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+  color: var(--bad-ink);
+  font-weight: 700;
+}
+
+body.simian .hud-btn.hud-halt:hover,
+body.simian .hud-btn.hud-halt:focus-visible {
+  border-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 20%, transparent);
+  color: var(--bad-ink);
+  box-shadow: 0 0 16px -3px color-mix(in srgb, var(--bad) 70%, transparent);
+}
+
+body.simian .hud-btn.hud-halt.is-halted,
+.hud-halted {
+  border: 1px solid var(--bad);
+  background: color-mix(in srgb, var(--bad) 24%, transparent);
+  color: var(--bad-ink);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  box-shadow: 0 0 14px -3px color-mix(in srgb, var(--bad) 75%, transparent);
+  animation: halted-glow 2.4s ease-in-out infinite;
+}
+
+body.simian .hud-btn.hud-halt.is-halted:hover,
+body.simian .hud-btn.hud-halt.is-halted:focus-visible {
+  background: color-mix(in srgb, var(--bad) 34%, transparent);
+}
+
+.hud-halted {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  cursor: help;
+}
+
+body[data-theme^='chaos'] .hud-halted {
+  padding: 5px 10px;
+  border-radius: 8px;
+}
+
+@keyframes halted-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 10px -4px color-mix(in srgb, var(--bad) 60%, transparent);
+  }
+
+  50% {
+    box-shadow: 0 0 20px -2px color-mix(in srgb, var(--bad) 85%, transparent);
+  }
+}
+
+.status-halted {
+  color: var(--bad-ink);
+  font-weight: 700;
+}
+
+/* The halted line takes the hints' place in the status bar. */
+body.halted #app-status .status-hint,
+body.halted #app-status .status-hint ~ .hud-sep {
+  display: none;
+}
+
+.status-halted::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--bad);
+  box-shadow: 0 0 7px var(--bad);
+}
+
+body.simian.halted #app-hud {
+  border-bottom-color: color-mix(in srgb, var(--bad) 45%, transparent);
+}
+
+body.simian.halted #app-status {
+  border-top-color: color-mix(in srgb, var(--bad) 45%, transparent);
+  background: color-mix(in srgb, var(--bad) 7%, var(--bar-glass, color-mix(in srgb, var(--bg-surface) 82%, transparent)));
+}
+
 @media (prefers-reduced-motion: reduce) {
   #ambient span {
+    animation: none;
+  }
+
+  body.simian .hud-btn.hud-halt.is-halted,
+  .hud-halted {
     animation: none;
   }
 }

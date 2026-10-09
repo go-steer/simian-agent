@@ -148,6 +148,10 @@ limitations under the License.
     <button type="button" class="hud-btn" id="btn-layout" title="Switch between the room and a flat grid">flat</button>
     <button type="button" class="hud-btn room-only hud-wide" id="btn-tile" title="Put every pane back in its place">tile</button>
     <button type="button" class="hud-btn room-only hud-wide" id="btn-reset" title="Reset the camera and the panes (R)">reset view</button>
+    <!-- The emergency halt (admins) and the halted state (everyone):
+         app.js shows whichever applies. -->
+    <span id="hud-halted" class="hud-halted" role="status" title="Autonomous mode is paused everywhere: Simian starts no faults until an admin resumes it" hidden>⏻ HALTED</span>
+    <button type="button" id="btn-halt" class="hud-btn hud-halt" title="Emergency halt: pause autonomous mode everywhere, then clear every fault" hidden>⏻ HALT</button>
     <button type="button" id="settings" class="hud-btn hud-toggle" title="Configuration" aria-label="Configuration">⚙</button>
     <span id="conn" class="conn" title="Live event stream">●</span>
   </header>
@@ -166,6 +170,7 @@ limitations under the License.
     <span class="status-item" id="st-active">active: –</span>
     <span class="hud-sep">|</span>
     <span class="status-item" id="st-auto">autonomous: –</span>
+    <span class="status-item status-halted" id="st-halted" hidden>HALTED · autonomous mode paused everywhere; nothing new starts until an admin resumes it</span>
     <span class="hud-spacer"></span>
     <span class="status-item status-hint room-only hud-wide">drag a title bar to move a pane · drag the floor to look around · WASD to fly · R to reset</span>
     <span class="hud-sep room-only hud-wide">|</span>
@@ -219,6 +224,24 @@ limitations under the License.
         </div>
         <div class="muted hint">Changes take effect at the next cycle; one already running finishes. They are kept across restarts and recorded in the audit trail in your name. The safety limits above are the ceiling: they change only where Simian is installed.</div>
       </form>
+    </div>
+  </dialog>
+
+  <!-- The halt's confirm, and the resume's: app.js fills it for each. -->
+  <dialog id="halt-dialog" class="neon-dialog halt-dialog" aria-labelledby="halt-title">
+    <header class="panel-bar">
+      <h2 class="panel-title" id="halt-title">Emergency halt</h2>
+      <span class="panel-controls"><button type="button" id="halt-close" class="panel-ctl" aria-label="Close">✕</button></span>
+    </header>
+    <div class="dialog-body">
+      <p id="halt-what" class="halt-what"></p>
+      <ul id="halt-list" class="halt-list"></ul>
+      <p id="halt-note" class="muted hint"></p>
+      <div class="row halt-actions">
+        <button type="button" id="halt-go" class="danger">Halt</button>
+        <button type="button" id="halt-cancel">Cancel</button>
+        <span id="halt-result" role="status"></span>
+      </div>
     </div>
   </dialog>
 

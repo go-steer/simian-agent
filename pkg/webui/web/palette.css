@@ -311,7 +311,7 @@ body {
 }
 
 body[data-theme='cloud-light'] {
-  --grid-line: color-mix(in srgb, var(--accent) 26%, var(--border));
+  --grid-line: color-mix(in srgb, var(--accent) 38%, var(--border));
 }
 
 body[data-theme='chaos-dark'] {
@@ -319,5 +319,5 @@ body[data-theme='chaos-dark'] {
 }
 
 body[data-theme='chaos-light'] {
-  --grid-line: rgb(219 39 119 / 28%);
+  --grid-line: rgb(219 39 119 / 34%);
 }

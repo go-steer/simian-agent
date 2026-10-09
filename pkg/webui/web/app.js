@@ -20,7 +20,7 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const state = { arena: decodeURIComponent(location.hash.slice(1)), autonomous: [], active: [], faultUIDs: new Set(), me: {}, catalog: [], config: null, adminFilled: false };
+const state = { arena: decodeURIComponent(location.hash.slice(1)), autonomous: [], active: [], faultUIDs: new Set(), me: {}, catalog: [], config: null, adminFilled: false, halted: false };
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const time = (t) => (t && !t.startsWith("0001") ? new Date(t).toLocaleTimeString() : "–");
@@ -62,8 +62,39 @@ function verdict(v) {
   return '<span class="muted">–</span>';
 }
 
+// attend marks a pane that holds something to look at: "warn" (amber,
+// --warn) for something in progress or held, "bad" (rose, --bad) for a
+// failure, "" for calm. The glow itself is panel.css.
+function attend(panelId, level) {
+  const el = $(panelId);
+  el.classList.toggle("attn-warn", level === "warn");
+  el.classList.toggle("attn-bad", level === "bad");
+}
+
+// A cycle skipped for one of these is autonomous mode failing, not
+// standing down.
+const CYCLE_ERRORS = ["health-gate", "llm-unavailable", "no-valid-plan"];
+
+// The Autonomous mode pane: rose when an arena's most recent cycle was
+// skipped for an error; amber while halted, or when an arena's most
+// recent cycle was skipped because it is paused.
+function attendAutonomy() {
+  if (!state.autonomous.length) return attend("plan-panel", state.halted ? "warn" : "");
+  const seen = new Set();
+  let level = state.halted ? "warn" : "";
+  for (const c of state.cycles || []) {
+    if (seen.has(c.namespace)) continue;
+    seen.add(c.namespace);
+    if (c.outcome !== "skipped") continue;
+    if (CYCLE_ERRORS.includes(c.reason)) { level = "bad"; break; }
+    if (c.reason === "paused") level = "warn";
+  }
+  attend("plan-panel", level);
+}
+
 function renderActive(list) {
   state.active = list;
+  attend("active-panel", list.length ? "warn" : "");
   $("active-count").textContent = list.length ? "(" + list.length + ")" : "";
   $("st-active").textContent = "active: " + list.length;
   $("st-active").className = "status-item" + (list.length ? " status-live" : "");
@@ -84,6 +115,11 @@ function renderActive(list) {
 }
 
 function renderCycles(cycles) {
+  state.cycles = cycles;
+  attendAutonomy();
+  const halted = state.halted
+    ? '<div class="halted-note">Halted: autonomous mode is paused everywhere. Nothing new starts until an admin resumes it.</div>'
+    : "";
   if (!state.autonomous.length) {
     $("plan").innerHTML = state.me.can_admin
       ? '<div class="empty">Autonomous mode is off. Turn it on from ⚙ Configuration.</div>'
@@ -100,8 +136,9 @@ function renderCycles(cycles) {
               ${s.duration_rationale ? `<div class="why">Why that long: ${esc(s.duration_rationale)}</div>` : ""}
             </li>`).join("")}</ol>
         </div>`
-      : `<div class="empty">Running in ${esc(state.autonomous.join(", "))}; no plan yet.</div>`;
+      : `<div class="empty">${state.halted ? "Set to run" : "Running"} in ${esc(state.autonomous.join(", "))}; no plan yet.</div>`;
   }
+  if (halted) $("plan").insertAdjacentHTML("afterbegin", halted);
   $("cycles").innerHTML = cycles.length
     ? cycles.map((c) => {
         const cls = c.outcome === "completed" ? "ok" : c.outcome === "skipped" ? "warn" : c.outcome === "open" ? "info" : "";
@@ -125,6 +162,7 @@ function renderCycles(cycles) {
 
 function renderFaults(rows) {
   state.faultUIDs = new Set(rows.map((r) => r.fault_uid));
+  attend("faults-panel", rows.some((r) => r.recovered === false || r.outcome === "refused" || r.outcome === "driver-failed") ? "bad" : "");
   $("faults").innerHTML = rows.length
     ? `<table><thead><tr><th>Started</th><th>Kind</th><th>Target</th><th>Source</th><th>Outcome</th><th>Ended</th><th>Injected</th><th>Effect seen</th><th>Recovered</th></tr></thead><tbody>
       ${rows.map((r) => {
@@ -148,6 +186,7 @@ function renderFaults(rows) {
 // arena's, each under its name.
 function renderWorkloads(list) {
   const all = !state.arena;
+  attend("workloads-panel", list.some((w) => w.ready < w.desired) ? "bad" : "");
   $("workloads").innerHTML = list.length
     ? `<table><thead><tr>${all ? "<th>Arena</th>" : ""}<th>Workload</th><th>Ready</th></tr></thead><tbody>
       ${list.map((w) => `<tr class="${w.ready < w.desired ? "short" : ""}">${all ? `<td class="muted">${esc(w.arena)}</td>` : ""}<td>${esc(w.kind)}/${esc(w.name)}</td><td class="num">${w.ready}/${w.desired}</td></tr>`).join("")}
@@ -235,6 +274,132 @@ function renderConfig(c) {
     if (!state.adminFilled) fillAdmin(c);
     renderPauses(c);
   }
+  renderHalt(c);
+}
+
+// ─── Emergency halt ─────────────────────────────────────────────────
+// Halted is autonomous mode paused everywhere ("*"), however it got
+// there. Everyone sees it — the HUD chip and the status-bar line — so
+// nobody watching mistakes a stopped Simian for a quiet one. Admins get
+// the button: HALT, or while halted, RESUME. Neither happens without a
+// confirm, and resuming never happens by itself.
+function renderHalt(c) {
+  const s = (c.autonomous || {}).settings || {};
+  state.halted = (s.paused || []).includes("*");
+  const admin = !!(c.you && c.you.can_admin);
+  document.body.classList.toggle("halted", state.halted);
+  $("btn-halt").hidden = !admin;
+  $("btn-halt").textContent = state.halted ? "⏻ HALTED · RESUME" : "⏻ HALT";
+  $("btn-halt").title = state.halted
+    ? "Autonomous mode is paused everywhere. Resume it"
+    : "Emergency halt: pause autonomous mode everywhere, then clear every fault";
+  $("btn-halt").classList.toggle("is-halted", state.halted);
+  $("hud-halted").hidden = admin || !state.halted;
+  $("st-halted").hidden = !state.halted;
+  attendAutonomy();
+}
+
+const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
+
+// haltPlan says exactly what a halt would do now: the faults it would
+// clear (every arena, whatever the page is filtered to) and what happens
+// to autonomous mode.
+async function haltPlan() {
+  const active = await get("/api/active");
+  const au = (state.config || {}).autonomous;
+  const s = au ? au.settings : null;
+  const faults = active.length ? "clear " + plural(active.length, "running fault", "running faults") : "no faults are running to clear";
+  let auto = "";
+  if (!s) auto = "";
+  else if ((s.paused || []).includes("*")) auto = "keep autonomous mode paused everywhere";
+  else if (!s.enabled) auto = "keep autonomous mode paused (it is off now, and stays paused if it is turned on)";
+  else auto = "pause autonomous mode in " + ((s.namespaces || []).join(", ") || "every arena");
+  const what = active.length
+    ? `Halt: ${faults}${auto ? " and " + auto : ""}?`
+    : `Halt: ${faults}; ${auto || "nothing else to stop"}?`;
+  return { active, what };
+}
+
+let haltAction = null;
+
+function openHaltDialog({ title, what, list, note, go, action }) {
+  $("halt-title").textContent = title;
+  $("halt-what").textContent = what;
+  $("halt-list").innerHTML = list || "";
+  $("halt-list").hidden = !list;
+  $("halt-note").textContent = note || "";
+  $("halt-go").textContent = go;
+  $("halt-go").hidden = false;
+  $("halt-go").disabled = false;
+  $("halt-cancel").textContent = "Cancel";
+  $("halt-result").className = "";
+  $("halt-result").textContent = "";
+  haltAction = action;
+  if (!$("halt-dialog").open) $("halt-dialog").showModal();
+  $("halt-cancel").focus();
+}
+
+async function haltOrResume() {
+  if (state.halted) {
+    const s = ((state.config || {}).autonomous || {}).settings || {};
+    openHaltDialog({
+      title: "Resume autonomous mode",
+      what: s.enabled
+        ? `Resume autonomous mode in ${(s.namespaces || []).join(", ") || "its arenas"}? It plans and injects faults again from its next cycle.`
+        : "Lift the halt? Autonomous mode is off, so nothing starts until it is turned on.",
+      note: "This lifts every pause, here and per arena. It is recorded in the audit trail in your name.",
+      go: "Resume",
+      action: async () => {
+        await post("/api/admin/pause", { namespace: "", paused: false });
+        return "Resumed.";
+      },
+    });
+    return;
+  }
+  let plan;
+  try { plan = await haltPlan(); } catch (e) { alert("Could not read the running faults: " + e.message); return; }
+  openHaltDialog({
+    title: "Emergency halt",
+    what: plan.what,
+    list: plan.active.map((f) => `<li><span class="kind">${esc(f.manifest.resource_kind)}</span> → ${esc(target(f.manifest.targets))} <span class="muted">${esc(f.fault_uid)}</span></li>`).join(""),
+    note: "Autonomous mode is paused first, so it cannot start a fault while the rest are cleared, and it stays paused until an admin resumes it. Recorded in the audit trail in your name.",
+    go: "⏻ Halt",
+    action: async () => {
+      const r = await post("/api/admin/halt");
+      const failed = Object.entries(r.failed || {});
+      return "Halted: cleared " + plural((r.cleared || []).length, "fault", "faults") +
+        (r.paused ? ", autonomous mode paused everywhere" : "") + "." +
+        (failed.length ? " Could not clear " + failed.map(([uid, err]) => uid + " (" + err + ")").join(", ") + "." : "") +
+        (r.warning ? " Warning: " + r.warning : "");
+    },
+  });
+}
+
+function setupHalt() {
+  $("btn-halt").onclick = haltOrResume;
+  const close = () => $("halt-dialog").close();
+  $("halt-close").onclick = close;
+  $("halt-cancel").onclick = close;
+  $("halt-go").onclick = async () => {
+    if (!haltAction) return;
+    $("halt-go").disabled = true;
+    $("halt-result").className = "";
+    $("halt-result").textContent = "…";
+    try {
+      const msg = await haltAction();
+      haltAction = null;
+      $("halt-result").className = msg.includes("Could not") || msg.includes("Warning") ? "bad" : "ok";
+      $("halt-result").textContent = msg;
+      $("halt-go").hidden = true;
+      $("halt-cancel").textContent = "Close";
+      state.adminFilled = false;
+      refresh();
+    } catch (e) {
+      $("halt-result").className = "bad";
+      $("halt-result").textContent = "Refused: " + e.message;
+      $("halt-go").disabled = false;
+    }
+  };
 }
 
 function isPaused(s, ns) { return (s.paused || []).includes("*") || (s.paused || []).includes(ns); }
@@ -466,6 +631,7 @@ async function main() {
   } catch (e) { /* All arenas still works */ }
   await setupInject(arenas);
   setupAdmin();
+  setupHalt();
   $("arena").value = state.arena;
   $("arena").onchange = () => {
     state.arena = $("arena").value;
