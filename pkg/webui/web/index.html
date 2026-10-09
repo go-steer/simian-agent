@@ -82,31 +82,44 @@ limitations under the License.
           <header class="panel-bar"><h2 class="panel-title" id="inject-title">Inject a fault</h2></header>
           <div class="panel-body">
             <div id="inject-readonly" class="empty" hidden></div>
+            <!-- The pane is a short conversation: the controls, a terminal
+                 log both modes write to (what you asked, what Simian
+                 proposed, and each stage of the fault as the audit trail
+                 records it), and the input below it. -->
             <form id="inject" hidden>
-              <div class="row">
+              <div class="row inject-controls">
                 <label>Arena <select id="f-arena" required></select></label>
                 <label id="f-workload-label">Workload <select id="f-workload"><option value="">(choose an arena)</option></select></label>
-                <label>Duration <input id="f-duration" value="2m" size="6" required></label>
-                <span class="modes">
+                <label id="f-kind-label">Kind <select id="f-kind"></select></label>
+                <label>For <input id="f-duration" value="2m" size="5" required title="Duration, e.g. 90s, 2m"></label>
+              </div>
+              <div id="f-term" class="term">
+                <div class="term-bar">
+                  <span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+                  <span class="term-title">simian · session</span>
+                  <button type="button" id="f-log-clear" class="term-btn" title="Clear this log (nothing is kept after you leave the page)">clear log</button>
+                </div>
+                <ol id="f-log" class="term-log" role="log" aria-live="polite" aria-label="Inject log"></ol>
+              </div>
+              <div id="f-exact">
+                <div class="spec-head">
+                  <label for="f-spec">Spec <span class="muted">JSON; the target comes from Workload</span></label>
+                  <details id="f-hint-box"><summary class="muted">template</summary><div id="f-hint" class="muted hint"></div></details>
+                </div>
+                <textarea id="f-spec" rows="3" spellcheck="false"></textarea>
+              </div>
+              <div id="f-intent" hidden>
+                <label for="f-text" class="sr-only">What should go wrong? The LLM proposes a fault; nothing is applied until you inject it.</label>
+                <textarea id="f-text" rows="2" placeholder="What should go wrong? e.g. add 300ms of latency to calls into cartservice  (Enter sends, Shift+Enter is a new line)"></textarea>
+              </div>
+              <div class="row inject-send">
+                <span class="modes" role="radiogroup" aria-label="How to say what goes wrong">
                   <label><input type="radio" name="mode" value="manifest" checked> Exact</label>
                   <label><input type="radio" name="mode" value="intent"> Describe it</label>
                 </span>
+                <span id="f-result" role="status"></span>
+                <button type="submit" id="f-submit">Inject…</button>
               </div>
-              <div id="f-exact">
-                <label>Kind <select id="f-kind"></select></label>
-                <details id="f-hint-box"><summary class="muted">Show the template</summary><div id="f-hint" class="muted hint"></div></details>
-                <label class="block">Spec (JSON; the target comes from Workload)
-                  <textarea id="f-spec" rows="5" spellcheck="false"></textarea></label>
-              </div>
-              <div id="f-intent" hidden>
-                <label class="block">What should go wrong? The LLM picks the fault.
-                  <textarea id="f-text" rows="3" placeholder="add 300ms of latency to calls into cartservice"></textarea></label>
-              </div>
-              <div class="row">
-                <button type="submit">Inject</button>
-                <span id="f-result"></span>
-              </div>
-              <div class="muted hint">It goes through the same safety checks as the CLI: arenas only, no excluded workloads, within the duration and concurrency limits. The audit trail records it in your name.</div>
             </form>
           </div>
         </section>
