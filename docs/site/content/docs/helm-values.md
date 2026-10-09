@@ -133,6 +133,8 @@ without a log pipeline, and what `simian audit export` reads directly.
 |---|---|---|
 | `ui.enabled` | `true` | Serve the web UI at `/ui/`, with its JSON API and event stream under `/api/`, on `ui.port`. Only `false` renders a flag (`--ui=false`). |
 | `ui.port` | `8082` | The UI's port, on the container and the Service. A value other than `8082` renders `--ui-addr`. |
+| `ui.name` | `""` | How this controller is labelled in a UI that watches several Simians (e.g. its cluster). Renders `--ui-name` when set. |
+| `ui.allowedOrigins` | `[]` | Other pages that may call this controller from the browser with the user's credentials — another Simian's UI or the standalone UI — e.g. `https://simian-2.example.com`. Only these get CORS headers; a preflight from them is answered before IAP is checked, and the real request still needs IAP's assertion and, for writes, `X-Simian-UI`. Behind IAP the load balancer must also let preflights through. Renders `--ui-allowed-origins` when set. |
 | `ui.auth` | `none` | `none`: read-only, for a port-forward. `iap`: behind Identity-Aware Proxy; every request must carry IAP's assertion, and `ui.iap.writers` may inject and clear faults. Needs `ui.iap.audience` or `ui.iap.projectNumber`. |
 | `ui.iap.audience` | `""` | The backend service's audience, `/projects/NUMBER/global/backendServices/ID`, checked exactly. |
 | `ui.iap.projectNumber` | `""` | Without an exact audience: accept any backend service in this project. |

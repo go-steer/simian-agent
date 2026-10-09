@@ -43,6 +43,12 @@ spec:
             {{- if not .Values.ui.enabled }}
             - --ui=false
             {{- end }}
+            {{- with (dig "name" "" .Values.ui) }}
+            - --ui-name={{ . }}
+            {{- end }}
+            {{- range (dig "allowedOrigins" (list) .Values.ui) }}
+            - --ui-allowed-origins={{ . }}
+            {{- end }}
             {{- if ne (int .Values.ui.port) 8082 }}
             - --ui-addr=:{{ .Values.ui.port }}
             {{- end }}

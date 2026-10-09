@@ -161,6 +161,14 @@ metrics:
 ui:
   enabled: true
   port: 8082
+  # How this controller is labelled in a UI that watches several Simians,
+  # e.g. the cluster's name. Empty: the UI shows the host.
+  name: ""
+  # Other pages that may call this controller from the browser with the
+  # user's credentials — another Simian's UI, or the standalone UI — as
+  # origins, e.g. https://simian-2.example.com. Behind IAP the load balancer
+  # must also let CORS preflights through (docs/web-ui-iap.md).
+  allowedOrigins: []
   auth: none
   iap:
     # The backend service's audience, /projects/NUMBER/global/backendServices/ID
