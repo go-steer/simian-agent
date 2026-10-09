@@ -29,6 +29,9 @@ package chaosmesh
 var specTemplates = map[string]string{
 	"PodChaos": `action MUST be one of: "pod-kill" | "pod-failure" | "container-kill"
 "container-kill" also needs "containerNames": ["<container>"], from the workload's containers.
+"mode" is how many of the target's pods: "one" | "all" | "fixed" with "value": "2" (that many) |
+"fixed-percent" with "value": "50" | "random-max-percent" with "value": "50". "all" and the percent
+modes take down several replicas at once — a swarm rather than a single crash.
 {"action": "pod-kill", "mode": "one",
  "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}}}`,
 
