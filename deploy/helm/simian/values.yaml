@@ -214,6 +214,10 @@ ui:
     oauthClient:
       clientID: ""
       secretName: ""
+    # The load balancer's request timeout in seconds (Gateway and Ingress).
+    # It also bounds how long the live event stream stays open between
+    # reconnects. GKE's default is 30.
+    timeoutSec: 300
 
 # MCP server.
 mcp:

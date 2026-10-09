@@ -15,6 +15,9 @@ metadata:
   labels:
     {{- include "simian.labels" . | nindent 4 }}
 spec:
+  # See ui-iap-gateway.yaml: GKE's default 30s cut requests and the event
+  # stream short.
+  timeoutSec: {{ dig "timeoutSec" 300 .Values.ui.iap }}
   iap:
     enabled: true
     {{- with (dig "oauthClient" "secretName" "" .Values.ui.iap) }}

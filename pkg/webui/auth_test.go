@@ -191,6 +191,9 @@ func (e *fakeExecutor) Apply(ctx context.Context, m simian.FaultManifest) (strin
 	}
 	e.applied = append(e.applied, m)
 	e.actors = append(e.actors, simian.ActorFrom(ctx))
+	if m.UID != "" {
+		return m.UID, nil
+	}
 	return "f-1", nil
 }
 
@@ -240,7 +243,7 @@ func TestAWriterSubmitsAndClearsInTheirOwnName(t *testing.T) {
 	tok := f.token(t, "ES256", nil)
 
 	code, body := post(t, srv, "/api/faults", tok, true, podKill)
-	if code != 200 || !strings.Contains(body, `"fault_uid":"f-1"`) {
+	if code != 200 || !strings.Contains(body, `"fault_uid":"f-`) || !strings.Contains(body, `"state":"applied"`) {
 		t.Fatalf("submit: %d %s", code, body)
 	}
 	m := exec.applied[0]
@@ -248,7 +251,7 @@ func TestAWriterSubmitsAndClearsInTheirOwnName(t *testing.T) {
 		m.Duration != 90*time.Second || m.Targets[0].Name != "cartservice" || m.Targets[0].Namespace != "boutique" {
 		t.Errorf("manifest = %+v", m)
 	}
-	if code, body := post(t, srv, "/api/faults/f-1/clear", tok, true, ""); code != 200 {
+	if code, body := post(t, srv, "/api/faults/"+exec.applied[0].UID+"/clear", tok, true, ""); code != 200 {
 		t.Fatalf("clear: %d %s", code, body)
 	}
 	if len(exec.cleared) != 1 || exec.actors[0] != "alice@example.com" || exec.actors[1] != "alice@example.com" {
@@ -304,5 +307,78 @@ func TestTheHealthCheckNeedsNoAssertionAndTheRestDoes(t *testing.T) {
 		if resp.StatusCode != want {
 			t.Errorf("GET %s without an assertion: %d, want %d", path, resp.StatusCode, want)
 		}
+	}
+}
+
+// slowExecutor takes longer to apply than the submit waits.
+type slowExecutor struct {
+	fakeExecutor
+	delay time.Duration
+	done  chan string
+}
+
+func (e *slowExecutor) Apply(ctx context.Context, m simian.FaultManifest) (string, error) {
+	time.Sleep(e.delay)
+	uid, err := e.fakeExecutor.Apply(ctx, m)
+	e.done <- uid
+	return uid, err
+}
+
+// A fault that takes longer to settle than a load balancer waits is
+// answered 202 with its UID, and still applied: the request no longer
+// holds the outcome hostage to a proxy's timeout.
+func TestASlowApplyIsAnsweredAndStillFinishes(t *testing.T) {
+	old := applyWait
+	applyWait = 50 * time.Millisecond
+	defer func() { applyWait = old }()
+	f := newFakeIAP(t)
+	exec := &slowExecutor{delay: 300 * time.Millisecond, done: make(chan string, 1)}
+	srv := httptest.NewServer(Handler(Deps{
+		Auth: f.auth(t, testAudience, "alice@example.com"), Executor: exec,
+		Catalog: func(context.Context) ([]simian.CatalogEntry, error) {
+			return []simian.CatalogEntry{{Engine: simian.EngineChaosMesh, APIVersion: "chaos-mesh.org/v1alpha1", ResourceKind: "PodChaos"}}, nil
+		},
+	}))
+	defer srv.Close()
+	code, body := post(t, srv, "/api/faults", f.token(t, "ES256", nil), true, podKill)
+	if code != http.StatusAccepted || !strings.Contains(body, `"state":"applying"`) {
+		t.Fatalf("slow submit: %d %s, want 202 applying", code, body)
+	}
+	var res struct {
+		UID string `json:"fault_uid"`
+	}
+	_ = json.Unmarshal([]byte(body), &res)
+	select {
+	case uid := <-exec.done:
+		if uid != res.UID || exec.actors[0] != "alice@example.com" {
+			t.Errorf("applied %q as %v; answered %q", uid, exec.actors, res.UID)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the fault was never applied after the request was answered")
+	}
+}
+
+// Translating proposes a fault and applies nothing.
+func TestTranslateProposesWithoutApplying(t *testing.T) {
+	f := newFakeIAP(t)
+	exec := &fakeExecutor{}
+	srv := httptest.NewServer(Handler(Deps{
+		Auth: f.auth(t, testAudience, "alice@example.com"), Executor: exec,
+		Translate: func(_ context.Context, intent, ns string, d time.Duration) (simian.FaultManifest, error) {
+			return simian.FaultManifest{Engine: simian.EngineChaosMesh, ResourceKind: "NetworkChaos", Duration: d, Rationale: "latency into checkout",
+				Spec: map[string]any{"action": "delay"}, Targets: []simian.TargetRef{{Namespace: ns, Name: "checkoutservice"}}}, nil
+		},
+	}))
+	defer srv.Close()
+	code, body := post(t, srv, "/api/translate", f.token(t, "ES256", nil), true, `{"namespace":"boutique","intent":"slow down checkout","duration":"90s"}`)
+	if code != 200 || !strings.Contains(body, `"kind":"NetworkChaos"`) || !strings.Contains(body, `"workload":"checkoutservice"`) ||
+		!strings.Contains(body, `"duration":"1m30s"`) || !strings.Contains(body, `"rationale":"latency into checkout"`) {
+		t.Fatalf("translate: %d %s", code, body)
+	}
+	if len(exec.applied) != 0 {
+		t.Errorf("translate applied %+v", exec.applied)
+	}
+	if code, _ := post(t, srv, "/api/translate", f.token(t, "ES256", nil), false, `{"namespace":"boutique","intent":"x"}`); code != http.StatusForbidden {
+		t.Errorf("translate without X-Simian-UI: %d", code)
 	}
 }

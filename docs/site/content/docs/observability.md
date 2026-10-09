@@ -107,8 +107,10 @@ the write endpoints refuse: with no one identified, anyone who could reach the
 port could inject faults.
 
 The page reads a small JSON API under `/api/` (`info`, `me`, `config`,
-`arenas`, `catalog`, `active`, `faults`, `cycles`, `topology`), writes with
-`POST /api/faults` and `POST /api/faults/{uid}/clear`, administers with `POST
+`arenas`, `catalog`, `active`, `faults`, `cycles`, `topology`), proposes a fault from a sentence with `POST /api/translate` (nothing is
+applied), writes with `POST /api/faults` (answered when the executor is
+done, or after 15 seconds with `202` and the fault's UID, the rest
+following on the event stream) and `POST /api/faults/{uid}/clear`, administers with `POST
 /api/admin/autonomous`, `/api/admin/autonomous/reset`, `/api/admin/pause`,
 `/api/admin/clear-all` and `/api/admin/halt`, and streams events from `/api/events`; other tools can
 use it too.
