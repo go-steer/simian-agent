@@ -399,6 +399,17 @@ body[data-theme='chaos-light'] #horizon {
   opacity: 0.45;
 }
 
+/* Light rooms: on a pale wash the floor fades out first, so it gets a
+   little more line than the dark rooms do, enough to read as a floor
+   on a wide screen. */
+body[data-theme='chaos-light'] #grid-floor {
+  opacity: 0.85;
+}
+
+body[data-theme='cloud-light'] #grid-floor {
+  opacity: 0.9;
+}
+
 /* The panes' glass blur in the room (panel.css). Measured in headless
    software rendering, the blur did not slow the room down (its own
    drift, grid and radar animations dominate), so it is the full 16px;
@@ -492,6 +503,40 @@ body.flat .panel-body {
 }
 
 body.flat .panel-anchor[data-pane='faults'] .panel-body {
+  max-height: none;
+}
+
+/* Height is yours in the flat grid (room.js): the bottom edge is the
+   grip, and a pane you sized keeps that height and lets its row grow
+   around it. Widths stay the grid's. */
+body.flat .panel-anchor > .panel > button.panel-grip {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: auto;
+  height: 9px;
+  border-radius: 0;
+  background: linear-gradient(currentcolor, currentcolor) center / 40px 3px no-repeat;
+  cursor: ns-resize;
+}
+
+body.flat .panel-anchor > .panel > button.panel-grip:hover,
+body.flat .panel-anchor.resizing > .panel > button.panel-grip {
+  background:
+    linear-gradient(currentcolor, currentcolor) center / 56px 3px no-repeat,
+    color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+body.flat .panel-anchor:has(> .panel.flat-sized) {
+  align-self: start;
+}
+
+body.flat .panel.flat-sized {
+  height: var(--flat-h);
+  min-height: 0;
+}
+
+body.flat .panel.flat-sized .panel-body {
   max-height: none;
 }
 

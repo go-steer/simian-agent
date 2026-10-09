@@ -141,6 +141,19 @@ code {
 
 /* ─── Autonomous mode ────────────────────────────────────────────── */
 
+.halted-note {
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  color: var(--text);
+}
+
+body[data-theme^='chaos'] .halted-note {
+  border-radius: 10px;
+}
+
 .plan .hypothesis {
   margin: 4px 0 8px;
   color: var(--text);
@@ -692,3 +705,56 @@ body[data-theme='chaos-light'] dialog.neon-dialog::backdrop {
 body[data-theme^='chaos'] #admin {
   border-top-color: var(--rule);
 }
+
+/* ─── The halt's confirm ─────────────────────────────────────────────
+   The configuration dialog's chrome, narrower, in the status rose. */
+
+dialog.halt-dialog {
+  --hue: var(--bad);
+  --mark: var(--bad);
+
+  width: min(580px, 92vw);
+}
+
+.halt-what {
+  margin: 14px 0 8px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.halt-list {
+  max-height: 12rem;
+  margin: 0 0 8px;
+  padding-left: 18px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.halt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 16px;
+}
+
+#halt-go {
+  font-weight: 700;
+}
+
+#halt-result.ok { color: var(--ok); }
+#halt-result.bad { color: var(--bad); }
+
+body[data-theme^='chaos'] dialog.halt-dialog {
+  box-shadow: var(--glass-shadow), 0 0 60px -10px color-mix(in srgb, var(--bad) 35%, transparent);
+}
+
+body[data-theme^='chaos'] dialog.halt-dialog > .panel-bar::before {
+  background: linear-gradient(90deg, transparent, var(--bad), transparent);
+}
+
+body[data-theme^='chaos'] #halt-title::before { content: '⏻'; }

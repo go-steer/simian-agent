@@ -83,7 +83,7 @@
   let parallaxFrame = 0;
 
   function aimParallax(e) {
-    if (!isRoom() || drag || orbit || stillness.matches) return;
+    if (!isRoom() || drag || orbit || resize || stillness.matches) return;
     const damp = centred ? 0.45 : 1;
     parallaxAim.yaw = ((e.clientX / window.innerWidth) * 2 - 1) * PARALLAX_YAW * damp;
     parallaxAim.pitch = -((e.clientY / window.innerHeight) * 2 - 1) * PARALLAX_PITCH * damp;
@@ -275,7 +275,7 @@
     const id = el.dataset.pane;
     const panel = el.querySelector(".panel");
     const bar = el.querySelector(".panel-bar");
-    const p = { id, index, el, panel, bar, pos: null, home: null, moved: false };
+    const p = { id, index, el, panel, bar, pos: null, home: null, moved: false, size: null };
 
     const controls = document.createElement("span");
     controls.className = "panel-controls";
@@ -291,6 +291,18 @@
     bar.appendChild(controls);
 
     panel.style.setProperty("--drift-delay", (index * -3.7).toFixed(1) + "s");
+
+    // The resize grip: the bottom-right corner in the room, the bottom
+    // edge in the flat grid. Out of the tab order (the panes' contents
+    // own the keyboard); named for screen readers and the pointer.
+    p.title = title;
+    p.grip = document.createElement("button");
+    p.grip.type = "button";
+    p.grip.tabIndex = -1;
+    p.grip.className = "panel-grip";
+    p.grip.setAttribute("aria-label", "Resize " + title);
+    p.grip.title = "Drag to resize " + title + "; double-click for its usual size";
+    panel.appendChild(p.grip);
 
     p.cast = document.createElement("div");
     p.cast.className = "panel-cast";
@@ -308,6 +320,14 @@
     };
     new MutationObserver(showHidden).observe(panel, { attributes: true, attributeFilter: ["hidden"] });
     showHidden();
+
+    p.grip.addEventListener("pointerdown", (e) => startResize(p, e));
+    p.grip.addEventListener("pointermove", moveResize);
+    p.grip.addEventListener("pointerup", endResize);
+    p.grip.addEventListener("pointercancel", endResize);
+    p.grip.addEventListener("lostpointercapture", endResize);
+    p.grip.addEventListener("dblclick", (e) => { e.stopPropagation(); restoreSize(p); });
+    p.grip.addEventListener("click", (e) => e.stopPropagation());
 
     bar.addEventListener("dblclick", (e) => {
       if (!isRoom() || e.target.closest("button, select, input")) return;
@@ -388,9 +408,9 @@
       if (p === centred) {
         p.pos = centredFor(f, area);
       } else if (p.moved && p.pos) {
-        Object.assign(p.pos, { w: p.home.w, h: p.home.h, zoom: p.home.zoom }, facingFor(f, p.pos));
+        Object.assign(p.pos, sizeFor(p), { zoom: p.home.zoom }, facingFor(f, p.pos));
       } else {
-        p.pos = Object.assign({}, p.home);
+        p.pos = Object.assign({}, p.home, sizeFor(p));
       }
     }
     hangPlanes();
@@ -446,7 +466,7 @@
     if (!p) return;
     centred = null;
     const fromX = p.pos.x;
-    p.pos = p.moved && p.parked ? p.parked : Object.assign({}, p.home);
+    p.pos = p.moved && p.parked ? p.parked : Object.assign({}, p.home, sizeFor(p));
     p.parked = null;
     p.el.classList.remove("centred");
     body.classList.remove("has-centred");
@@ -468,10 +488,169 @@
     uncentre();
     for (const p of panes) {
       p.moved = false;
+      p.size = null;
       p.pos = Object.assign({}, p.home);
       place(p);
     }
     save();
+  }
+
+  // ─── Resize: a pane's real size, not a scale ──────────────────────
+  // The grip changes the pane's CSS width and height (--pw/--ph), so its
+  // text stays the size it was and more of its rows fit. In the room the
+  // top-left corner stays put: the pane is centred on its position, so
+  // growing it by dw moves the position dw/2 along the pane's own x axis
+  // (turned by its facing) and dh/2 down. Pointer movement is turned into
+  // pane pixels by the ratio of the pane's on-screen box to its CSS size,
+  // taken when the drag starts — exact face-on, close enough at the
+  // angles the room allows. In the flat grid only the height changes.
+
+  const MIN_W = 260;
+  const MIN_H = 160;
+  const MAX_GROW = 1.6;
+
+  function sizeBounds(p) {
+    const base = p.home || { w: MIN_W, h: MIN_H };
+    return {
+      w0: MIN_W, w1: Math.max(MIN_W, base.w * MAX_GROW),
+      h0: MIN_H, h1: Math.max(MIN_H, base.h * MAX_GROW),
+    };
+  }
+
+  // The size a pane takes in the room: the one you gave it, within its
+  // bounds for this window, or its home size.
+  function sizeFor(p) {
+    if (!p.size) return { w: p.home.w, h: p.home.h };
+    const b = sizeBounds(p);
+    return { w: clamp(p.size.w, b.w0, b.w1), h: clamp(p.size.h, b.h0, b.h1) };
+  }
+
+  let resize = null;
+
+  function startResize(p, e) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    if (isRoom()) {
+      if (p === centred) return;
+      setFront(p);
+      const r = p.panel.getBoundingClientRect();
+      resize = {
+        p, x: e.clientX, y: e.clientY, room: true,
+        w: p.pos.w, h: p.pos.h, origin: Object.assign({}, p.pos),
+        kx: r.width / p.pos.w || 1, ky: r.height / p.pos.h || 1,
+      };
+    } else {
+      resize = { p, y: e.clientY, room: false, h: p.panel.getBoundingClientRect().height };
+    }
+    p.el.classList.add("resizing");
+    body.classList.add(resize.room ? "resizing-pane" : "resizing-flat");
+    p.grip.setPointerCapture(e.pointerId);
+  }
+
+  function moveResize(e) {
+    if (!resize) return;
+    const p = resize.p;
+    if (!resize.room) {
+      setFlatHeight(p, resize.h + (e.clientY - resize.y));
+      return;
+    }
+    // The corner follows the pointer, and the pointer is held inside
+    // the room's window, so the grip never ends up off screen.
+    const cs = getComputedStyle(body);
+    const top = (parseFloat(cs.getPropertyValue("--hud-h")) || 36) + 6;
+    const bottom = window.innerHeight - (parseFloat(cs.getPropertyValue("--status-h")) || 26) - 6;
+    const px = clamp(e.clientX, 8, window.innerWidth - 18);
+    const py = clamp(e.clientY, top, bottom);
+    const b = sizeBounds(p);
+    const w = clamp(resize.w + (px - resize.x) / resize.kx, b.w0, b.w1);
+    const h = clamp(resize.h + (py - resize.y) / resize.ky, b.h0, b.h1);
+    applySize(p, resize.origin, resize.w, resize.h, w, h);
+    if (Math.abs(w - resize.w) > 1 || Math.abs(h - resize.h) > 1) p.moved = true;
+    place(p);
+  }
+
+  // Sets a room pane's size, from a placement of size (w0, h0), keeping
+  // its top-left corner where it was.
+  function applySize(p, from, w0, h0, w, h) {
+    const ry = from.ry * rad;
+    const dw = (w - w0) / 2;
+    const dh = (h - h0) / 2;
+    p.pos.w = w;
+    p.pos.h = h;
+    p.pos.x = from.x + dw * Math.cos(ry);
+    p.pos.z = from.z - dw * Math.sin(ry);
+    p.pos.y = from.y + dh * Math.cos(from.rx * rad);
+    p.size = { w, h };
+  }
+
+  function endResize() {
+    if (!resize) return;
+    const r = resize;
+    resize = null;
+    r.p.el.classList.remove("resizing");
+    body.classList.remove("resizing-pane", "resizing-flat");
+    if (r.room) save();
+    else saveFlat();
+  }
+
+  // Double-click the grip: the pane's usual size, top-left kept; back
+  // home if that is where it came from.
+  function restoreSize(p) {
+    if (!isRoom()) {
+      setFlatHeight(p, null);
+      saveFlat();
+      return;
+    }
+    if (p === centred || !p.size) return;
+    const from = Object.assign({}, p.pos);
+    applySize(p, from, from.w, from.h, p.home.w, p.home.h);
+    p.size = null;
+    if (Math.hypot(p.pos.x - p.home.x, p.pos.y - p.home.y, p.pos.z - p.home.z) < 3) {
+      p.moved = false;
+      p.pos = Object.assign({}, p.home);
+    }
+    place(p);
+    save();
+  }
+
+  // ─── Flat heights ─────────────────────────────────────────────────
+  // The grid sets the widths; a pane's height is yours to change, and is
+  // kept under its own key.
+
+  const FLAT_KEY = "simian:flat";
+
+  function flatBounds() {
+    return { h0: MIN_H, h1: Math.max(600, window.innerHeight * 1.5) };
+  }
+
+  function setFlatHeight(p, h) {
+    if (h === null) {
+      p.flatH = null;
+      p.panel.classList.remove("flat-sized");
+      p.panel.style.removeProperty("--flat-h");
+      return;
+    }
+    const b = flatBounds();
+    p.flatH = Math.round(clamp(h, b.h0, b.h1));
+    p.panel.classList.add("flat-sized");
+    p.panel.style.setProperty("--flat-h", p.flatH + "px");
+  }
+
+  function saveFlat() {
+    const heights = {};
+    for (const p of panes) if (p.flatH) heights[p.id] = p.flatH;
+    try { localStorage.setItem(FLAT_KEY, JSON.stringify({ v: 1, heights })); } catch (e) { /* this visit only */ }
+  }
+
+  function restoreFlat() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(FLAT_KEY) || "null"); } catch (e) { saved = null; }
+    if (!saved || saved.v !== 1) return;
+    for (const [id, h] of Object.entries(saved.heights || {})) {
+      const p = pane(id);
+      if (p && Number.isFinite(h)) setFlatHeight(p, h);
+    }
   }
 
   function resetView() {
@@ -607,13 +786,13 @@
   // dialog, or anything typed with a modifier is never the camera's.
   function typing(e) {
     return e.metaKey || e.ctrlKey || e.altKey ||
-      document.getElementById("config-dialog").open ||
+      !!document.querySelector("dialog[open]") ||
       !!e.target.closest("input, textarea, select, [contenteditable], dialog");
   }
 
   document.addEventListener("keydown", (e) => {
     if (!isRoom()) return;
-    if (e.key === "Escape" && centred && !document.getElementById("config-dialog").open) {
+    if (e.key === "Escape" && centred && !document.querySelector("dialog[open]")) {
       uncentre();
       e.preventDefault();
       return;
@@ -655,12 +834,14 @@
     saveTimer = window.setTimeout(() => {
       saveTimer = 0;
       const moved = {};
+      const sizes = {};
       for (const p of panes) {
         const at = p === centred ? p.parked : p.pos;
         if (p.moved && at) moved[p.id] = { x: Math.round(at.x), y: Math.round(at.y), z: Math.round(at.z) };
+        if (p.size) sizes[p.id] = { w: Math.round(p.size.w), h: Math.round(p.size.h) };
       }
       try {
-        localStorage.setItem(ROOM_KEY, JSON.stringify({ v: 1, cam: { yaw: cam.yaw, pitch: cam.pitch, dolly: cam.dolly }, moved }));
+        localStorage.setItem(ROOM_KEY, JSON.stringify({ v: 2, cam: { yaw: cam.yaw, pitch: cam.pitch, dolly: cam.dolly }, moved, sizes }));
       } catch (e) { /* blocked storage: the room still holds for this visit */ }
     }, 250);
   }
@@ -668,7 +849,8 @@
   function restore() {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem(ROOM_KEY) || "null"); } catch (e) { saved = null; }
-    if (!saved || saved.v !== 1) return;
+    // v1 had no sizes; it reads the same otherwise.
+    if (!saved || (saved.v !== 1 && saved.v !== 2)) return;
     if (saved.cam) {
       cam.yaw = clamp(Number(saved.cam.yaw) || 0, -YAW_LIMIT, YAW_LIMIT);
       cam.pitch = clamp(Number(saved.cam.pitch) || 0, PITCH_MIN, PITCH_MAX);
@@ -679,6 +861,10 @@
       if (!p || ![at.x, at.y, at.z].every(Number.isFinite)) continue;
       p.moved = true;
       p.pos = { x: at.x, y: at.y, z: at.z, w: 0, h: 0, zoom: 1, ry: 0, rx: 0 };
+    }
+    for (const [id, sz] of Object.entries(saved.sizes || {})) {
+      const p = pane(id);
+      if (p && [sz.w, sz.h].every(Number.isFinite)) p.size = { w: sz.w, h: sz.h };
     }
   }
 
@@ -740,8 +926,9 @@
   if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 
   restore();
+  restoreFlat();
   enter(prefs.layout());
   if (isRoom()) boot();
 
-  window.SimianRoom = { panes, camera: cam, centre, uncentre, tile, resetView, layout };
+  window.SimianRoom = { panes, camera: cam, centre, uncentre, tile, resetView, layout, restoreSize };
 })();

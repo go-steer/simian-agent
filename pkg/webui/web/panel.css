@@ -510,9 +510,178 @@ body.room .panel-anchor.dragging .panel-bar {
   scrollbar-color: color-mix(in srgb, var(--hue) 70%, transparent) transparent;
 }
 
+/* ─── Attention ──────────────────────────────────────────────────────
+   app.js marks a pane .attn-warn (amber, --warn: faults running, a
+   pause) or .attn-bad (rose, --bad: a refusal, a failed recovery, a
+   short workload, autonomous mode failing). The pane's edge and glow
+   take the status colour, and a dot by its title pings. Neon: the
+   bezel and its halo. Light rooms: a coloured ring in the elevation.
+   Chaos: a tinted glass border, a coloured hairline and a soft bloom. */
+
+.panel.attn-warn {
+  --attn: var(--warn);
+}
+
+.panel.attn-bad {
+  --attn: var(--bad);
+}
+
+.panel:is(.attn-warn, .attn-bad) {
+  --panel-edge: linear-gradient(var(--attn), var(--attn));
+  --panel-shadow:
+    0 0 2px var(--attn), 0 0 20px color-mix(in srgb, var(--attn) 60%, transparent),
+    0 0 56px color-mix(in srgb, var(--attn) 26%, transparent),
+    inset 0 0 28px color-mix(in srgb, var(--attn) 14%, transparent);
+  --panel-shadow-active:
+    0 0 3px var(--attn), 0 0 28px color-mix(in srgb, var(--attn) 78%, transparent),
+    0 0 76px color-mix(in srgb, var(--attn) 36%, transparent),
+    inset 0 0 32px color-mix(in srgb, var(--attn) 18%, transparent);
+}
+
+body[data-theme='cloud-light'] .panel:is(.attn-warn, .attn-bad) {
+  --panel-shadow:
+    0 1px 2px rgb(60 64 67 / 30%), 0 6px 20px color-mix(in srgb, var(--attn) 22%, transparent),
+    0 0 0 2px color-mix(in srgb, var(--attn) 70%, transparent);
+  --panel-shadow-active:
+    0 2px 6px rgb(60 64 67 / 30%), 0 12px 34px color-mix(in srgb, var(--attn) 28%, transparent),
+    0 0 0 2px var(--attn);
+}
+
+body[data-theme^='chaos'] .panel-anchor > .panel:is(.attn-warn, .attn-bad) {
+  border-color: color-mix(in srgb, var(--attn) 55%, transparent);
+  box-shadow:
+    var(--glass-shadow), 0 0 0 1px color-mix(in srgb, var(--attn) 16%, transparent),
+    0 14px 44px color-mix(in srgb, var(--attn) 16%, transparent),
+    0 0 30px color-mix(in srgb, var(--attn) 24%, transparent);
+}
+
+body[data-theme^='chaos'] .panel-anchor:is(:hover, .front, .centred) > .panel:is(.attn-warn, .attn-bad) {
+  border-color: color-mix(in srgb, var(--attn) 75%, transparent);
+  box-shadow:
+    var(--glass-shadow), 0 0 0 1px color-mix(in srgb, var(--attn) 24%, transparent),
+    0 16px 50px color-mix(in srgb, var(--attn) 22%, transparent),
+    0 0 36px color-mix(in srgb, var(--attn) 34%, transparent);
+}
+
+body[data-theme^='chaos'] .panel:is(.attn-warn, .attn-bad) .panel-bar::before {
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--attn), transparent);
+}
+
+.panel:is(.attn-warn, .attn-bad) .panel-title::after {
+  content: '';
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-left: 8px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: var(--attn);
+  animation: attn-ping 1.9s ease-out infinite;
+}
+
+body[data-theme^='chaos'] .panel:is(.attn-warn, .attn-bad) .panel-title::after {
+  margin-left: 0;
+}
+
+@keyframes attn-ping {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--attn) 70%, transparent);
+  }
+
+  70%,
+  100% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+}
+
+/* ─── Resize grip ────────────────────────────────────────────────────
+   A pane's bottom-right corner in the room (room.js turns the drag into
+   the pane's real width and height), its bottom edge in the flat grid.
+   A <button> for its name, out of the tab order; the selectors are long
+   enough to outrank style.css's themed buttons. */
+
+body .panel-anchor > .panel > button.panel-grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: linear-gradient(
+    135deg,
+    transparent 0 52%,
+    currentcolor 52% 58%,
+    transparent 58% 68%,
+    currentcolor 68% 74%,
+    transparent 74% 84%,
+    currentcolor 84% 90%,
+    transparent 90%
+  );
+  box-shadow: none;
+  color: var(--hue-ink);
+  opacity: 0.4;
+  cursor: nwse-resize;
+  touch-action: none;
+  transition: opacity 0.12s linear, color 0.12s linear;
+}
+
+body .panel-anchor > .panel > button.panel-grip:hover,
+body .panel-anchor.resizing > .panel > button.panel-grip {
+  opacity: 1;
+  color: var(--accent);
+  background-color: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: none;
+}
+
+body[data-theme^='chaos'] .panel-anchor > .panel > button.panel-grip {
+  right: 3px;
+  bottom: 3px;
+  border-radius: 0 0 11px;
+  color: var(--text-dim);
+}
+
+body[data-theme^='chaos'] .panel-anchor > .panel > button.panel-grip:hover,
+body[data-theme^='chaos'] .panel-anchor.resizing > .panel > button.panel-grip {
+  color: var(--accent-ink);
+}
+
+/* A centred pane is the room's reading size: no grip. */
+body .panel-anchor.centred > .panel > button.panel-grip {
+  display: none;
+}
+
+/* Resizing follows the pointer at once. */
+.panel-anchor.resizing,
+.panel-anchor.resizing > .panel {
+  transition: none;
+}
+
+body.room.resizing-pane,
+body.room.resizing-pane * {
+  cursor: nwse-resize !important;
+  user-select: none;
+}
+
+body.flat.resizing-flat,
+body.flat.resizing-flat * {
+  cursor: ns-resize !important;
+  user-select: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .panel {
     animation: none;
+  }
+
+  .panel:is(.attn-warn, .attn-bad) .panel-title::after {
+    animation: none;
+    box-shadow: 0 0 6px var(--attn);
   }
 
   .panel-anchor.front .panel::before {
@@ -533,4 +702,10 @@ body.room .panel-anchor.dragging .panel-bar {
   .panel-anchor {
     transition: none;
   }
+}
+
+/* On white glass the rose and the accent pink sit close: a firmer
+   border keeps an attention pane distinct from a merely hovered one. */
+body[data-theme='chaos-light'] .panel-anchor > .panel:is(.attn-warn, .attn-bad) {
+  border-color: color-mix(in srgb, var(--attn) 75%, transparent);
 }

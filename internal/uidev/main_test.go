@@ -55,12 +55,23 @@ func (w *world) emit(ctx context.Context, e simian.AuditEvent) {
 }
 
 func (w *world) Apply(ctx context.Context, m simian.FaultManifest) (string, error) {
-	if m.Targets[0].Name == "loadgenerator" {
-		return "", &simian.ExecutorError{Stage: simian.StageSafety, Reason: simian.ReasonWorkloadExcluded, Message: "workload Deployment/loadgenerator is excluded from chaos"}
-	}
 	w.mu.Lock()
 	w.n++
 	uid := fmt.Sprintf("f-01UIDEV%04d", w.n)
+	if m.Targets[0].Name == "loadgenerator" {
+		// Refused, and recorded as the executor records it, so the page
+		// has a refused row to show.
+		w.mu.Unlock()
+		m.UID = uid
+		rec := m.AuditRecord()
+		if a := simian.ActorFrom(ctx); a != "" {
+			rec["actor"] = a
+		}
+		w.emit(ctx, simian.AuditEvent{Event: audit.EventExecutorReceived, FaultUID: uid, Mode: m.Source, Payload: rec})
+		w.emit(ctx, simian.AuditEvent{Event: audit.EventExecutorRejected, FaultUID: uid, Mode: m.Source, Reason: string(simian.ReasonWorkloadExcluded),
+			Payload: map[string]any{"error": "executor[safety:workload-excluded]: workload Deployment/loadgenerator is excluded from chaos"}})
+		return "", &simian.ExecutorError{Stage: simian.StageSafety, Reason: simian.ReasonWorkloadExcluded, Message: "workload Deployment/loadgenerator is excluded from chaos"}
+	}
 	m.UID = uid
 	now := time.Now().UTC()
 	w.active = append(w.active, simian.ActiveFault{FaultUID: uid, Manifest: m, AppliedAt: now, Deadline: now.Add(m.Duration)})
