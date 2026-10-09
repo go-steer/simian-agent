@@ -15,11 +15,14 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/oklog/ulid/v2"
 
 	"github.com/go-steer/simian-agent/pkg/simian"
 )
@@ -80,12 +83,51 @@ func writeRoutes(mux *http.ServeMux, d Deps) {
 			return
 		}
 		m.Source = simian.SourceDirected
-		uid, err := d.Executor.Apply(ctx, m)
-		if err != nil {
-			http.Error(w, err.Error(), statusFor(err))
+		// The UID is known before the executor runs, so the page can follow
+		// the fault on the event stream even if this request answers first.
+		m.UID = "f-" + ulid.Make().String()
+		applied := make(chan error, 1)
+		// Detached from the request: a fault being applied is finished, or
+		// rolled back by the executor, whether or not the browser waits.
+		go func() {
+			_, err := d.Executor.Apply(context.WithoutCancel(ctx), m)
+			applied <- err
+		}()
+		res := map[string]string{"fault_uid": m.UID, "engine": string(m.Engine), "kind": m.ResourceKind}
+		select {
+		case err := <-applied:
+			if err != nil {
+				http.Error(w, err.Error(), statusFor(err))
+				return
+			}
+			res["state"] = "applied"
+			writeJSON(w, res)
+		case <-time.After(applyWait):
+			// Settling — waiting for the engine and the probes — can outlast
+			// a load balancer's request timeout. Answer now; the outcome
+			// arrives on /api/events and in /api/faults under this UID.
+			res["state"] = "applying"
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(res)
+		}
+	})
+	mux.HandleFunc("POST /api/translate", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := mayWrite(w, r, d); !ok {
 			return
 		}
-		writeJSON(w, map[string]string{"fault_uid": uid, "engine": string(m.Engine), "kind": m.ResourceKind})
+		var req submitRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+			http.Error(w, "bad request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		req.Mode = "intent"
+		m, err := manifestFor(r, d, req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, proposalOf(m))
 	})
 	mux.HandleFunc("POST /api/faults/{uid}/clear", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := mayWrite(w, r, d)
@@ -98,6 +140,33 @@ func writeRoutes(mux *http.ServeMux, d Deps) {
 		}
 		writeJSON(w, map[string]bool{"cleared": true})
 	})
+}
+
+// applyWait is how long a submit waits for the executor before answering
+// 202 and leaving the outcome to the event stream: short enough to stay
+// well inside a load balancer's request timeout, long enough that a
+// refusal — which comes before the driver — is answered directly.
+var applyWait = 15 * time.Second
+
+// proposal is a translated fault, for the operator to confirm, edit or
+// discard before anything is applied. It has the fields the submit form
+// takes, so confirming it is an exact submit.
+type proposal struct {
+	Engine    string         `json:"engine"`
+	Kind      string         `json:"kind"`
+	Namespace string         `json:"namespace"`
+	Workload  string         `json:"workload"`
+	Spec      map[string]any `json:"spec"`
+	Duration  string         `json:"duration"`
+	Rationale string         `json:"rationale,omitempty"`
+}
+
+func proposalOf(m simian.FaultManifest) proposal {
+	p := proposal{Engine: string(m.Engine), Kind: m.ResourceKind, Spec: m.Spec, Duration: m.Duration.String(), Rationale: m.Rationale}
+	if len(m.Targets) > 0 {
+		p.Namespace, p.Workload = m.Targets[0].Namespace, m.Targets[0].Name
+	}
+	return p
 }
 
 // mayWrite refuses the request unless writes are on, the user may write,

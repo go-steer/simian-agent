@@ -61,6 +61,10 @@ metadata:
     {{- include "simian.labels" . | nindent 4 }}
 spec:
   default:
+    # The load balancer's request timeout, which also bounds how long the
+    # live event stream stays open before the browser reconnects. GKE's
+    # default, 30s, cut both short.
+    timeoutSec: {{ dig "timeoutSec" 300 .Values.ui.iap }}
     iap:
       enabled: true
       {{- if or (dig "oauthClient" "clientID" "" .Values.ui.iap) (dig "oauthClient" "secretName" "" .Values.ui.iap) }}
