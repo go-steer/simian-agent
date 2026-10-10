@@ -25,6 +25,8 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 var _ simian.InjectionConfirmer = (*Driver)(nil)
@@ -241,5 +243,42 @@ func TestConfirmInjectedSaysWhenTheCallerStoppedWaiting(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "not injected after 1m0s") {
 		t.Errorf("err = %v claims the full timeout ran", err)
+	}
+}
+
+// Near its deadline the loop's reads can be refused by client-go's rate
+// limiter, which predicts a request would miss the deadline before the
+// context expires. The engine's last word must survive that: the kind e2e
+// once reported the limiter's error instead of "No such file" (#201).
+func TestConfirmInjectedKeepsTheLastStatusWhenLaterReadsFail(t *testing.T) {
+	d, fake := newTestDriver(t)
+	d.confirmInterval = 10 * time.Millisecond
+	d.WithConfirmTimeout(80 * time.Millisecond)
+	uid := createWithStatus(t, d, map[string]any{
+		"conditions": cond("Selected", "True", "AllInjected", "False"),
+		"experiment": map[string]any{"containerRecords": []any{
+			record("bank/web-1/nginx", [2]string{"Failed", "open /data: No such file or directory"}),
+		}},
+	})
+	reads := 0
+	fake.PrependReactor("get", "httpchaos", func(clienttesting.Action) (bool, runtime.Object, error) {
+		reads++
+		if reads == 1 {
+			return false, nil, nil // the real object, once
+		}
+		return true, nil, errors.New("client rate limiter Wait returned an error: rate: Wait(n=1) would exceed context deadline")
+	})
+
+	observed, err := d.ConfirmInjected(context.Background(), uid)
+	if err == nil {
+		t.Fatal("ConfirmInjected succeeded")
+	}
+	for _, s := range []string{observed, err.Error()} {
+		if !strings.Contains(s, "No such file") || strings.Contains(s, "rate limiter") {
+			t.Errorf("%q: want the engine's last word, not the rate limiter's", s)
+		}
+	}
+	if reads < 2 {
+		t.Errorf("only %d reads: the failing ones were never exercised", reads)
 	}
 }
