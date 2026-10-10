@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -70,16 +71,27 @@ func (d *Driver) ConfirmInjected(ctx context.Context, engineUIDStr string) (stri
 	defer tick.Stop()
 
 	observed := "status not read yet"
+	read := false // whether observed is a status Chaos Mesh reported
 	for {
 		obj, err := d.dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 		switch {
 		case err == nil:
 			var done bool
 			done, observed = injectionState(obj)
+			read = true
 			if done {
 				return observed, nil
 			}
-		case ctx.Err() == nil:
+		case apierrors.IsNotFound(err):
+			// The object went away: that is the news, whatever it said before.
+			observed, read = "get: "+err.Error(), false
+		case ctx.Err() == nil && !read:
+			// A read that failed only replaces a status nobody has seen yet.
+			// Near the deadline client-go's rate limiter refuses requests it
+			// predicts would miss it ("Wait(n=1) would exceed context
+			// deadline") before the context has expired; reporting that in
+			// place of the engine's last word lost the reason the fault did
+			// not take (#201).
 			observed = "get: " + err.Error()
 		}
 
