@@ -44,7 +44,7 @@ image:
   # silently change the running binary.
   # Must be at least the chart's appVersion: the chart renders flags
   # (e.g. --audit-file) an older binary refuses. verify-chart checks it.
-  tag: "0.4.0-rc.7"
+  tag: "0.4.0"
   # IfNotPresent matches the chart default; explicit for clarity.
   pullPolicy: IfNotPresent
 
@@ -178,6 +178,12 @@ resources:
 # ============================================================
 # Hardening log — what is "baked" and as of when
 # ============================================================
+#
+# 2026-10-10 (chart 0.4.0):
+#   - image pin moved to 0.4.0: the spatial room and the Chaos theme,
+#     the Inject terminal, the emergency halt, and one page for several
+#     Simians. Validated as rc.1-rc.7 on two GKE clusters behind IAP.
+#     Upgrading from 0.3.x: see the release notes.
 #
 # 2026-10-09 (chart 0.4.0-rc.7):
 #   - image pin moved to 0.4.0-rc.7: each Simian has its own Inject log
