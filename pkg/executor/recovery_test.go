@@ -26,6 +26,7 @@ import (
 
 	"github.com/go-steer/simian-agent/internal/testutil"
 	"github.com/go-steer/simian-agent/pkg/audit"
+	"github.com/go-steer/simian-agent/pkg/catalog"
 	"github.com/go-steer/simian-agent/pkg/lease"
 	"github.com/go-steer/simian-agent/pkg/simian"
 )
@@ -117,5 +118,28 @@ func TestNoRecoveryVerdictWithoutOne(t *testing.T) {
 	exec.CheckRecovery(context.Background(), clearedFault(simian.EngineKubeState))
 	if ev := recovered(t, aud); len(ev) != 0 {
 		t.Errorf("fault.recovered = %+v, want none", ev)
+	}
+}
+
+// An outage aimed at the arena took down whatever had pods in the zone, so
+// its recovery is judged over every pod in the namespace — a finished Job's
+// pod aside.
+func TestAnArenaWideOutageIsJudgedOverEveryPod(t *testing.T) {
+	done := recoveryPod("migrate-x", false, "")
+	done.Labels = map[string]string{"job": "migrate"}
+	done.Status.Phase = corev1.PodSucceeded
+	other := recoveryPod("ledger-a", false, "")
+	other.Labels = map[string]string{"app": "ledger"}
+	exec, _, aud := newRecoveryExecutor(t, recoveryPod("frontend-a", true, ""), other, done)
+
+	af := simian.ActiveFault{FaultUID: "f-1", Manifest: simian.FaultManifest{UID: "f-1", Engine: simian.EngineChaosMesh,
+		ResourceKind: catalog.ChaosMeshZoneOutage, Targets: []simian.TargetRef{{Namespace: "bank"}}}}
+	exec.CheckRecovery(context.Background(), af)
+	ev := recovered(t, aud)
+	if len(ev) != 1 || ev[0].Payload["passed"] != false {
+		t.Fatalf("fault.recovered = %+v, want one, passed false", ev)
+	}
+	if unready, _ := ev[0].Payload["unready"].([]string); len(unready) != 1 || !strings.Contains(unready[0], "bank/ledger-a") {
+		t.Errorf("unready = %v, want ledger-a alone", unready)
 	}
 }

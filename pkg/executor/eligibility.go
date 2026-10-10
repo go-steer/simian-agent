@@ -17,6 +17,8 @@ package executor
 import (
 	"context"
 	"strings"
+
+	"github.com/go-steer/simian-agent/pkg/simian"
 )
 
 // EligibilityAnnotation is the namespace-level opt-in annotation.
@@ -24,7 +26,7 @@ const EligibilityAnnotation = "simian.chaos/eligible"
 
 // ExcludeWorkloadsAnnotation is the optional fine-grained workload exclusion
 // list, comma-separated.
-const ExcludeWorkloadsAnnotation = "simian.chaos/exclude-workloads"
+const ExcludeWorkloadsAnnotation = simian.ExcludeWorkloadsAnnotation
 
 // EligibilityChecker abstracts the namespace-annotation lookup so the executor
 // can be unit-tested without a real Kubernetes client.

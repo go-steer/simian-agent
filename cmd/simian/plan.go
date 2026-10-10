@@ -92,7 +92,7 @@ executor pipeline 'simian serve --autonomous' uses.`,
 			}
 			cached := memory.NewMemCacheClient(disco)
 
-			cmDriver := chaosmesh.New(dyn, cached, "simian-")
+			cmDriver := chaosmesh.New(dyn, cached, "simian-").WithKubernetes(clientset)
 			npDriver := networkpolicy.New(clientset, "")
 			envoyDriver := envoyfault.New(clientset)
 			ksDriver := kubestate.New(clientset)

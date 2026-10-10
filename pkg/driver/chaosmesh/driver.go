@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/restmapper"
 )
 
@@ -46,6 +47,10 @@ type Driver struct {
 	disco      discovery.DiscoveryInterface
 	mapper     *restmapper.DeferredDiscoveryRESTMapper
 	namePrefix string
+
+	// kube reads nodes, pods and workloads for the outage kinds; nil leaves
+	// them out of the catalog. See WithKubernetes.
+	kube kubernetes.Interface
 
 	// Bounds for ConfirmInjected; zero means the package defaults.
 	confirmTimeout  time.Duration
@@ -76,6 +81,9 @@ func (d *Driver) Engine() simian.Engine { return simian.EngineChaosMesh }
 // Apply implements ChaosDriver. Builds an unstructured object from the
 // manifest, injects spec.duration, and Creates via the dynamic client.
 // Returns the engine UID encoded as "<namespace>/<name>".
+//
+// The outage kinds are not CRDs: they are built as a bundle of PodChaos, and
+// their engine UID names the bundle — see outage.go.
 func (d *Driver) Apply(ctx context.Context, m simian.FaultManifest) (string, error) {
 	if len(m.Targets) == 0 {
 		return "", fmt.Errorf("chaos-mesh apply: manifest has no targets")
@@ -83,6 +91,9 @@ func (d *Driver) Apply(ctx context.Context, m simian.FaultManifest) (string, err
 	ns := m.Targets[0].Namespace
 	if ns == "" {
 		return "", fmt.Errorf("chaos-mesh apply: manifest target has no namespace")
+	}
+	if catalog.IsOutageKind(m.Engine, m.ResourceKind) {
+		return d.applyOutage(ctx, m)
 	}
 
 	if err := checkSpec(m.ResourceKind, m.Spec); err != nil {
@@ -152,8 +163,15 @@ func (d *Driver) Apply(ctx context.Context, m simian.FaultManifest) (string, err
 }
 
 // Clear implements ChaosDriver. Decodes the engineUID, deletes the resource.
-// Idempotent — NotFound is treated as success.
+// Idempotent — NotFound is treated as success. A bundle's engine UID deletes
+// every member of the bundle.
 func (d *Driver) Clear(ctx context.Context, engineUIDStr string) error {
+	if ns, id, gvr, ok, err := decodeBundleUID(engineUIDStr); ok {
+		if err != nil {
+			return err
+		}
+		return d.clearBundle(ctx, ns, id, gvr)
+	}
 	ns, name, gvr, err := decodeEngineUID(engineUIDStr)
 	if err != nil {
 		return err
@@ -184,7 +202,7 @@ func (d *Driver) Catalog(ctx context.Context) ([]simian.CatalogEntry, error) {
 			EfficacyGate:    catalog.EfficacyGate(simian.EngineChaosMesh, r.Kind),
 		})
 	}
-	return out, nil
+	return append(out, d.outageCatalog(preferred, resources)...), nil
 }
 
 // faultResources returns the preferred chaos-mesh.org group version and its

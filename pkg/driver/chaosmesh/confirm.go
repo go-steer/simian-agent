@@ -51,10 +51,34 @@ func (d *Driver) WithConfirmTimeout(timeout time.Duration) *Driver {
 // controller until its duration ran out, and was recorded by Simian as having
 // run. The failure was in the CR's status the whole time.
 func (d *Driver) ConfirmInjected(ctx context.Context, engineUIDStr string) (string, error) {
+	// A bundle is confirmed only when every member is: an outage that took
+	// down three workloads of the four it was built for is not the outage
+	// the audit trail would otherwise say ran.
+	if ns, id, gvr, ok, err := decodeBundleUID(engineUIDStr); ok {
+		if err != nil {
+			return "", err
+		}
+		return d.pollInjected(ctx, ns+"/bundle "+id, func(ctx context.Context) (bool, string, error) {
+			return d.bundleState(ctx, ns, id, gvr)
+		})
+	}
 	ns, name, gvr, err := decodeEngineUID(engineUIDStr)
 	if err != nil {
 		return "", err
 	}
+	return d.pollInjected(ctx, ns+"/"+name, func(ctx context.Context) (bool, string, error) {
+		obj, err := d.dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, "", err
+		}
+		done, observed := injectionState(obj)
+		return done, observed, nil
+	})
+}
+
+// pollInjected calls readState until it reports the fault injected, or the
+// driver's confirmation bound runs out. what names the fault in errors.
+func (d *Driver) pollInjected(ctx context.Context, what string, readState func(context.Context) (bool, string, error)) (string, error) {
 	timeout, interval := d.confirmTimeout, d.confirmInterval
 	if timeout <= 0 {
 		timeout = defaultConfirmTimeout
@@ -73,11 +97,10 @@ func (d *Driver) ConfirmInjected(ctx context.Context, engineUIDStr string) (stri
 	observed := "status not read yet"
 	read := false // whether observed is a status Chaos Mesh reported
 	for {
-		obj, err := d.dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+		done, state, err := readState(ctx)
 		switch {
 		case err == nil:
-			var done bool
-			done, observed = injectionState(obj)
+			observed = state
 			read = true
 			if done {
 				return observed, nil
@@ -100,10 +123,10 @@ func (d *Driver) ConfirmInjected(ctx context.Context, engineUIDStr string) (stri
 			if err := parent.Err(); err != nil {
 				// The caller gave up, not the timeout: say so, or a shutdown
 				// reads as an injection that failed.
-				return observed, fmt.Errorf("chaos-mesh: %s/%s: stopped waiting after %s (%w): %s",
-					ns, name, time.Since(start).Truncate(time.Second), err, observed)
+				return observed, fmt.Errorf("chaos-mesh: %s: stopped waiting after %s (%w): %s",
+					what, time.Since(start).Truncate(time.Second), err, observed)
 			}
-			return observed, fmt.Errorf("chaos-mesh: %s/%s not injected after %s: %s", ns, name, timeout, observed)
+			return observed, fmt.Errorf("chaos-mesh: %s not injected after %s: %s", what, timeout, observed)
 		case <-tick.C:
 		}
 	}

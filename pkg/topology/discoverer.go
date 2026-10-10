@@ -45,6 +45,9 @@ type Discoverer struct {
 	started   bool
 	stopCh    chan struct{}
 	syncCheck []cache.InformerSynced
+	// nodesSynced reports whether the node cache, which is best-effort, has
+	// filled.
+	nodesSynced cache.InformerSynced
 }
 
 // New constructs a Discoverer with cluster-scoped informers. Per-namespace
@@ -70,6 +73,10 @@ func New(client kubernetes.Interface, resync time.Duration) *Discoverer {
 		d.factory.Apps().V1().DaemonSets().Informer().HasSynced,
 		d.factory.Networking().V1().NetworkPolicies().Informer().HasSynced,
 	}
+	// Nodes give each pod its zone. Started with the rest but not waited
+	// for: a controller whose role cannot read nodes still gets a topology,
+	// only without zones in it.
+	d.nodesSynced = d.factory.Core().V1().Nodes().Informer().HasSynced
 	return d
 }
 
@@ -223,7 +230,7 @@ func (d *Discoverer) Snapshot(ctx context.Context, ns string) (*TargetTopology, 
 	if err != nil && !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("topology: list pods: %w", err)
 	}
-	out.PodStatus = groupPodsByOwner(pods)
+	out.PodStatus = groupPodsByOwner(pods, d.nodeZones())
 
 	if evts, err := evtLister.List(labels.Everything()); err == nil {
 		out.RecentEvents = recentEvents(evts, 25)
@@ -252,6 +259,25 @@ func (d *Discoverer) Snapshot(ctx context.Context, ns string) (*TargetTopology, 
 	sort.Slice(out.Services, func(i, j int) bool { return out.Services[i].Name < out.Services[j].Name })
 
 	return out, nil
+}
+
+// nodeZones maps node name to its topology.kubernetes.io/zone label, from the
+// node cache once it has synced; empty before then or without access.
+func (d *Discoverer) nodeZones() map[string]string {
+	out := map[string]string{}
+	if d.nodesSynced == nil || !d.nodesSynced() {
+		return out
+	}
+	nodes, err := d.factory.Core().V1().Nodes().Lister().List(labels.Everything())
+	if err != nil {
+		return out
+	}
+	for _, n := range nodes {
+		if z := n.Labels[corev1.LabelTopologyZone]; z != "" {
+			out[n.Name] = z
+		}
+	}
+	return out
 }
 
 // envoyInjectedAnnotation is the pod-template-spec annotation set by
@@ -370,7 +396,7 @@ func serviceSummary(s *corev1.Service) Service {
 // groupPodsByOwner buckets pods by their controller's name (the part of an
 // owner-reference's name before the last dash for ReplicaSets, since Pod
 // owners are RSes, not Deployments). Best-effort.
-func groupPodsByOwner(pods []*corev1.Pod) map[string][]PodSummary {
+func groupPodsByOwner(pods []*corev1.Pod, zoneOf map[string]string) map[string][]PodSummary {
 	out := map[string][]PodSummary{}
 	now := time.Now().UTC()
 	for _, p := range pods {
@@ -381,6 +407,7 @@ func groupPodsByOwner(pods []*corev1.Pod) map[string][]PodSummary {
 			Ready:    podIsReady(p),
 			Restarts: totalRestarts(p),
 			NodeName: p.Spec.NodeName,
+			Zone:     zoneOf[p.Spec.NodeName],
 			AgeSec:   int64(now.Sub(p.CreationTimestamp.Time).Seconds()),
 		})
 	}

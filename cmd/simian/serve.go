@@ -187,12 +187,13 @@ func newServeCmd() *cobra.Command {
 			}
 			cached := memory.NewMemCacheClient(disco)
 
-			cmDriver := chaosmesh.New(dyn, cached, "simian-")
-
 			clientset, err := kubernetes.NewForConfig(cfg)
 			if err != nil {
 				return fmt.Errorf("kubernetes clientset: %w", err)
 			}
+			// The clientset is what lets it build ZoneOutage and NodeOutage,
+			// which find their pods by node.
+			cmDriver := chaosmesh.New(dyn, cached, "simian-").WithKubernetes(clientset)
 			// NetworkPolicy partition driver — works on GKE Dataplane V2,
 			// where Chaos Mesh's NetworkChaos is silently bypassed
 			// (see https://go-steer.github.io/simian-agent/docs/dpv2-chaos-engines/).

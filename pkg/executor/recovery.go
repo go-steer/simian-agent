@@ -23,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/go-steer/simian-agent/pkg/audit"
+	"github.com/go-steer/simian-agent/pkg/catalog"
 	"github.com/go-steer/simian-agent/pkg/simian"
 )
 
@@ -84,8 +85,11 @@ func (e *Executor) CheckRecovery(ctx context.Context, af simian.ActiveFault) {
 // unreadyTargets lists the target pods that are not Ready, as "ns/pod: why".
 // checked is false when no target could be judged at all.
 func (e *Executor) unreadyTargets(ctx context.Context, m simian.FaultManifest) (unready []string, checked bool) {
+	// An outage aimed at the arena as a whole took down whatever had pods in
+	// the zone, so recovery is judged over every pod in the namespace.
+	wholeArena := catalog.IsOutageKind(m.Engine, m.ResourceKind)
 	for _, t := range m.Targets {
-		if t.Namespace == "" || len(t.Labels) == 0 {
+		if t.Namespace == "" || (len(t.Labels) == 0 && (!wholeArena || t.Name != "")) {
 			continue
 		}
 		pods, err := e.pods.Pods(ctx, t.Namespace, t.Labels)
@@ -95,7 +99,7 @@ func (e *Executor) unreadyTargets(ctx context.Context, m simian.FaultManifest) (
 		checked = true
 		live := 0
 		for _, p := range pods {
-			if p.DeletionTimestamp != nil {
+			if p.DeletionTimestamp != nil || (len(t.Labels) == 0 && p.Status.Phase == corev1.PodSucceeded) {
 				continue
 			}
 			live++

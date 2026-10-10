@@ -28,6 +28,7 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -126,7 +127,7 @@ func TestChaosMeshDriverKnowsWhenAFaultDidNotTake(t *testing.T) {
 	}
 }
 
-func driverFor(t *testing.T, kubeconfig, context string) *chaosmesh.Driver {
+func restConfigFor(t *testing.T, kubeconfig, context string) *rest.Config {
 	t.Helper()
 	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		&clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig},
@@ -135,6 +136,12 @@ func driverFor(t *testing.T, kubeconfig, context string) *chaosmesh.Driver {
 	if err != nil {
 		t.Fatalf("kubeconfig: %v", err)
 	}
+	return cfg
+}
+
+func driverFor(t *testing.T, kubeconfig, context string) *chaosmesh.Driver {
+	t.Helper()
+	cfg := restConfigFor(t, kubeconfig, context)
 	dyn, err := dynamic.NewForConfig(cfg)
 	if err != nil {
 		t.Fatalf("dynamic client: %v", err)

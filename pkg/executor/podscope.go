@@ -20,6 +20,7 @@ import (
 	"maps"
 	"strings"
 
+	"github.com/go-steer/simian-agent/pkg/catalog"
 	"github.com/go-steer/simian-agent/pkg/simian"
 )
 
@@ -51,6 +52,15 @@ var podNarrowingKeys = []string{
 // labels it narrowed to, for the audit record.
 func (e *Executor) narrowPodSelector(ctx context.Context, m *simian.FaultManifest) (map[string]string, error) {
 	if m.Engine != simian.EngineChaosMesh || m.Spec == nil {
+		return nil, nil
+	}
+	// An outage kind has no selector to narrow: the driver builds one per
+	// workload it finds in the zone or on the node, skipping the excluded
+	// ones, and the executor asks it beforehand whether any is left — see
+	// checkDriverTargets. Narrowing here would write a selector into a spec
+	// that takes none, and the namespace-wide refusal below would refuse
+	// every outage in an arena that excludes anything.
+	if catalog.IsOutageKind(m.Engine, m.ResourceKind) {
 		return nil, nil
 	}
 	if err := e.checkSecondarySelectors(ctx, m); err != nil {
