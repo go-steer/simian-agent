@@ -674,11 +674,18 @@ body.flat.resizing-flat * {
   user-select: none;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .panel {
-    animation: none;
-  }
+/* Ambient motion off (chrome.css): no idle drift, no sheen. Settle and
+   boot (more specific) still play: they answer something you did. */
+html.no-motion .panel {
+  animation: none;
+}
 
+html.no-motion .panel-anchor.front .panel::before {
+  animation: none;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
   .panel:is(.attn-warn, .attn-bad) .panel-title::after {
     animation: none;
     box-shadow: 0 0 6px var(--attn);

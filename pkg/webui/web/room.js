@@ -209,25 +209,33 @@
   }
 
   // ─── The arrangement ──────────────────────────────────────────────
-  // A gentle arc in two tiers. The three most watched panes (live
-  // events, active faults, autonomous mode) stand in front, bigger and
-  // nearer, the outer two angled in toward you; behind and above them
-  // stand the inject form, recent faults (the widest, for its table) and
-  // workloads. u is across the window (-1…1), v down the usable height
-  // between HUD and status bar (0…1); the strip below the front tier is
-  // floor, with the radar in its corner.
+  // The inject pane stands tall down the left, from the HUD to the
+  // floor, so its conversation has room for a proposal card between the
+  // controls and the input. To its right, two tiers in a gentle arc:
+  // the three most watched panes (live events, active faults in the
+  // middle of them, autonomous mode) in front, nearer, the outer one
+  // angled in toward you; behind and above them recent faults (the
+  // widest, for its table) and workloads. u is across the window
+  // (-1…1), v down the usable height between HUD and status bar (0…1);
+  // the strip below the front tier is floor, with the radar in its
+  // corner. Changing it means bumping the saved room's version (save()).
   const PLACES = {
-    inject: { u: [-1, -0.47], v: [0, 0.41], z: -200 },
-    faults: { u: [-0.44, 0.6], v: [0, 0.41], z: -240 },
-    workloads: { u: [0.63, 1], v: [0, 0.41], z: -200 },
-    events: { u: [-1, -0.345], v: [0.45, 0.86], z: 40 },
-    active: { u: [-0.315, 0.315], v: [0.45, 0.86], z: 0 },
-    auto: { u: [0.345, 1], v: [0.45, 0.86], z: 40 },
+    inject: { u: [-1, -0.45], v: [0, 0.86], z: -80 },
+    faults: { u: [-0.415, 0.6], v: [0, 0.4], z: -240 },
+    workloads: { u: [0.63, 1], v: [0, 0.4], z: -200 },
+    events: { u: [-0.415, 0.035], v: [0.44, 0.86], z: 10 },
+    active: { u: [0.065, 0.52], v: [0.44, 0.86], z: 20 },
+    auto: { u: [0.55, 1], v: [0.44, 0.86], z: 40 },
   };
+
+  // The HUD's height, and the alert bar's under it while it shows.
+  function chromeTop(cs) {
+    return (parseFloat(cs.getPropertyValue("--hud-h")) || 36) + (parseFloat(cs.getPropertyValue("--alert-h")) || 0);
+  }
 
   function usable() {
     const cs = getComputedStyle(body);
-    const hud = parseFloat(cs.getPropertyValue("--hud-h")) || 36;
+    const hud = chromeTop(cs);
     const status = parseFloat(cs.getPropertyValue("--status-h")) || 26;
     const W = window.innerWidth;
     const H = window.innerHeight;
@@ -558,7 +566,7 @@
     // The corner follows the pointer, and the pointer is held inside
     // the room's window, so the grip never ends up off screen.
     const cs = getComputedStyle(body);
-    const top = (parseFloat(cs.getPropertyValue("--hud-h")) || 36) + 6;
+    const top = chromeTop(cs) + 6;
     const bottom = window.innerHeight - (parseFloat(cs.getPropertyValue("--status-h")) || 26) - 6;
     const px = clamp(e.clientX, 8, window.innerWidth - 18);
     const py = clamp(e.clientY, top, bottom);
@@ -827,6 +835,10 @@
   // ─── The saved room: camera and the panes you moved ───────────────
 
   const ROOM_KEY = "simian:room";
+  // 3: the arrangement with the tall inject pane. Positions and sizes
+  // saved against an earlier arrangement would land among the new one's
+  // panes, so those are dropped; the camera is kept.
+  const ROOM_V = 3;
   let saveTimer = 0;
 
   function save() {
@@ -841,7 +853,7 @@
         if (p.size) sizes[p.id] = { w: Math.round(p.size.w), h: Math.round(p.size.h) };
       }
       try {
-        localStorage.setItem(ROOM_KEY, JSON.stringify({ v: 2, cam: { yaw: cam.yaw, pitch: cam.pitch, dolly: cam.dolly }, moved, sizes }));
+        localStorage.setItem(ROOM_KEY, JSON.stringify({ v: ROOM_V, cam: { yaw: cam.yaw, pitch: cam.pitch, dolly: cam.dolly }, moved, sizes }));
       } catch (e) { /* blocked storage: the room still holds for this visit */ }
     }, 250);
   }
@@ -849,13 +861,15 @@
   function restore() {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem(ROOM_KEY) || "null"); } catch (e) { saved = null; }
-    // v1 had no sizes; it reads the same otherwise.
-    if (!saved || (saved.v !== 1 && saved.v !== 2)) return;
+    // v1 and v2 were the earlier arrangement (v1 without sizes): keep
+    // their camera, not their panes.
+    if (!saved || ![1, 2, ROOM_V].includes(saved.v)) return;
     if (saved.cam) {
       cam.yaw = clamp(Number(saved.cam.yaw) || 0, -YAW_LIMIT, YAW_LIMIT);
       cam.pitch = clamp(Number(saved.cam.pitch) || 0, PITCH_MIN, PITCH_MAX);
       cam.dolly = clamp(Number(saved.cam.dolly) || 0, DOLLY_MIN, DOLLY_MAX);
     }
+    if (saved.v !== ROOM_V) return;
     for (const [id, at] of Object.entries(saved.moved || {})) {
       const p = pane(id);
       if (!p || ![at.x, at.y, at.z].every(Number.isFinite)) continue;
@@ -913,9 +927,24 @@
   });
   prefs.onDefaultsChange(enter);
   prefs.mountTheme(document.getElementById("hud-theme"));
+  prefs.mountMotion(document.getElementById("btn-motion"));
 
   document.getElementById("btn-tile").addEventListener("click", tile);
   document.getElementById("btn-reset").addEventListener("click", resetView);
+
+  // The alert bar under the HUD (app.js shows it when the selected
+  // Simian does not answer): its height is --alert-h, which the flat grid
+  // starts below (room.css) and the room's usable area leaves out, so no
+  // pane stands behind it. A pane you moved stays where you put it.
+  const alertBar = document.getElementById("sim-alert");
+  let alertH = -1;
+  new ResizeObserver(() => {
+    const h = alertBar.hidden ? 0 : Math.ceil(alertBar.getBoundingClientRect().height);
+    if (h === alertH) return;
+    alertH = h;
+    body.style.setProperty("--alert-h", h + "px");
+    if (isRoom()) layout();
+  }).observe(alertBar);
 
   window.addEventListener("resize", () => {
     if (!isRoom()) return;
