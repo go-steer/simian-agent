@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -232,10 +233,22 @@ func (e *Executor) apply(ctx context.Context, m simian.FaultManifest) (string, e
 		return "", err
 	}
 
+	// The arena's exclusions travel with the apply, for a driver that picks
+	// workloads itself rather than being handed a selector to check.
+	ctx, err = e.withExclusions(ctx, m)
+	if err != nil {
+		e.rejected(ctx, m, err)
+		return "", err
+	}
+
 	// Nothing has touched the cluster yet, which is the point: a fault whose
 	// starting conditions do not hold is rejected outright rather than applied
 	// and rolled back.
 	if err := e.checkTargetCompat(ctx, m); err != nil {
+		e.rejected(ctx, m, err)
+		return "", err
+	}
+	if err := checkDriverTargets(ctx, driver, m); err != nil {
 		e.rejected(ctx, m, err)
 		return "", err
 	}
@@ -244,7 +257,8 @@ func (e *Executor) apply(ctx context.Context, m simian.FaultManifest) (string, e
 		return "", err
 	}
 
-	engineUID, applyErr := driver.Apply(ctx, m)
+	applyCtx, details := simian.WithApplyDetails(ctx)
+	engineUID, applyErr := driver.Apply(applyCtx, m)
 	if applyErr != nil {
 		err := simian.NewExecutorError(simian.StageDriver, simian.ReasonDriverFailed,
 			"driver apply failed", applyErr)
@@ -273,6 +287,13 @@ func (e *Executor) apply(ctx context.Context, m simian.FaultManifest) (string, e
 	applied["engine_uid"] = engineUID
 	applied["deadline"] = deadline.UTC().Format(time.RFC3339)
 	applied["verified_by"] = verifiedBy(driver, m)
+	// What the driver chose to act on, for kinds that choose: an outage's
+	// workloads and pods. Never over what the executor itself recorded.
+	for k, v := range details.All() {
+		if _, taken := applied[k]; !taken {
+			applied[k] = v
+		}
+	}
 	e.auditor.Emit(ctx, simian.AuditEvent{
 		Event:    audit.EventDriverApplied,
 		FaultUID: m.UID,
@@ -612,6 +633,41 @@ func (e *Executor) validateSchema(m simian.FaultManifest) error {
 	if m.Spec == nil {
 		return simian.NewExecutorError(simian.StageSchema, simian.ReasonSchemaInvalid,
 			"spec is required", nil)
+	}
+	if err := catalog.CheckOutageManifest(m); err != nil {
+		return simian.NewExecutorError(simian.StageSchema, simian.ReasonSchemaInvalid, err.Error(), nil)
+	}
+	return nil
+}
+
+// withExclusions returns ctx carrying every target namespace's excluded
+// workloads (simian.WithExcludedWorkloads).
+func (e *Executor) withExclusions(ctx context.Context, m simian.FaultManifest) (context.Context, error) {
+	byNS := map[string][]string{}
+	for _, ns := range m.TargetNamespaces() {
+		excluded, err := e.elig.ExcludedWorkloads(ctx, ns)
+		if err != nil {
+			return ctx, simian.NewExecutorError(simian.StageSafety, simian.ReasonWorkloadExcluded,
+				"exclusion lookup failed", err)
+		}
+		byNS[ns] = excluded
+	}
+	return simian.WithExcludedWorkloads(ctx, byNS), nil
+}
+
+// checkDriverTargets asks a driver that picks its own pods whether this fault
+// would act on anything, and refuses it before the driver runs if not — a
+// ZoneOutage naming a zone with no arena pods in it, or only excluded ones.
+// An answer other than "nothing" is left to Apply: the driver could not tell,
+// and the apply will fail or not on its own.
+func checkDriverTargets(ctx context.Context, driver simian.ChaosDriver, m simian.FaultManifest) error {
+	tc, ok := driver.(simian.TargetChecker)
+	if !ok {
+		return nil
+	}
+	if err := tc.CheckTargets(ctx, m); errors.Is(err, simian.ErrTargetIncompatible) {
+		msg := strings.TrimPrefix(err.Error(), simian.ErrTargetIncompatible.Error()+": ")
+		return simian.NewExecutorError(simian.StagePrecheck, simian.ReasonTargetIncompatible, msg, nil)
 	}
 	return nil
 }

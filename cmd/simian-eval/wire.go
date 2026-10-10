@@ -90,7 +90,7 @@ func buildPlane(cfg *rest.Config, o *options, auditor simian.Auditor, logger *sl
 	}
 
 	drivers := map[simian.Engine]simian.ChaosDriver{
-		simian.EngineChaosMesh:     chaosmesh.New(dyn, cached, "simian-"),
+		simian.EngineChaosMesh:     chaosmesh.New(dyn, cached, "simian-").WithKubernetes(clientset),
 		simian.EngineNetworkPolicy: networkpolicy.New(clientset, ""),
 		simian.EngineEnvoyFault:    envoyfault.New(clientset),
 		simian.EngineKubeState:     kubestate.New(clientset),

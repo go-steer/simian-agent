@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/cache"
 )
 
 func intptr(i int32) *int32 { return &i }
@@ -399,5 +400,39 @@ func TestASnapshotRightAfterStartWaitsForTheCaches(t *testing.T) {
 	}
 	if pods := snap.PodStatus["adservice"]; len(pods) != 1 || !pods[0].Ready {
 		t.Errorf("a snapshot right after Start saw %+v, want adservice's one ready pod", snap.PodStatus)
+	}
+}
+
+// #258: each pod carries its node's zone, which is what ZoneOutage acts on.
+func TestSnapshot_PodsCarryTheirNodesZone(t *testing.T) {
+	ns := "boutique"
+	pod := func(name, node string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns,
+				OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "frontend-7d9f"}}},
+			Spec: corev1.PodSpec{NodeName: node},
+		}
+	}
+	objs := []any{
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n1", Labels: map[string]string{corev1.LabelTopologyZone: "zone-a"}}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n2"}},
+		pod("frontend-7d9f-a", "n1"), pod("frontend-7d9f-b", "n2"),
+	}
+	d := New(fake.NewClientset(toRuntimeObjects(objs)...), 0)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	d.Start()
+	defer d.Stop()
+	d.WaitForSync(ctx)
+	if !cache.WaitForCacheSync(ctx.Done(), d.nodesSynced) {
+		t.Fatal("node cache did not sync")
+	}
+	snap, err := d.Snapshot(ctx, ns)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	pods := snap.PodStatus["frontend"]
+	if len(pods) != 2 || pods[0].Zone != "zone-a" || pods[1].Zone != "" {
+		t.Errorf("pods = %+v, want frontend-7d9f-a in zone-a and frontend-7d9f-b in none", pods)
 	}
 }

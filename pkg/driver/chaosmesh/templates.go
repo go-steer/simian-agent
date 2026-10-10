@@ -99,6 +99,20 @@ injects. A pattern outside the cluster domain is treated as an external fault.
  "selector": {"namespaces": ["<ns>"], "labelSelectors": {"app": "<workload>"}},
  "failKernRequest": {"failtype": 0, "callchain": [{"funcname": "__x64_sys_mount"}]}}`,
 
+	"ZoneOutage": `composite: Simian finds the arena workloads with pods on nodes labelled
+topology.kubernetes.io/zone=<zone> and fails exactly those pods (pod-failure) for the duration;
+pods in other zones keep running. No selector and no mode: the zone picks the pods.
+The zone MUST be one the topology lists arena pods in. The action is optional; its only value is "pod-failure".
+targets: the arena namespace alone takes down every workload with pods there; naming workloads limits it to those.
+A workload whose pods are all in the zone goes fully down. Excluded workloads are never touched.
+{"zone": "<zone>", "action": "pod-failure"}`,
+
+	"NodeOutage": `composite: like ZoneOutage for one node — the arena pods on node "<node>" fail
+(pod-failure) for the duration; nothing else on the node, and no pod elsewhere, is touched.
+No selector and no mode: the node picks the pods.
+The node MUST be one the topology lists arena pods on. The action is optional; its only value is "pod-failure".
+{"node": "<node>", "action": "pod-failure"}`,
+
 	"PhysicalMachineChaos": `targets bare-metal nodes (TierNode); spec varies by action.
 {"action": "stress-cpu", "mode": "one", "address": ["<node-ip>:port"],
  "stress-cpu": {"load": 80, "workers": 2}}`,

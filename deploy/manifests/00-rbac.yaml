@@ -34,6 +34,12 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "services", "events"]
     verbs: ["get", "list", "watch"]
+  # Read-only. ZoneOutage and NodeOutage find a zone's nodes by their
+  # topology.kubernetes.io/zone label, and the topology shows the planner
+  # which zone each arena pod is in. Nothing here writes to a node.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "daemonsets"]
     verbs: ["get", "list", "watch"]

@@ -500,3 +500,55 @@ func TestAContainerKillWithoutContainerNamesFailsValidation(t *testing.T) {
 		t.Errorf("pod-kill was rejected: %v", err)
 	}
 }
+
+// #258: the planner sees which zone and node each workload's pods are in, and
+// a ZoneOutage or NodeOutage naming a place with no arena pods is sent back.
+func TestAnOutageNamingAPlaceWithNoArenaPodsFailsValidation(t *testing.T) {
+	in := sampleInput()
+	in.Topology.PodStatus = map[string][]topology.PodSummary{
+		"cartservice": {
+			{Name: "cart-1", NodeName: "n-a1", Zone: "zone-a"},
+			{Name: "cart-2", NodeName: "n-b1", Zone: "zone-b"},
+		},
+	}
+	out := summarizeTopology(in.Topology)
+	for _, want := range []string{"zones=zone-a:1,zone-b:1", "nodes=n-a1:1,n-b1:1",
+		"Zones with arena pods (for ZoneOutage): zone-a, zone-b", "Nodes with arena pods (for NodeOutage): n-a1, n-b1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("topology summary lacks %q:\n%s", want, out)
+		}
+	}
+
+	step := func(kind, spec string) string {
+		return strings.NewReplacer(
+			`"resource_kind": "PodChaos"`, `"resource_kind": "`+kind+`"`,
+			`"spec": {"action": "pod-kill", "mode": "one"}`, `"spec": `+spec,
+		).Replace(wellFormedPlanJSON())
+	}
+	for name, tc := range map[string]struct {
+		plan string
+		want string // "" = accepted
+	}{
+		"a zone with arena pods":    {step("ZoneOutage", `{"zone": "zone-a"}`), ""},
+		"a zone without":            {step("ZoneOutage", `{"zone": "zone-c"}`), `zone "zone-c" has no arena pods; the topology lists pods in zones: zone-a, zone-b`},
+		"a node with arena pods":    {step("NodeOutage", `{"node": "n-b1", "action": "pod-failure"}`), ""},
+		"a node without":            {step("NodeOutage", `{"node": "n-z"}`), `node "n-z" has no arena pods`},
+		"an outage with a selector": {step("ZoneOutage", `{"zone": "zone-a", "mode": "all"}`), `unknown field(s) mode`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseAttackPlan([]byte(tc.plan), in)
+			switch {
+			case tc.want == "" && err != nil:
+				t.Errorf("rejected: %v", err)
+			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+				t.Errorf("err = %v, want it to mention %q", err, tc.want)
+			}
+		})
+	}
+
+	// Without zones in the topology there is nothing to judge the zone by.
+	in.Topology.PodStatus = nil
+	if _, err := parseAttackPlan([]byte(step("ZoneOutage", `{"zone": "zone-c"}`)), in); err != nil {
+		t.Errorf("rejected on a topology without zones: %v", err)
+	}
+}

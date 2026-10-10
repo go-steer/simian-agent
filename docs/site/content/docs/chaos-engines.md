@@ -11,7 +11,7 @@ The first three perturb a *running dataplane* — traffic, processes, resources.
 
 | Engine | What it does | When to use it |
 |---|---|---|
-| `chaos-mesh` | The full Chaos Mesh CRD catalog: PodChaos, StressChaos, IOChaos, TimeChaos, NetworkChaos, etc. | Default for everything. Whether NetworkChaos lands on GKE Dataplane V2 depends on the Cilium version — it does on current GKE, and its efficacy gate tells you either way. See [Known limitations]({{< relref "known-limitations.md" >}}). |
+| `chaos-mesh` | The full Chaos Mesh CRD catalog: PodChaos, StressChaos, IOChaos, TimeChaos, NetworkChaos, etc. Plus two composite kinds, `ZoneOutage` and `NodeOutage` (see [Zone and node outages](#zone-and-node-outages)). | Default for everything. Whether NetworkChaos lands on GKE Dataplane V2 depends on the Cilium version — it does on current GKE, and its efficacy gate tells you either way. See [Known limitations]({{< relref "known-limitations.md" >}}). |
 | `network-policy` | Standard `networking.k8s.io/v1` NetworkPolicy partitions (deny ingress / egress / both). | Network partition chaos on any cluster where NetworkChaos isn't reliable. Partition only — no delay / loss / jitter. |
 | `envoy-fault` | HTTP-layer delay + abort via an injected Envoy sidecar. Two kinds: `EnvoyHttpDelay`, `EnvoyHttpAbort`. | HTTP/gRPC delay or error injection on DPv2. Requires the SUT to be deployed with `--no-envoy-faults=false` (off by default — see [Known limitations]({{< relref "known-limitations.md" >}}#envoy-injection-breaks-grpc-kubelet-probes)). |
 | `kube-state` | Declarative-state faults: synthesizes a bundle of objects that is born broken. Thirteen kinds: `ImageUnresolvable`, `ContainerExitLoop`, `MemoryLimitSqueeze`, `Unschedulable`, `JobFailure`, `SelectorDrift`, `BackendCrashLoop`, `UnboundClaim`, `DependencyStall`, `PDBGridlock`, `RolloutStuck`, `CertExpiry`, and `NoOp` (the control). | Bad image references, crash loops, OOM kills, unschedulable pods, failed batch jobs, endpointless Services, Services whose backends are all crash-looping, claims that never bind, wedged rollouts, undrainable nodes, expiring certificates and a workload whose only symptom is in its own log — states rather than events, and the ones an SRE agent triages most. Works on any cluster; needs no Chaos Mesh and no sidecar. |
@@ -121,6 +121,71 @@ broken: Apply brings up a working revision, waits for it to be fully available,
 and only then rolls out one that cannot start — and the gate then waits out the
 Deployment's own progress deadline before `ProgressDeadlineExceeded` appears.
 Both waits come out of the lease.
+
+## Zone and node outages
+
+`ZoneOutage` and `NodeOutage` are `chaos-mesh` kinds with no CRD of their own.
+Their spec names a place, not pods:
+
+```bash
+# every arena pod in zone us-central1-a fails for 3 minutes
+simian chaos --engine chaos-mesh \
+  --kind ZoneOutage --api-version chaos-mesh.org/v1alpha1 \
+  --namespace boutique-1 --duration 3m \
+  --spec '{"zone":"us-central1-a"}'
+
+# the same for the arena pods on one node
+simian chaos --engine chaos-mesh \
+  --kind NodeOutage --api-version chaos-mesh.org/v1alpha1 \
+  --namespace boutique-1 --duration 3m \
+  --spec '{"node":"gke-pool-1-abcd"}'
+```
+
+When the fault is applied, the driver finds the arena's Deployments,
+StatefulSets and DaemonSets with pods on nodes labelled
+`topology.kubernetes.io/zone=<zone>`, or on the named node. It skips the
+workloads listed in the arena's `simian.chaos/exclude-workloads` annotation,
+and creates one `PodChaos` per remaining workload: `action: pod-failure`,
+`mode: all`, the workload's own pod selector, and
+`nodeSelectors: {topology.kubernetes.io/zone: <zone>}` (or `nodes: [<node>]`).
+The pods in that zone or on that node stop running for the fault's duration,
+and pods anywhere else keep running. Every object carries the label
+`simian.chaos/bundle`, so Clear, the engine-status check, the orphan reaper
+and a restarted controller all handle the outage as one fault. Without a
+`--workload`, the outage takes down every workload with pods there. Naming
+workloads limits it to those.
+
+`action` is optional, and `pod-failure` is the only value. An outage that would
+act on nothing is refused before anything is created, with
+`executor[precheck:target-incompatible]`: a zone no node is in, a node that
+does not exist, or a place where the arena has only excluded pods. The same
+happens if a workload's selector would also reach an excluded workload's pod.
+If one of the objects cannot be created, the ones already created are deleted
+and the apply fails: an outage is never left half applied. The engine-status
+check passes only when Chaos Mesh reports every object injected. When the
+outage ends, the recovery check waits for every pod in the arena to be Ready
+again, or only the named workloads' pods if the outage named any.
+
+`driver.applied` records what the outage acted on, under `outage`:
+
+- the zone and its nodes, or the node;
+- each workload, with its pods there and its pod count overall;
+- `pods_affected` and the pod names;
+- `excluded_skipped`, the excluded workloads that had pods there;
+- `fully_down`, the workloads that had all their pods there and so went
+  fully down.
+
+What it simulates is the first minutes of a real outage. Kubernetes only
+evicts pods from an unreachable node after about five minutes
+(`tolerationSeconds: 300`), and Simian's duration ceiling is five minutes. See
+[Known limitations]({{< relref "known-limitations.md" >}}#zone-and-node-outages-are-arena-only-pod-failures)
+for what it does not do.
+
+The autonomous planner sees each workload's pods per zone and per node
+(`zones=zone-a:2,zone-b:1`), and the list of zones and nodes that have arena
+pods. A plan step naming a zone or node with no arena pods fails plan
+validation. Zones come from the node labels, so the controller needs read
+access to nodes, which the chart grants.
 
 For the LLM-translated path:
 

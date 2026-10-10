@@ -18,6 +18,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/go-steer/simian-agent/pkg/catalog"
+	"github.com/go-steer/simian-agent/pkg/simian"
 )
 
 // exampleSpec finds a template's example the way the web UI does: the first
@@ -53,11 +56,26 @@ func exampleSpec(tpl string) (map[string]any, bool) {
 // Every template the planner and the web UI start from must carry an
 // example spec with a mode: on simian-2 a StressChaos went out as {} because
 // the UI could not find one, and Chaos Mesh refused it for having no mode.
+//
+// The outage kinds have no mode — the zone or node picks the pods — so what
+// their example must carry is the place, and it must pass the same check the
+// executor applies.
 func TestEveryTemplateHasAnExampleSpecWithAMode(t *testing.T) {
 	for kind, tpl := range specTemplates {
 		spec, ok := exampleSpec(tpl)
 		if !ok {
 			t.Errorf("%s: no example spec the UI can start from", kind)
+			continue
+		}
+		if catalog.IsOutageKind(simian.EngineChaosMesh, kind) {
+			m := simian.FaultManifest{Engine: simian.EngineChaosMesh, ResourceKind: kind, Spec: spec,
+				Targets: []simian.TargetRef{{Namespace: "arena"}}}
+			if field, place := catalog.OutagePlace(m); place == "" {
+				t.Errorf("%s: example spec has no %s: %v", kind, field, spec)
+			}
+			if err := catalog.CheckOutageManifest(m); err != nil {
+				t.Errorf("%s: example spec is refused: %v", kind, err)
+			}
 			continue
 		}
 		if _, ok := spec["mode"]; !ok {

@@ -109,6 +109,33 @@ Chaos Mesh IOChaos moves the target volume aside next to its mount point, and DN
 
 Simian reads the target pods before applying either kind and refuses an incompatible one with `executor[precheck:target-incompatible]`, naming the pod, the container and the reason. Nothing is applied, so nothing is left behind a finalizer. The autonomous planner sees the same facts in its topology (`readonly_rootfs=<containers>`, `mounts=<container>:<path>`) and is told not to choose those kinds there. It did anyway on the 2026-10-01 trial, so a plan step the topology rules out now fails plan validation, and the planner's corrective retry has to replace it before anything reaches the executor. A restarted controller rebuilds the last 24 hours of faults and refusals from its audit file (`--audit-file`) — including faults applied and then backed out because they did not inject or could not be verified — so the planner's "recent faults" and "recently refused" lists and the loop's repeated-refusal limit survive a restart. Targets without labels, or whose pods cannot be listed, are not judged, and the engine's own injection check catches them as before.
 
+## Zone and node outages are arena-only pod failures
+
+`ZoneOutage` and `NodeOutage` take the arena's pods in a zone, or on a node,
+out of service by failing them in place. That is a real zone outage as the
+workloads see it for the first few minutes: replicas there stop answering, and
+whatever is not spread across zones goes fully down (`driver.applied` names
+those under `fully_down`). It is not the whole of one:
+
+- **Nothing is evicted or rescheduled.** The pods stay bound to their nodes,
+  so no replacement starts elsewhere and no PodDisruptionBudget or autoscaler
+  is involved. A real outage gets there after `tolerationSeconds` (300s by
+  default). Simian's duration ceiling is five minutes, so the fault ends at
+  about the point where Kubernetes would start evicting.
+- **Only the arena is affected.** Other namespaces' pods in the zone, the
+  nodes themselves, and everything outside Kubernetes keep running: node
+  readiness, the zone's network, its persistent disks, its load-balancer
+  backends. A cluster-wide cordon-and-drain of a node would be a `node`-tier
+  fault, and is deferred.
+- **Pods created after the fault starts are not failed.** A pod scheduled into
+  the zone during the fault, by a rollout or an HPA, runs normally.
+- **Zones are read from node labels.** `ZoneOutage` needs nodes labelled
+  `topology.kubernetes.io/zone`, which every managed cloud cluster sets and
+  kind does not (the e2e cluster labels its two workers `zone-a` and
+  `zone-b`). On a single-zone cluster there is no second zone to survive an
+  outage of the first, so there is nothing for the fault to test. Use
+  `NodeOutage` there.
+
 ## Autonomous LLM bias toward chaos-mesh
 
 Without `--hypothesis-hint`, the LLM almost never picks the new `network-policy` or `envoy-fault` engines because chaos-mesh has 12+ catalog entries vs 1+2. Possible mitigations: (a) tier-policy filtering, (b) explicit per-engine "weight" in the catalog, (c) prompt rule that encourages cross-engine plans. Not blocking; the hypothesis-hint workaround is reliable.

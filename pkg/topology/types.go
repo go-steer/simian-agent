@@ -116,7 +116,11 @@ type PodSummary struct {
 	Ready    bool   `json:"ready"`
 	Restarts int32  `json:"restarts"`
 	NodeName string `json:"node_name"`
-	AgeSec   int64  `json:"age_sec"`
+	// Zone is the node's topology.kubernetes.io/zone label: where a
+	// ZoneOutage would reach this pod. Empty when the node has none or the
+	// controller cannot read nodes.
+	Zone   string `json:"zone,omitempty"`
+	AgeSec int64  `json:"age_sec"`
 }
 
 // EventSummary is a flattened Kubernetes Event suitable for the planner.

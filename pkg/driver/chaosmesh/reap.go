@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -111,7 +112,16 @@ func (d *Driver) ReapExpired(ctx context.Context, namespaces []string, now time.
 					errs = append(errs, fmt.Errorf("chaos-mesh reap: delete %s %s/%s: %w", r.Kind, ns, obj.GetName(), err))
 					continue
 				}
-				cleared = append(cleared, engineUID(ns, obj.GetName(), gvr))
+				// An outage's members share one deadline and are one fault:
+				// reported once, by the bundle's engine UID, as they were
+				// applied.
+				uid := engineUID(ns, obj.GetName(), gvr)
+				if id := obj.GetLabels()[BundleLabel]; id != "" {
+					uid = bundleUID(ns, id, gvr)
+				}
+				if !slices.Contains(cleared, uid) {
+					cleared = append(cleared, uid)
+				}
 			}
 		}
 	}
@@ -192,8 +202,10 @@ func (d *Driver) ListLive(ctx context.Context, namespaces []string, now time.Tim
 		return nil, fmt.Errorf("chaos-mesh list live: %w", err)
 	}
 	var (
-		out  []simian.ActiveFault
-		errs []error
+		out     []simian.ActiveFault
+		errs    []error
+		bundles = map[string]*liveBundle{}
+		order   []string
 	)
 	for _, r := range resources {
 		if !r.Namespaced {
@@ -217,6 +229,18 @@ func (d *Driver) ListLive(ctx context.Context, namespaces []string, now time.Tim
 				if obj.GetDeletionTimestamp() != nil || faultUID == "" || !ok || !deadline.After(now) {
 					continue
 				}
+				// An outage is one fault however many objects it is made of:
+				// a restarted controller adopts it once, as the kind it was
+				// applied as, and clears every member through one lease.
+				if id := obj.GetLabels()[BundleLabel]; id != "" {
+					key := bundleUID(ns, id, gvr)
+					if bundles[key] == nil {
+						bundles[key] = &liveBundle{}
+						order = append(order, key)
+					}
+					bundleFault(bundles[key], obj, ns, gvr, deadline)
+					continue
+				}
 				out = append(out, simian.ActiveFault{
 					FaultUID:  faultUID,
 					EngineUID: engineUID(ns, obj.GetName(), gvr),
@@ -232,6 +256,9 @@ func (d *Driver) ListLive(ctx context.Context, namespaces []string, now time.Tim
 				})
 			}
 		}
+	}
+	for _, key := range order {
+		out = append(out, bundles[key].af)
 	}
 	return out, errors.Join(errs...)
 }

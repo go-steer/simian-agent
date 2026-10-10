@@ -47,6 +47,13 @@ var chaosMeshBaseTiers = map[string]simian.BlastRadiusTier{
 	"AWSChaos":             simian.TierExternal,
 	"GCPChaos":             simian.TierExternal,
 	"AzureChaos":           simian.TierExternal,
+
+	// Composite kinds the driver builds from PodChaos (see outage.go). A zone
+	// or a node is where they act, but only the arena's pods there are
+	// selected, so their reach is the arena's, as the PodChaos they are made
+	// of is.
+	ChaosMeshZoneOutage: simian.TierNamespace,
+	ChaosMeshNodeOutage: simian.TierNamespace,
 }
 
 // chaosMeshNonFaultKinds enumerates chaos-mesh.org/v1alpha1 CRDs that are NOT

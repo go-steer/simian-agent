@@ -59,6 +59,12 @@
 # (NodeUnready, #58). Cluster shape changes invalidate every calibrated
 # settle timing, so it is cheaper to pay ~40s of extra startup now than
 # to re-time the corpus later.
+#
+# ── Why zone labels ──────────────────────────────────────────────────
+#
+# Each worker is its own zone, as a regional cloud cluster's node pools
+# are, so ZoneOutage and NodeOutage (#258) have a zone with arena pods in
+# it and another that stays up. kind sets no topology labels of its own.
 
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -68,4 +74,8 @@ networking:
 nodes:
   - role: control-plane
   - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-a
   - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-b

@@ -27,6 +27,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/go-steer/simian-agent/pkg/catalog"
 	"github.com/go-steer/simian-agent/pkg/executor"
 	"github.com/go-steer/simian-agent/pkg/simian"
 	"github.com/go-steer/simian-agent/pkg/sut"
@@ -278,6 +279,7 @@ Rules you MUST follow:
 9. envoy-fault kinds (EnvoyHttpDelay, EnvoyHttpAbort) require the target workload to be flagged envoy=true in the topology snapshot. If the chosen target lacks envoy=true, pick a different workload OR a different fault kind.
 10. Choose each step's "duration" for its own hypothesis, and say why in "duration_rationale": what must be observed, and how long that takes. Faults differ, so durations should too. A one-shot action (PodChaos pod-kill or container-kill) acts once at injection; its duration is only the window for watching recovery, so size it to how long the workload takes to come back. A sustained fault (latency, loss, partition, IO delay, DNS errors, stress, an HTTP abort) acts for the whole duration; size it to how long the effect must persist to show up in probes and alerts, and to test whether it degrades further over time. Do not copy the durations of recent faults by default. Never exceed max_fault_duration in the cycle budget caps — a longer step is refused before it runs.
 11. Chaos Mesh IOChaos and DNSChaos cannot inject into a container listed under readonly_rootfs in the topology; they are refused before they run. IOChaos's "volumePath" must be exactly one of the target container's mounts (listed as container:path); with no mounts listed, do not choose IOChaos for that workload. An HTTPChaos must not cover a path listed under restart_probes (container:port/path) on that port: failing that probe restarts the container, which leaves the port unreachable after the fault ends; choose a path the probe does not use. Never aim an HTTPChaos at a port listed under grpc_ports (container:port): it cannot carry gRPC; use a NetworkChaos there.
+12. ZoneOutage and NodeOutage take down every arena pod in one zone or on one node at once — the shape of a real zone or node failure, and a test of whether the workloads are spread so that something survives it. Their spec names only the place: "zone" must be one of the zones listed under "Zones with arena pods", "node" one of the nodes listed under "Nodes with arena pods"; never invent one, and do not use ZoneOutage when no zones are listed. Their target may be the arena namespace alone ({"namespace": "<ns>"}), which reaches every workload with pods there (the exception to rule 2); naming workloads limits the outage to those. The zones= and nodes= counts per workload show which would lose some pods and which all of them.
 
 Available fault catalog (kinds you may choose). Each entry shows engine + kind + api_version + tier; entries with a spec template include the canonical engine-native spec shape directly under the entry — copy and adapt.
 
@@ -397,8 +399,20 @@ func summarizeTopology(t *topology.TargetTopology) string {
 				}
 			}
 			fmt.Fprintf(&sb, " pods_ready=%d/%d", ready, len(pods))
+			if zones := countBy(pods, func(p topology.PodSummary) string { return p.Zone }); zones != "" {
+				fmt.Fprintf(&sb, " zones=%s", zones)
+			}
+			if nodes := countBy(pods, func(p topology.PodSummary) string { return p.NodeName }); nodes != "" {
+				fmt.Fprintf(&sb, " nodes=%s", nodes)
+			}
 		}
 		sb.WriteString("\n")
+	}
+	if zones := podPlaces(t, func(p topology.PodSummary) string { return p.Zone }); len(zones) > 0 {
+		fmt.Fprintf(&sb, "Zones with arena pods (for ZoneOutage): %s\n", strings.Join(zones, ", "))
+	}
+	if nodes := podPlaces(t, func(p topology.PodSummary) string { return p.NodeName }); len(nodes) > 0 {
+		fmt.Fprintf(&sb, "Nodes with arena pods (for NodeOutage): %s\n", strings.Join(nodes, ", "))
 	}
 	if len(t.Services) > 0 {
 		sb.WriteString("Services: ")
@@ -420,6 +434,42 @@ func summarizeTopology(t *topology.TargetTopology) string {
 		}
 	}
 	return sb.String()
+}
+
+// countBy renders how many pods share each value of key, as
+// "a:2,b:1" sorted by value; empty when no pod has one.
+func countBy(pods []topology.PodSummary, key func(topology.PodSummary) string) string {
+	counts := map[string]int{}
+	for _, p := range pods {
+		if k := key(p); k != "" {
+			counts[k]++
+		}
+	}
+	parts := make([]string, 0, len(counts))
+	for k, n := range counts {
+		parts = append(parts, fmt.Sprintf("%s:%d", k, n))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
+}
+
+// podPlaces returns the distinct, non-empty values of key over every arena
+// pod, sorted.
+func podPlaces(t *topology.TargetTopology, key func(topology.PodSummary) string) []string {
+	seen := map[string]bool{}
+	for _, pods := range t.PodStatus {
+		for _, p := range pods {
+			if k := key(p); k != "" {
+				seen[k] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // refusalErrorLimit bounds how much of each refusal's error reaches the
@@ -508,6 +558,9 @@ func renderLabels(labels map[string]string) string {
 // Only workloads the step demonstrably targets are judged — by name, or by a
 // label selector their pod template satisfies.
 func checkTargetCompat(m simian.FaultManifest, topo *topology.TargetTopology) error {
+	if catalog.IsOutageKind(m.Engine, m.ResourceKind) {
+		return checkOutage(m, topo)
+	}
 	if err := checkContainerKill(m, topo); err != nil {
 		return err
 	}
@@ -545,6 +598,31 @@ func checkTargetCompat(m simian.FaultManifest, topo *topology.TargetTopology) er
 		}
 	}
 	return nil
+}
+
+// checkOutage rejects a ZoneOutage or NodeOutage the executor would refuse:
+// a malformed spec, or a zone or node the topology shows no arena pod in.
+// The place is judged only when the topology knows where pods are — a
+// topology without zones (no node access, or no zone labels) says nothing
+// about whether the zone exists, and the executor will ask the cluster.
+func checkOutage(m simian.FaultManifest, topo *topology.TargetTopology) error {
+	if err := catalog.CheckOutageManifest(m); err != nil {
+		return err
+	}
+	if topo == nil {
+		return nil
+	}
+	field, place := catalog.OutagePlace(m)
+	key := func(p topology.PodSummary) string { return p.Zone }
+	if field == "node" {
+		key = func(p topology.PodSummary) string { return p.NodeName }
+	}
+	known := podPlaces(topo, key)
+	if len(known) == 0 || slices.Contains(known, place) {
+		return nil
+	}
+	return fmt.Errorf("%s %s %q has no arena pods; the topology lists pods in %ss: %s",
+		m.ResourceKind, field, place, field, strings.Join(known, ", "))
 }
 
 // checkContainerKill rejects a PodChaos container-kill that names no
