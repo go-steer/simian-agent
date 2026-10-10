@@ -538,26 +538,26 @@ body.multi #app-status .status-hint ~ .hud-sep {
   letter-spacing: 0.06em;
 }
 
+/* The alert hangs from the HUD as a full-width bar, the HUD's own
+   colours with an amber rule, not a card over the panes: room.js
+   measures it into --alert-h, and both layouts start below it. */
 #sim-alert {
   position: absolute;
-  top: calc(var(--hud-h) + 10px);
-  left: 50%;
-  z-index: 5;
+  top: var(--hud-h);
+  left: 0;
+  right: 0;
+  z-index: 4;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 14px;
-  width: min(880px, 92vw);
-  padding: 10px 14px;
-  border: 1px solid color-mix(in srgb, var(--warn) 60%, transparent);
-  border-left: 3px solid var(--warn);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--warn) 10%, var(--bg-surface));
-  box-shadow: 0 10px 30px -12px rgb(0 0 0 / 50%), 0 0 18px -8px var(--warn);
+  gap: 6px 14px;
+  padding: 6px 14px 6px 17px;
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, var(--bg-surface));
+  box-shadow: inset 3px 0 0 var(--warn), 0 8px 20px -16px var(--warn);
   color: var(--text);
   font-size: 12px;
   line-height: 1.45;
-  transform: translateX(-50%);
 }
 
 #sim-alert[hidden] {
@@ -566,18 +566,31 @@ body.multi #app-status .status-hint ~ .hud-sep {
 
 #sim-alert-text {
   flex: 1 1 420px;
+  min-width: 0;
+}
+
+#sim-alert-text::before {
+  content: '⚠';
+  margin-right: 8px;
+  color: var(--warn);
 }
 
 .sim-alert-acts {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 body[data-theme^='chaos'] #sim-alert {
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--warn) 8%, var(--glass-solid, var(--bg-surface)));
+  padding: 7px 18px 7px 21px;
+  border-bottom-color: color-mix(in srgb, var(--warn) 40%, transparent);
+  background: color-mix(in srgb, var(--warn) 9%, var(--glass-solid, var(--bg-surface)));
   backdrop-filter: blur(12px);
   font-family: var(--sans);
+}
+
+body[data-theme^='chaos'] #sim-alert .hud-btn {
+  padding: 3px 10px;
 }
 
 /* ─── Emergency halt ─────────────────────────────────────────────────
@@ -681,11 +694,25 @@ body.simian.halted #app-status {
   background: color-mix(in srgb, var(--bad) 7%, var(--bar-glass, color-mix(in srgb, var(--bg-surface) 82%, transparent)));
 }
 
-@media (prefers-reduced-motion: reduce) {
-  #ambient span {
-    animation: none;
+/* The motion toggle: its word goes where the HUD runs short. */
+@media (max-width: 1499px) {
+  .hud-motion-word {
+    display: none;
   }
+}
 
+/* ─── Ambient motion off ─────────────────────────────────────────────
+   html.no-motion (prefs.js: the HUD's motion toggle, off by default
+   under prefers-reduced-motion) stills what moves on its own: the glows
+   here, and the panes' drift, the sheen, the grid and the radar sweep
+   (panel.css, room.css). Signals keep moving: the halted glow and the
+   attention pings. The camera, and whatever you move, are untouched. */
+html.no-motion #ambient span {
+  animation: none;
+  will-change: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
   body.simian .hud-btn.hud-halt.is-halted,
   .hud-halted {
     animation: none;

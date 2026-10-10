@@ -175,6 +175,8 @@ limitations under the License.
     <span id="me" class="hud-item"></span>
     <span class="hud-sep">|</span>
     <select id="hud-theme" class="hud-btn hud-wide" title="Theme" aria-label="Theme"></select>
+    <!-- Ambient motion on or off (prefs.js): the glows' and panes' drift. -->
+    <button type="button" class="hud-btn hud-motion" id="btn-motion" aria-pressed="true">◉ motion</button>
     <button type="button" class="hud-btn" id="btn-layout" title="Switch between the room and a flat grid">flat</button>
     <button type="button" class="hud-btn room-only hud-wide" id="btn-tile" title="Put every pane back in its place">tile</button>
     <button type="button" class="hud-btn room-only hud-wide" id="btn-reset" title="Reset the camera and the panes (R)">reset view</button>
@@ -187,7 +189,8 @@ limitations under the License.
   </header>
 
   <!-- The selected Simian, on another origin, is not answering: why, and
-       what to do. -->
+       what to do. A bar hung from the HUD; room.js keeps the panes below
+       it (--alert-h). -->
   <div id="sim-alert" role="alert" hidden>
     <span id="sim-alert-text"></span>
     <span class="sim-alert-acts">

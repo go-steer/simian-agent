@@ -434,7 +434,7 @@ body[data-theme^='chaos'] .radar-grid {
    camera, no placement and no drift. Most-watched first. */
 
 body.flat #scene-viewport {
-  top: var(--hud-h);
+  top: calc(var(--hud-h) + var(--alert-h, 0px));
   bottom: var(--status-h);
   perspective: none;
   overflow: auto;
@@ -571,17 +571,20 @@ body.flat .panel-anchor:has(> .panel[hidden]) {
 
 /* ─── Reduced motion ─────────────────────────────────────────────── */
 
+/* Ambient motion off (chrome.css, prefs.js; the default under
+   prefers-reduced-motion): the grid stops crawling and the radar stops
+   sweeping. */
+html.no-motion #grid-floor,
+html.no-motion #grid-ceiling {
+  animation: none;
+}
+
+html.no-motion .radar-sweep {
+  animation: none;
+  opacity: 0.28;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  #grid-floor,
-  #grid-ceiling {
-    animation: none;
-  }
-
-  .radar-sweep {
-    animation: none;
-    opacity: 0.28;
-  }
-
   .radar-blip,
   .panel-cast,
   #scene-world {
