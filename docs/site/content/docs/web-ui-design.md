@@ -50,7 +50,23 @@ description: "Design doc for a single browser surface serving two purposes: live
 > (the default under reduced motion and on narrow screens), and a dark and
 > a light theme. The room's CSS and camera code are taken from mast-web
 > (da7cf52), trimmed, with their origin noted in each file. Several
-> controllers in one UI (#243) is next, then the scorecard (phase 3).
+> controllers in one UI (#243) followed.
+>
+> **Phase 3, the scorecard (v0.5, #72): built.** Archive mode is a second
+> mode of the same page — **Scorecard** in the HUD, **Live** to go back —
+> reading the self-describing JSON `simian-eval report` writes from several
+> run directories. It opens from a dropped or picked file, a
+> `?scorecard=<url>` link, or the list `simian web --scorecards DIR` serves,
+> and needs no backend (it works from `index.html` opened off disk). In the
+> room its grid and drill-down are two panes in place of the live six; in
+> the flat layout, two cards. Both rendering rules below hold: a cell whose
+> fault did not land is *not measured*, and the floor column (k8s-lookout,
+> by subject name, or `--floor`) is marked, with a subject below it flagged.
+> One deviation: the source is the combined document rather than a run
+> directory, since a browser cannot list a directory; and the live panels
+> (fault timeline, topology) are not replayed in archive mode — the
+> drill-down shows each fault's audit trail instead. See
+> [Reading an evaluation: the scorecard]({{< relref "scorecard.md" >}}).
 
 ## Why a web UI
 

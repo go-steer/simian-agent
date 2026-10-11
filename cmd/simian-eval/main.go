@@ -76,7 +76,10 @@ Examples:
   simian-eval --pack parity --subject exec:./bin/lookout --out runs/
   simian-eval --pack parity,lookout --subject exec:./bin/agent --concurrency 4
   simian-eval --pack ./packs/custom --subject noop: --cluster kind --out runs/floor
-  simian-eval --pack parity --subject exec:./bin/agent --only parity-crash-loop`,
+  simian-eval --pack parity --subject exec:./bin/agent --only parity-crash-loop
+
+To combine run directories into one scorecard the web UI renders, see
+simian-eval report --help.`,
 		Version:       version,
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -86,5 +89,6 @@ Examples:
 	}
 
 	bindFlags(cmd, opts)
+	cmd.AddCommand(newReportCmd())
 	return cmd
 }

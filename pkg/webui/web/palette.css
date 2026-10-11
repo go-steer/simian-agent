@@ -77,6 +77,8 @@
   --hue-faults: var(--gopher-blue);
   --hue-events: var(--aqua);
   --hue-workloads: #6fd08c;
+  --hue-scorecard: #ff9f43;
+  --hue-scenario: var(--light-blue);
 
   --glow-amt: 34%;
   --frame-amt: 46%;
@@ -132,6 +134,8 @@ body[data-theme='cloud-light'] {
   --hue-faults: #1a73e8; /* Blue 600 */
   --hue-events: #007b83; /* Teal 700 */
   --hue-workloads: #188038; /* Green 700 */
+  --hue-scorecard: #b06000; /* Orange 800 */
+  --hue-scenario: #007b83; /* Teal 700 */
 
   --glow-amt: 13%;
   --frame-amt: 30%;
@@ -197,6 +201,8 @@ body[data-theme='chaos-dark'] {
   --hue-faults: #db2777;
   --hue-workloads: #c084fc;
   --hue-events: #e879f9;
+  --hue-scorecard: #f9a8d4;
+  --hue-scenario: #d8b4fe;
 
   /* Glass (panel.css) and the ink on it. */
   --glass: rgb(17 24 39 / 65%);
@@ -263,6 +269,8 @@ body[data-theme='chaos-light'] {
   --hue-faults: #be185d;
   --hue-workloads: #a855f7;
   --hue-events: #c026d3;
+  --hue-scorecard: #be185d;
+  --hue-scenario: #9333ea;
 
   --glass: rgb(255 255 255 / 75%);
   --glass-hover: rgb(255 255 255 / 90%);

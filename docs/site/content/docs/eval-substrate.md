@@ -1069,6 +1069,10 @@ whose efficacy probe failed renders as **not measured**, never as a zero; and
 the deterministic-detector column is a **floor**, so a subject scoring below it
 is flagged as failing to use its tools rather than failing to diagnose.
 
+Built (#72): `simian-eval report --run DIR …` writes the table as a scorecard
+document, and the web UI's Scorecard mode renders it — see
+[Reading an evaluation: the scorecard]({{< relref "scorecard.md" >}}).
+
 ## 9. Phase 0 in detail
 
 These were found as safety bugs. Under this plan they are also

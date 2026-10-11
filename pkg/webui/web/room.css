@@ -429,6 +429,15 @@ body[data-theme^='chaos'] .radar-grid {
   opacity: 0.35;
 }
 
+/* ─── Live and Scorecard ─────────────────────────────────────────────
+   Scorecard mode (scorecard.js) swaps the six live panes for its two, in
+   the room and in the grid alike; room.js lays out only the ones shown. */
+
+body:not(.mode-scorecard) .panel-anchor[data-mode='scorecard'],
+body.mode-scorecard .panel-anchor:not([data-mode='scorecard']) {
+  display: none;
+}
+
 /* ─── Flat layout ────────────────────────────────────────────────────
    The same panels in a grid between the HUD and the status bar, with no
    camera, no placement and no drift. Most-watched first. */
@@ -480,6 +489,19 @@ body.flat .panel-anchor[data-pane='auto'] { grid-area: auto; }
 body.flat .panel-anchor[data-pane='faults'] { grid-area: faults; }
 body.flat .panel-anchor[data-pane='workloads'] { grid-area: workloads; }
 body.flat .panel-anchor[data-pane='events'] { grid-area: events; }
+body.flat .panel-anchor[data-pane='scorecard'] { grid-area: scorecard; }
+body.flat .panel-anchor[data-pane='scenario'] { grid-area: scenario; }
+
+/* Scorecard mode's grid: the scorecard wide, its scenario beside it, both
+   as tall as the window allows (each scrolls inside). */
+body.flat.mode-scorecard #scene-world {
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  grid-template-areas: 'scorecard scenario';
+}
+
+body.flat.mode-scorecard .panel-body {
+  max-height: calc(100vh - var(--hud-h) - var(--status-h) - var(--alert-h, 0px) - 110px);
+}
 
 body.flat .panel {
   position: relative;
@@ -556,12 +578,27 @@ body.flat .panel-anchor:has(> .panel[hidden]) {
   }
 }
 
+@media (max-width: 1199px) {
+  body.flat.mode-scorecard #scene-world {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'scorecard' 'scenario';
+  }
+
+  body.flat.mode-scorecard .panel-body {
+    max-height: 44rem;
+  }
+}
+
 @media (max-width: 899px) {
   body.flat #scene-world {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: 'active' 'auto' 'events' 'inject' 'workloads' 'faults';
     padding: 12px;
     gap: 14px;
+  }
+
+  body.flat.mode-scorecard #scene-world {
+    grid-template-areas: 'scorecard' 'scenario';
   }
 
   #app-hud .hud-wide {

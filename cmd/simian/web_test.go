@@ -64,7 +64,7 @@ func TestWebServesTheStandaloneUI(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- serveWeb(ctx, addr, list, quietLogger()) }()
+	go func() { done <- serveWeb(ctx, addr, webui.StandaloneHandler(list), len(list), quietLogger()) }()
 
 	base := "http://" + addr
 	var resp *http.Response

@@ -40,6 +40,7 @@ func newWebCmd() *cobra.Command {
 	var (
 		addr        string
 		controllers []string
+		scorecards  string
 	)
 	cmd := &cobra.Command{
 		Use:   "web",
@@ -48,33 +49,47 @@ func newWebCmd() *cobra.Command {
 no LLM. The page lists the controllers given with --controllers (and any the
 user adds), and calls each from the browser. Each controller must list this
 UI's origin in its --ui-allowed-origins (chart: ui.allowedOrigins), and the
-user signs in to each once.`,
+user signs in to each once.
+
+With --scorecards DIR it also serves the scorecard documents in DIR (the
+*.json files ` + "`simian-eval report`" + ` writes), read-only at /scorecards/,
+and the page offers them in its Scorecard mode. A scorecard can also be
+dropped on the page, with or without this flag.`,
 		Example: `  simian web --addr :8080 \
     --controllers simian-iap=https://simian.example.com \
-    --controllers simian-2=https://simian-2.example.com`,
+    --controllers simian-2=https://simian-2.example.com
+  simian web --addr :8080 --scorecards ./scorecards`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			list, err := webui.ParseControllers(controllers)
 			if err != nil {
 				return fmt.Errorf("--controllers: %w", err)
 			}
+			var sc *webui.Scorecards
+			if scorecards != "" {
+				if sc, err = webui.OpenScorecards(scorecards); err != nil {
+					return fmt.Errorf("--scorecards: %w", err)
+				}
+				defer func() { _ = sc.Close() }()
+			}
 			ctx, cancel := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer cancel()
-			return serveWeb(ctx, addr, list, slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+			return serveWeb(ctx, addr, webui.StandaloneHandler(list, sc), len(list), slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", ":8080", "Listen address")
+	cmd.Flags().StringVar(&scorecards, "scorecards", "", "Directory of scorecard documents (simian-eval report output) to serve read-only at /scorecards/ for the page's Scorecard mode")
 	cmd.Flags().StringSliceVar(&controllers, "controllers", nil, "Simians the page offers, as name=https://origin of each controller's UI, e.g. simian-2=https://simian-2.example.com (repeatable)")
 	return cmd
 }
 
 // serveWeb serves the standalone UI on addr until ctx is done.
-func serveWeb(ctx context.Context, addr string, list []webui.Controller, logger *slog.Logger) error {
+func serveWeb(ctx context.Context, addr string, handler http.Handler, controllers int, logger *slog.Logger) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Handler: webui.StandaloneHandler(list), ReadHeaderTimeout: 5 * time.Second}
-	logger.Info("simian web: standalone UI at /ui/", slog.String("addr", ln.Addr().String()), slog.Int("controllers", len(list)))
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	logger.Info("simian web: standalone UI at /ui/", slog.String("addr", ln.Addr().String()), slog.Int("controllers", controllers))
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(ln) }()
 	select {
