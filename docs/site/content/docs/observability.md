@@ -18,6 +18,7 @@ the audit export and `simian watch` all tell the same story.
 | graph it, or be paged when a fault leaves something broken | [Prometheus metrics](#metrics-and-alerts) |
 | ask from an agent or another tool | the [MCP tools](#from-an-agent-mcp) |
 | read the raw events | [the controller log](#the-raw-events) |
+| compare how subjects did on an evaluation | [the scorecard]({{< relref "scorecard.md" >}}): `simian-eval report`, opened in the web UI's Scorecard mode |
 
 The commands assume the CLI can reach the controller — see step 4 of
 [Getting started]({{< relref "getting-started.md" >}}) (`SIMIAN_MCP_URL` and a
@@ -145,7 +146,17 @@ simian web --addr :8080 \
 
 It serves `/ui/`, `/healthz` and `GET /api/controllers`; every other `/api/`
 path is 404, which is how the page knows no Simian serves it and asks which
-to watch.
+to watch. With `--scorecards DIR` it also serves the scorecard documents in
+`DIR`, read-only, at `/scorecards/`.
+
+### Scorecard mode
+
+The page has a second mode, for a recorded evaluation rather than a live
+controller: **Scorecard** in the top bar (and **Live** to go back). It reads
+the JSON document `simian-eval report` writes, from a dropped or picked file,
+a `?scorecard=<url>` link, or the list `simian web --scorecards` serves, and
+needs nothing behind it. With no controller to watch, the standalone page
+opens in it. See [Reading an evaluation: the scorecard]({{< relref "scorecard.md" >}}).
 
 The page reads a small JSON API under `/api/` (`info`, `me`, `config`,
 `arenas`, `catalog`, `active`, `faults`, `cycles`, `topology`, and

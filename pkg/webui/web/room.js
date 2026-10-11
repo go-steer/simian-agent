@@ -226,7 +226,18 @@
     events: { u: [-0.415, 0.035], v: [0.44, 0.86], z: 10 },
     active: { u: [0.065, 0.52], v: [0.44, 0.86], z: 20 },
     auto: { u: [0.55, 1], v: [0.44, 0.86], z: 40 },
+    // Scorecard mode (scorecard.js) has the room to itself: the grid wide
+    // on the left, the scenario it is showing tall on the right, angled
+    // in toward you.
+    scorecard: { u: [-1, 0.2], v: [0, 0.9], z: -60 },
+    scenario: { u: [0.24, 1], v: [0, 0.9], z: 10 },
   };
+
+  // Which panes stand in the room: the six live ones, or Scorecard mode's
+  // two (their anchors carry data-mode="scorecard"). The others are
+  // display: none (room.css) and throw no light.
+  const modeNow = () => (body.classList.contains("mode-scorecard") ? "scorecard" : "live");
+  const inMode = (p) => (p.el.dataset.mode || "live") === modeNow();
 
   // The HUD's height, and the alert bar's under it while it shows.
   function chromeTop(cs) {
@@ -324,8 +335,9 @@
     // A pane app.js has not shown yet (the inject form, until it knows
     // who you are) throws no light and has no blip.
     const showHidden = () => {
-      p.cast.hidden = p.blip.hidden = panel.hidden;
+      p.cast.hidden = p.blip.hidden = panel.hidden || !inMode(p);
     };
+    p.showHidden = showHidden;
     new MutationObserver(showHidden).observe(panel, { attributes: true, attributeFilter: ["hidden"] });
     showHidden();
 
@@ -397,7 +409,7 @@
     let lo = 300;
     let hi = -420;
     for (const p of panes) {
-      if (!p.home) continue;
+      if (!p.home || !inMode(p)) continue;
       lo = Math.max(lo, p.home.y + p.home.h / 2 + 70);
       hi = Math.min(hi, p.home.y - p.home.h / 2 - 160);
     }
@@ -888,7 +900,7 @@
   const BOOT_STAGGER_MS = 90;
 
   function boot() {
-    const order = ["active", "auto", "events", "faults", "inject", "workloads"];
+    const order = modeNow() === "scorecard" ? ["scorecard", "scenario"] : ["active", "auto", "events", "faults", "inject", "workloads"];
     order.forEach((id, i) => {
       const p = pane(id);
       p.el.style.setProperty("--boot-delay", i * BOOT_STAGGER_MS + "ms");
@@ -959,5 +971,23 @@
   enter(prefs.layout());
   if (isRoom()) boot();
 
-  window.SimianRoom = { panes, camera: cam, centre, uncentre, tile, resetView, layout, restoreSize };
+  // Live or Scorecard: which set of panes the room (or the grid) shows.
+  // app.js's live panes keep running behind Scorecard mode, so going back
+  // finds them as current as they would have been.
+  function setMode(mode) {
+    const want = mode === "scorecard";
+    if (want === (modeNow() === "scorecard")) return;
+    uncentre();
+    setFront(null);
+    body.classList.toggle("mode-scorecard", want);
+    panes.forEach((p) => p.showHidden());
+    if (isRoom()) {
+      layout();
+      boot();
+    } else {
+      viewport.scrollTo(0, 0);
+    }
+  }
+
+  window.SimianRoom = { panes, camera: cam, centre, uncentre, tile, resetView, layout, restoreSize, setMode, mode: modeNow };
 })();

@@ -147,6 +147,47 @@ limitations under the License.
           <div class="panel-body"><div id="faults"></div></div>
         </section>
       </div>
+
+      <!-- Scorecard mode (scorecard.js): a recorded evaluation instead of a
+           live controller. These two panes stand in for the six above
+           while it is on (data-mode); nothing in them needs a server. -->
+      <div class="panel-anchor" data-pane="scorecard" data-mode="scorecard">
+        <section id="scorecard-panel" class="panel" aria-labelledby="scorecard-title">
+          <header class="panel-bar"><h2 class="panel-title" id="scorecard-title">Scorecard <span id="sc-count" class="count"></span></h2></header>
+          <div class="panel-body">
+            <div id="sc-landing">
+              <p class="sc-lead">A scorecard is a recorded evaluation: which faults Simian injected, whether each one landed, and what each subject reported. Make one with <code>simian-eval report --run DIR … --out scorecard.json</code>; it opens here with no server behind it.</p>
+              <div id="sc-drop" class="sc-drop">
+                <span class="sc-drop-mark" aria-hidden="true">⇩</span>
+                <span>Drop a <code>scorecard.json</code> anywhere on the page, or</span>
+                <label class="sc-file"><input type="file" id="sc-file" accept=".json,application/json"> <span class="hud-btn">Open a file…</span></label>
+              </div>
+              <div id="sc-served" hidden>
+                <h3>Scorecards served here</h3>
+                <ul id="sc-served-list" class="sc-served"></ul>
+              </div>
+              <form id="sc-url-form" class="row">
+                <label>Or a URL <input id="sc-url" size="40" placeholder="https://… or a path on this site" required></label>
+                <button type="submit">Open</button>
+              </form>
+              <p id="sc-error" class="sc-error" role="alert" hidden></p>
+              <p id="sc-watch" class="muted hint" hidden>No Simian serves this page. <button type="button" id="sc-watch-btn">Watch a Simian…</button></p>
+            </div>
+            <div id="sc-doc" hidden>
+              <div id="sc-runs"></div>
+              <div id="sc-grid" class="sc-grid-wrap"></div>
+              <div id="sc-legend" class="sc-legend muted"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="panel-anchor" data-pane="scenario" data-mode="scorecard">
+        <section id="scenario-panel" class="panel" aria-labelledby="scenario-title">
+          <header class="panel-bar"><h2 class="panel-title" id="scenario-title">Scenario <span id="sd-name" class="count"></span></h2></header>
+          <div class="panel-body"><div id="sc-detail"><div class="empty">Pick a scenario in the scorecard to see its fault, its ground truth and each subject's report.</div></div></div>
+        </section>
+      </div>
     </div>
   </div>
 
@@ -158,22 +199,34 @@ limitations under the License.
     <span class="hud-sep">//</span>
     <span id="version" class="hud-item"></span>
     <span class="hud-sep">|</span>
+    <!-- Live: a controller, now. Scorecard: a recorded evaluation, from a
+         file (scorecard.js). -->
+    <span class="hud-item hud-modes" role="group" aria-label="What the page shows">
+      <button type="button" class="hud-btn" id="btn-mode-live" aria-pressed="true" title="Live: what a Simian controller is doing now">Live</button>
+      <button type="button" class="hud-btn" id="btn-mode-scorecard" aria-pressed="false" title="Scorecard: a recorded evaluation, opened from a file">Scorecard</button>
+    </span>
+    <span class="hud-sep scorecard-only">|</span>
+    <span class="hud-item scorecard-only" id="hud-scorecard">
+      <span id="hud-sc-name" class="hud-sc-name"></span>
+      <button type="button" id="btn-sc-open" class="hud-btn" title="Open another scorecard">open…</button>
+    </span>
+    <span class="hud-sep live-only">|</span>
     <!-- Which Simian the panes show: its name alone while there is one,
          a switcher once there are several (app.js, "Several Simians"). -->
-    <span class="hud-item" id="hud-simian"><span class="hud-label sim-only">Simian</span>
+    <span class="hud-item live-only" id="hud-simian"><span class="hud-label sim-only">Simian</span>
       <button type="button" id="simian-name" class="hud-plain" title="Simians: watch several from this page"></button>
       <select id="simian" class="hud-btn" aria-label="Simian" hidden></select>
       <button type="button" id="btn-sims" class="hud-btn hud-toggle" title="Simians: add, remove, sign in" aria-label="Simians" hidden>⧉</button>
     </span>
-    <span class="hud-sep">|</span>
-    <label class="hud-item"><span class="hud-label">Arena</span>
+    <span class="hud-sep live-only">|</span>
+    <label class="hud-item live-only"><span class="hud-label">Arena</span>
       <select id="arena" class="hud-btn"><option value="">All arenas</option></select>
     </label>
     <span class="hud-sep room-only hud-wide">|</span>
     <span class="hud-item room-only hud-wide" id="hud-camera"></span>
     <span class="hud-spacer"></span>
-    <span id="me" class="hud-item"></span>
-    <span class="hud-sep">|</span>
+    <span id="me" class="hud-item live-only"></span>
+    <span class="hud-sep live-only">|</span>
     <select id="hud-theme" class="hud-btn hud-wide" title="Theme" aria-label="Theme"></select>
     <!-- Ambient motion on or off (prefs.js): the glows' and panes' drift. -->
     <button type="button" class="hud-btn hud-motion" id="btn-motion" aria-pressed="true">◉ motion</button>
@@ -182,16 +235,16 @@ limitations under the License.
     <button type="button" class="hud-btn room-only hud-wide" id="btn-reset" title="Reset the camera and the panes (R)">reset view</button>
     <!-- The emergency halt (admins) and the halted state (everyone):
          app.js shows whichever applies. -->
-    <span id="hud-halted" class="hud-halted" role="status" title="Autonomous mode is paused everywhere: Simian starts no faults until an admin resumes it" hidden>⏻ HALTED</span>
-    <button type="button" id="btn-halt" class="hud-btn hud-halt" title="Emergency halt: pause autonomous mode everywhere, then clear every fault" hidden>⏻ HALT</button>
-    <button type="button" id="settings" class="hud-btn hud-toggle" title="Configuration" aria-label="Configuration">⚙</button>
-    <span id="conn" class="conn" title="Live event stream">●</span>
+    <span id="hud-halted" class="hud-halted live-only" role="status" title="Autonomous mode is paused everywhere: Simian starts no faults until an admin resumes it" hidden>⏻ HALTED</span>
+    <button type="button" id="btn-halt" class="hud-btn hud-halt live-only" title="Emergency halt: pause autonomous mode everywhere, then clear every fault" hidden>⏻ HALT</button>
+    <button type="button" id="settings" class="hud-btn hud-toggle live-only" title="Configuration" aria-label="Configuration">⚙</button>
+    <span id="conn" class="conn live-only" title="Live event stream">●</span>
   </header>
 
   <!-- The selected Simian, on another origin, is not answering: why, and
        what to do. A bar hung from the HUD; room.js keeps the panes below
        it (--alert-h). -->
-  <div id="sim-alert" role="alert" hidden>
+  <div id="sim-alert" class="live-only" role="alert" hidden>
     <span id="sim-alert-text"></span>
     <span class="sim-alert-acts">
       <button type="button" id="sim-alert-signin" class="hud-btn"></button>
@@ -211,18 +264,20 @@ limitations under the License.
   <footer id="app-status">
     <!-- Every Simian the page watches, when there is more than one:
          click one to watch it. -->
-    <span id="st-sims" class="sim-strip" role="group" aria-label="Simians" hidden></span>
-    <span class="hud-sep sim-only">|</span>
-    <span class="status-item" id="st-stream">stream: connecting</span>
-    <span class="hud-sep">|</span>
-    <span class="status-item" id="st-active">active: –</span>
-    <span class="hud-sep">|</span>
-    <span class="status-item" id="st-auto">autonomous: –</span>
-    <span class="status-item status-halted" id="st-halted" hidden>HALTED · autonomous mode paused everywhere; nothing new starts until an admin resumes it</span>
+    <span id="st-sims" class="sim-strip live-only" role="group" aria-label="Simians" hidden></span>
+    <span class="hud-sep sim-only live-only">|</span>
+    <span class="status-item live-only" id="st-stream">stream: connecting</span>
+    <span class="hud-sep live-only">|</span>
+    <span class="status-item live-only" id="st-active">active: –</span>
+    <span class="hud-sep live-only">|</span>
+    <span class="status-item live-only" id="st-auto">autonomous: –</span>
+    <span class="status-item scorecard-only" id="st-scorecard">scorecard: none open</span>
+    <span class="status-item status-halted live-only" id="st-halted" hidden>HALTED · autonomous mode paused everywhere; nothing new starts until an admin resumes it</span>
     <span class="hud-spacer"></span>
     <span class="status-item status-hint room-only hud-wide">drag a title bar to move a pane · drag the floor to look around · WASD to fly · R to reset</span>
     <span class="hud-sep room-only hud-wide">|</span>
-    <span class="status-item status-hint hud-wide">from the audit trail: the same record as <code>simian watch</code> and <code>simian audit export</code></span>
+    <span class="status-item status-hint hud-wide live-only">from the audit trail: the same record as <code>simian watch</code> and <code>simian audit export</code></span>
+    <span class="status-item status-hint hud-wide scorecard-only">from a recording: <code>simian-eval report</code> over run directories; nothing here is live</span>
   </footer>
 
   <dialog id="config-dialog" class="neon-dialog" aria-labelledby="config-title">
@@ -317,6 +372,7 @@ limitations under the License.
   </dialog>
 
   <script src="room.js"></script>
+  <script src="scorecard.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

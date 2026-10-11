@@ -136,6 +136,7 @@ func runEval(ctx context.Context, o *options, out, progress io.Writer) error {
 		Substrates:      p.substrates,
 		Injector:        p.executor,
 		Auditor:         auditor,
+		Cluster:         clusterName(o, runID),
 		Only:            o.only,
 		Concurrency:     o.concurrency,
 		RemediationPoll: o.remediationPoll,

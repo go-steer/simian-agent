@@ -178,3 +178,17 @@ func TestAnUnreachableClusterStopsTheRun(t *testing.T) {
 		t.Fatalf("checkReachable = %v, want it to say the cluster is not reachable", err)
 	}
 }
+
+// The audit log names the cluster by something a reader recognises and that is
+// not a credential: the kubeconfig's context, or the kind cluster's name.
+func TestClusterNameIsTheContextOrTheKindCluster(t *testing.T) {
+	o := defaultOptions()
+	o.kubeconfig = writeKubeconfig(t)
+	if got := clusterName(o, "run-1"); got != "eval" {
+		t.Errorf("current: clusterName = %q, want the kubeconfig's current context", got)
+	}
+	o.cluster = ClusterKind
+	if got := clusterName(o, "run-1"); !strings.HasPrefix(got, "kind/") || !strings.HasSuffix(got, "eval-run-1") {
+		t.Errorf("kind: clusterName = %q, want kind/<the cluster this run provisions>", got)
+	}
+}

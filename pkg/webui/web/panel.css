@@ -227,6 +227,8 @@ body[data-theme^='chaos'] .panel-anchor[data-pane='auto'] .panel-title::before {
 body[data-theme^='chaos'] .panel-anchor[data-pane='faults'] .panel-title::before { content: '☰'; }
 body[data-theme^='chaos'] .panel-anchor[data-pane='workloads'] .panel-title::before { content: '▦'; }
 body[data-theme^='chaos'] .panel-anchor[data-pane='events'] .panel-title::before { content: '≋'; }
+body[data-theme^='chaos'] .panel-anchor[data-pane='scorecard'] .panel-title::before { content: '▤'; }
+body[data-theme^='chaos'] .panel-anchor[data-pane='scenario'] .panel-title::before { content: '◇'; }
 body[data-theme^='chaos'] #config-title::before { content: '⚙'; }
 
 body[data-theme^='chaos'] .panel-ctl {

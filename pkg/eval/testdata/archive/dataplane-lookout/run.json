@@ -1,0 +1,39 @@
+{
+  "subject": "lookout-v0.20.0",
+  "runs": [
+    {
+      "scenario_id": "dataplane-latency-not-saturation",
+      "report": {
+        "findings": [
+          {
+            "kind": "Deployment",
+            "resource_name": "edge",
+            "reason": "RolloutIncomplete",
+            "severity": "critical",
+            "namespace": "flow-storefront"
+          }
+        ],
+        "overall_severity": "critical"
+      },
+      "detected_at": "2026-09-06T23:53:58.50959574Z",
+      "cleared_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "scenario_id": "dataplane-partition-one-way",
+      "report": {
+        "findings": [
+          {
+            "kind": "Deployment",
+            "resource_name": "edge",
+            "reason": "RolloutIncomplete",
+            "severity": "critical",
+            "namespace": "flow-payments"
+          }
+        ],
+        "overall_severity": "critical"
+      },
+      "detected_at": "2026-09-06T23:53:58.644060612Z",
+      "cleared_at": "0001-01-01T00:00:00Z"
+    }
+  ]
+}

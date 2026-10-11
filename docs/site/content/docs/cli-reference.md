@@ -98,6 +98,7 @@ simian web --addr :8080 \
 |---|---|---|
 | `--addr` | :8080 | Listen address. |
 | `--controllers` | empty | Simians the page offers, as `name=https://origin` of each controller's UI. Repeatable. Each must list this page's origin in its `--ui-allowed-origins` (chart `ui.allowedOrigins`). |
+| `--scorecards` | empty | A directory of scorecard documents (`simian-eval report` output) to serve read-only at `/scorecards/`: `GET /scorecards/` lists the `*.json` files directly in it, `GET /scorecards/<name>` returns one. Nothing else in or outside the directory is served. The page offers them in its Scorecard mode. |
 
 ### Envoy SUT injection
 
@@ -255,6 +256,30 @@ Namespaces the run creates are annotated with `simian.chaos/eval-run=<run id>`
 and destroyed at the end. A namespace that already existed is annotated and
 **left standing** — a rig that deletes namespaces it merely found is one bad
 scenario file away from deleting something that mattered.
+
+Each scenario's `eval.scenario_started` audit line records the pack, the
+subject and the cluster (the kubeconfig context, or the kind cluster's name),
+so a run directory says what it measured and where.
+
+### `simian-eval report` — combining runs into a scorecard
+
+```bash
+simian-eval report --run runs/dataplane-lookout --run runs/dataplane-agent --out scorecard.json
+```
+
+Reads run directories, scores each exactly as its own scorecard did, and
+writes one self-describing JSON document — scenarios by subjects, with each
+scenario's fault, ground truth and every subject's report — that the web UI's
+Scorecard mode renders with no server. See
+[Reading an evaluation: the scorecard]({{< relref "scorecard.md" >}}).
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--run` | (required) | A run directory holding `audit.log` and `run.json`. Repeatable; each is a column. |
+| `--out` | stdout | File to write the scorecard to. |
+| `--pack` | (as recorded) | Packs to score against, by built-in name or directory, matched to each run by the pack name its audit log records. |
+| `--floor` | lookout | Subjects that are the floor (the deterministic detector). Default: subjects named `lookout` or `k8s-lookout`, with or without a version suffix. `--floor ""` for none. |
+| `--min-efficacy` | 0.8 | Efficacy rate below which a run is flagged as measuring the harness, not the subject. |
 
 An arena that could not be destroyed is a suite-level failure: `simian-eval`
 prints the whole scorecard, then exits non-zero naming the scenarios and the

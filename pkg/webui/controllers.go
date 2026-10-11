@@ -93,8 +93,10 @@ func controllersRoute(mux *http.ServeMux, list []Controller) {
 // StandaloneHandler is simian web: the same page with no controller behind
 // it. It serves the UI at /ui/, the list of Simians it was started with at
 // /api/controllers, and /healthz; every other /api/ path is 404, which is
-// how the page knows no Simian serves it and asks which to watch.
-func StandaloneHandler(list []Controller) http.Handler {
+// how the page knows no Simian serves it and asks which to watch. With
+// scorecards, it also serves a directory of scorecard documents read-only
+// at /scorecards/ (see Scorecards).
+func StandaloneHandler(list []Controller, scorecards ...*Scorecards) http.Handler {
 	mux := http.NewServeMux()
 	static, _ := fs.Sub(webFS, "web")
 	mux.Handle("/ui/", http.StripPrefix("/ui/", http.FileServerFS(static)))
@@ -102,6 +104,11 @@ func StandaloneHandler(list []Controller) http.Handler {
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/", http.StatusFound) })
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 	controllersRoute(mux, list)
+	for _, sc := range scorecards {
+		if sc != nil {
+			sc.route(mux)
+		}
+	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no Simian controller here: this is the standalone UI (simian web)", http.StatusNotFound)
 	})

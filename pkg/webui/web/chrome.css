@@ -205,6 +205,39 @@ body.flat .room-only {
   letter-spacing: 0;
 }
 
+/* Live or Scorecard (scorecard.js): each mode's own HUD and status-bar
+   items, and the switch between them, which is always there. */
+body:not(.mode-scorecard) .scorecard-only,
+body.mode-scorecard .live-only {
+  display: none !important;
+}
+
+.hud-modes {
+  display: inline-flex;
+  gap: 0;
+}
+
+.hud-modes .hud-btn + .hud-btn {
+  margin-left: -1px;
+}
+
+.hud-modes .hud-btn:first-child {
+  border-radius: 3px 0 0 3px;
+}
+
+.hud-modes .hud-btn:last-child {
+  border-radius: 0 3px 3px 0;
+}
+
+.hud-sc-name {
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  margin-right: 6px;
+}
+
 /* Native selects borrow .hud-btn; the dropdown is painted by the OS, so
    options need a real background. */
 select.hud-btn {
@@ -716,5 +749,21 @@ html.no-motion #ambient span {
   body.simian .hud-btn.hud-halt.is-halted,
   .hud-halted {
     animation: none;
+  }
+}
+
+#st-scorecard {
+  flex-shrink: 0;
+  max-width: 45vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The scorecard's line in the status bar takes the room hint's place
+   where both do not fit. */
+@media (max-width: 1799px) {
+  body.mode-scorecard #app-status .status-hint.room-only {
+    display: none;
   }
 }

@@ -97,3 +97,27 @@ func buildKubeConfig(path string) (*rest.Config, error) {
 	}
 	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{}).ClientConfig()
 }
+
+// clusterName is what the audit log records as the run's cluster: the kind
+// cluster's name, the kubeconfig's current context, or "in-cluster". A label
+// for whoever reads the artifacts later — a combined scorecard puts it next to
+// each run — and never a credential: no server address, no user.
+func clusterName(o *options, runID string) string {
+	if o.cluster == ClusterKind {
+		return "kind/" + kindcluster.NamePrefix + "eval-" + runID
+	}
+	if o.kubeconfig == "" {
+		if _, err := rest.InClusterConfig(); err == nil {
+			return "in-cluster"
+		}
+	}
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if o.kubeconfig != "" {
+		loadingRules.ExplicitPath = o.kubeconfig
+	}
+	raw, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{}).RawConfig()
+	if err != nil {
+		return ""
+	}
+	return raw.CurrentContext
+}

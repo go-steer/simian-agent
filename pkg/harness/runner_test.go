@@ -798,6 +798,36 @@ func TestEveryAttemptedScenarioLeavesAnAuditTrace(t *testing.T) {
 	}
 }
 
+// The cluster a run was against is recorded on the started line, so a combined
+// scorecard can say which cluster each run measured; left out when unknown.
+func TestTheStartedLineNamesTheCluster(t *testing.T) {
+	for _, cluster := range []string{"kind/simian-eval-1", ""} {
+		aud := &recordingAuditor{}
+		r := &Runner{
+			Pack:     packOf(scenarioIn("s-1", "ns-a", 1)),
+			Subject:  &fakeSubject{},
+			Arena:    newFakeArena(),
+			Injector: newFakeInjector(),
+			Auditor:  aud,
+			Cluster:  cluster,
+		}
+		if _, err := r.Run(t.Context()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		started := aud.named(audit.EventEvalScenarioStarted)
+		if len(started) != 1 {
+			t.Fatalf("started events = %+v, want one", started)
+		}
+		got, has := started[0].Payload["cluster"]
+		if cluster == "" && has {
+			t.Errorf("cluster = %v, want it left out when unknown", got)
+		}
+		if cluster != "" && got != cluster {
+			t.Errorf("cluster = %v, want %q", got, cluster)
+		}
+	}
+}
+
 // A scenario can fail on either side, and the audit line has to say which. A
 // subject that crashed and a fault that never landed are the same shape in the
 // log and opposite facts about who to blame.

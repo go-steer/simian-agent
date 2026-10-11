@@ -1,0 +1,35 @@
+{
+  "subject": "sre-agent",
+  "runs": [
+    {
+      "scenario_id": "dataplane-latency-not-saturation",
+      "report": {
+        "findings": [
+          {
+            "kind": "Deployment",
+            "resource_name": "edge",
+            "reason": "RolloutIncomplete",
+            "severity": "critical",
+            "namespace": "flow-storefront"
+          },
+          {
+            "kind": "Deployment",
+            "resource_name": "upstream",
+            "reason": "UnsupportedImageForWorkload",
+            "severity": "critical",
+            "namespace": "flow-storefront"
+          }
+        ],
+        "overall_severity": "critical"
+      },
+      "detected_at": "2026-10-02T15:15:03.7326076Z",
+      "cleared_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "scenario_id": "dataplane-partition-one-way",
+      "subject_error": "subject sre-agent: exec: WaitDelay expired before I/O complete: 2026/10/02 15:05:57 withholding 3 lookout tool(s) that declare a write: k8s_findings_ack, k8s_findings_diff, k8s_triage_status\n2026/10/02 15:05:57 assessing 1 namespace(s) on context gke_example-project_us-central1_example-cluster, read-only\n2026/10/02 15:11:25 transcript: runs/dataplane-vantage/transcript-flow-payments.json\nE1002 15:11:27.780819 1490047 websocket.go:521] \"Websocket Ping failed\" err=\"write tcp 10.88.0.3:38464-\u003e216.239.32.27:443: i/o timeout\"",
+      "detected_at": "2026-10-02T15:11:30.463813Z",
+      "cleared_at": "0001-01-01T00:00:00Z"
+    }
+  ]
+}

@@ -143,6 +143,12 @@ type Runner struct {
 	// meant to be scored wants it.
 	Auditor simian.Auditor
 
+	// Cluster names the cluster the run is against — a kubeconfig context,
+	// or the kind cluster the run stood up — for the reader of the audit log
+	// and of a combined scorecard. Recorded on eval.scenario_started; never
+	// a scoring input. Empty leaves it out.
+	Cluster string
+
 	// Only restricts the run to these scenario IDs. Empty runs the pack.
 	Only []string
 
@@ -325,15 +331,19 @@ func (r *Runner) runScenario(ctx context.Context, s scenario.Scenario) (run eval
 	log := r.logger().With(slog.String("scenario", s.ID))
 
 	namespaces := s.Namespaces()
+	started := map[string]any{
+		"subject":    run.Subject,
+		"pack":       r.Pack.Name,
+		"faults":     len(s.Faults),
+		"namespaces": namespaces,
+	}
+	if r.Cluster != "" {
+		started["cluster"] = r.Cluster
+	}
 	r.emit(ctx, simian.AuditEvent{
 		Event:      audit.EventEvalScenarioStarted,
 		ScenarioID: s.ID,
-		Payload: map[string]any{
-			"subject":    run.Subject,
-			"pack":       r.Pack.Name,
-			"faults":     len(s.Faults),
-			"namespaces": namespaces,
-		},
+		Payload:    started,
 	})
 	defer func() {
 		r.emit(ctx, simian.AuditEvent{

@@ -38,6 +38,8 @@
 .panel-anchor[data-pane='faults'] > .panel { --hue: var(--hue-faults); --mark: var(--hue-faults); }
 .panel-anchor[data-pane='workloads'] > .panel { --hue: var(--hue-workloads); --mark: var(--hue-workloads); }
 .panel-anchor[data-pane='events'] > .panel { --hue: var(--hue-events); --mark: var(--hue-events); }
+.panel-anchor[data-pane='scorecard'] > .panel { --hue: var(--hue-scorecard); --mark: var(--hue-scorecard); }
+.panel-anchor[data-pane='scenario'] > .panel { --hue: var(--hue-scenario); --mark: var(--hue-scenario); }
 
 /* Light rooms: chrome text a shade darker than the edge, for contrast on
    white. */
@@ -1273,3 +1275,595 @@ body[data-theme^='chaos'] dialog.halt-dialog > .panel-bar::before {
 }
 
 body[data-theme^='chaos'] #halt-title::before { content: '⏻'; }
+
+/* ─── Scorecard mode (scorecard.js) ──────────────────────────────────
+   A recorded evaluation: the grid of scenarios by subjects, and one
+   scenario's drill-down. Three cell states must never be mistaken for
+   one another: a score (a number, however low), not measured (the fault
+   did not land: a hatched dash, never a zero), and below the floor (the
+   subject under the deterministic detector on that row: an amber outline
+   and a ▼). The floor's own column is tinted --info. */
+
+.sc-lead {
+  margin: 0 0 12px;
+  max-width: 70ch;
+  line-height: 1.5;
+}
+
+.sc-drop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 22px 18px;
+  border: 1px dashed color-mix(in srgb, var(--hue) 60%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--hue) 6%, transparent);
+}
+
+.sc-drop-mark {
+  font-size: 22px;
+  color: var(--hue-ink, var(--hue));
+}
+
+/* The file input stays in the page (and reachable from the keyboard)
+   but is drawn as the button beside it. */
+.sc-file {
+  position: relative;
+  display: inline-flex;
+}
+
+.sc-file input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.sc-file input:focus-visible + .hud-btn {
+  outline: 2px solid var(--accent);
+}
+
+body.sc-dragging #scene-viewport {
+  outline: 2px dashed var(--accent);
+  outline-offset: -8px;
+}
+
+.sc-served {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#sc-url-form {
+  margin-top: 14px;
+}
+
+.sc-error {
+  margin: 10px 0 0;
+  color: var(--bad);
+}
+
+.sc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-bottom: 8px;
+}
+
+.sc-warn {
+  margin: 0 0 8px;
+  padding: 6px 9px;
+  border-left: 3px solid currentcolor;
+  border-radius: 3px;
+  line-height: 1.45;
+  background: color-mix(in srgb, currentcolor 9%, transparent);
+}
+
+.sc-warn.bad { color: var(--bad); }
+.sc-warn.info { color: var(--info); }
+.sc-warn b { color: var(--text); }
+
+.sc-ok { color: var(--ok); }
+.sc-bad { color: var(--bad); }
+.sc-warn-text { color: var(--warn); }
+
+.sc-runs-box {
+  margin: 0 0 10px;
+}
+
+.sc-runs-box > summary {
+  cursor: pointer;
+  margin-bottom: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--hue-ink, var(--text-dim));
+}
+
+.sc-runs-box > summary .muted {
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+table.sc-runs {
+  margin-bottom: 6px;
+}
+
+table.sc-runs th {
+  position: static;
+}
+
+.sc-run-label {
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+.badge.sc-floor-badge,
+.sc-chip-floor {
+  color: var(--info);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+tr.sc-floor-row td {
+  background: color-mix(in srgb, var(--info) 7%, transparent);
+}
+
+/* The grid. */
+
+/* No scroller of its own: the pane's body scrolls both ways, so the
+   column heads stick to its top and the scenario names to its left. */
+.sc-grid-wrap {
+  width: max-content;
+  min-width: 100%;
+}
+
+table.sc-grid {
+  width: auto;
+  min-width: 100%;
+}
+
+table.sc-grid th,
+table.sc-grid td {
+  vertical-align: middle;
+}
+
+table.sc-grid th.sc-col {
+  min-width: 92px;
+  text-align: center;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+}
+
+.sc-col-subject {
+  display: block;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.sc-col-eff {
+  display: block;
+  margin-top: 2px;
+  font-size: 9.5px;
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
+.sc-col-label {
+  display: block;
+  max-width: 13em;
+  margin: 0 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
+table.sc-grid .sc-floor {
+  background: color-mix(in srgb, var(--info) 9%, var(--panel-fill, var(--bg-surface)));
+  border-left: 1px solid color-mix(in srgb, var(--info) 45%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--info) 45%, transparent);
+}
+
+table.sc-grid th.sc-name {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  min-width: 11em;
+  max-width: 17em;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  font-weight: 400;
+  background: var(--panel-fill, var(--bg-surface));
+}
+
+table.sc-grid thead th.sc-name {
+  z-index: 3;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Under the id, so the themes' button styles do not reach it: a
+   scenario's name is a link-like control, not a button. */
+#sc-grid .sc-pick,
+#sc-grid .sc-pick:hover {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+#sc-grid .sc-pick:hover,
+#sc-grid .sc-pick:focus-visible {
+  color: var(--hue-ink, var(--accent));
+  text-decoration: underline;
+}
+
+.sc-id {
+  display: block;
+  font-size: 10px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+tr.sc-row {
+  cursor: pointer;
+}
+
+#sc-grid tr.sc-row.on td,
+#sc-grid tr.sc-row.on th {
+  background-color: color-mix(in srgb, var(--hue) 14%, var(--panel-fill, var(--bg-surface)));
+}
+
+tr.sc-row.on th.sc-name {
+  box-shadow: inset 3px 0 0 var(--hue);
+}
+
+tr.sc-pack td {
+  padding-top: 12px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--hue-ink, var(--text-dim));
+}
+
+td.sc-eff {
+  text-align: center;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+td.sc-cell {
+  text-align: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.sc-val {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+td.sc-zero .sc-val {
+  color: var(--text-dim);
+}
+
+.sc-bar {
+  display: block;
+  width: 56px;
+  height: 3px;
+  margin: 3px auto 0;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  overflow: hidden;
+}
+
+.sc-bar i {
+  display: block;
+  width: var(--w, 0%);
+  height: 100%;
+  background: var(--hue);
+}
+
+.sc-times {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+/* Rule 1: not measured. A hatched cell and a dash, in no status colour —
+   it is not a failure of the subject. */
+#sc-grid td.sc-nm {
+  background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--text) 9%, transparent) 0 4px, transparent 4px 9px);
+}
+
+.sc-dash,
+.sc-nm-text {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.sc-nm-label {
+  display: block;
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+td.sc-notrun .sc-dot {
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+/* Rule 2: below the floor. */
+td.sc-below {
+  box-shadow: inset 0 0 0 2px var(--warn);
+  background-color: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+
+td.sc-below .sc-val,
+.sc-below-text {
+  color: var(--warn);
+}
+
+.sc-below-mark {
+  display: block;
+  margin-top: 2px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--warn);
+}
+
+.sd-report .sc-below-mark {
+  display: inline;
+}
+
+td.sc-note {
+  min-width: 8em;
+  max-width: 12em;
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.sc-note-nm {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.sc-note-below {
+  color: var(--warn);
+  font-weight: 700;
+}
+
+table.sc-dense th.sc-col {
+  min-width: 74px;
+}
+
+table.sc-dense .sc-col-label {
+  max-width: 9em;
+}
+
+.sc-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 10px;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.sc-chip {
+  display: inline-block;
+  min-width: 1.6em;
+  margin-right: 4px;
+  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, var(--text) 25%, transparent);
+  border-radius: 3px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.sc-chip-nm {
+  background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--text) 14%, transparent) 0 3px, transparent 3px 6px);
+}
+
+.sc-chip-floor {
+  border-color: color-mix(in srgb, var(--info) 55%, transparent);
+  font-size: 9px;
+}
+
+.sc-chip-below {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+/* The drill-down. */
+
+.sd-title {
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+
+.sd-prompt {
+  margin-bottom: 4px;
+  line-height: 1.45;
+}
+
+.sd-two {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0 18px;
+}
+
+.sd-fault {
+  margin-bottom: 8px;
+  line-height: 1.55;
+}
+
+.sd-pre {
+  max-height: 16rem;
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.sd-list,
+.sd-gates,
+.sd-findings {
+  margin: 0 0 6px;
+  padding-left: 16px;
+  line-height: 1.6;
+}
+
+.sd-landed {
+  margin-bottom: 6px;
+  padding: 6px 8px;
+  border-left: 3px solid var(--ok);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--ok) 6%, transparent);
+  line-height: 1.5;
+}
+
+.sd-landed-bad {
+  border-left-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 7%, transparent);
+}
+
+.sd-why {
+  overflow-wrap: anywhere;
+}
+
+.sd-gate-bad {
+  color: var(--text);
+}
+
+.sd-landed-ok > summary {
+  cursor: pointer;
+}
+
+.sd-landed-runs {
+  margin: 6px 0 0;
+  padding-left: 16px;
+}
+
+.sd-landed-runs > li {
+  margin-bottom: 4px;
+}
+
+/* Side by side: as many columns as fit at a readable width. */
+.sd-reports {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  align-items: start;
+  gap: 10px;
+}
+
+.sd-report {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--hue) 35%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--hue) 4%, transparent);
+}
+
+.sd-report.sd-floor {
+  border-color: color-mix(in srgb, var(--info) 60%, transparent);
+  background: color-mix(in srgb, var(--info) 7%, transparent);
+}
+
+.sd-report.sd-below {
+  border-color: var(--warn);
+  box-shadow: inset 0 0 0 1px var(--warn);
+}
+
+.sd-report-head {
+  margin-bottom: 4px;
+  overflow-wrap: anywhere;
+}
+
+.sd-head-val {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.sd-times {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin: 4px 0 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sd-report h4 {
+  margin: 8px 0 4px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--hue-ink, var(--text-dim));
+}
+
+.sd-findings li {
+  overflow-wrap: anywhere;
+}
+
+.sev {
+  display: inline-block;
+  min-width: 4.5em;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.sev-critical { color: var(--bad); }
+.sev-warning { color: var(--warn); }
+.sev-info,
+.sev-ok { color: var(--text-dim); }
+
+table.sd-scores td {
+  padding: 3px 5px;
+  font-size: 11px;
+}
+
+tr.sd-skip td {
+  color: var(--text-dim);
+}
+
+.sd-evidence {
+  margin-top: 6px;
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}

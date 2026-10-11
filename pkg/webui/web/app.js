@@ -1828,17 +1828,33 @@ async function main() {
     refresh();
   };
   setInterval(() => document.querySelectorAll("[data-deadline]").forEach((el) => { el.textContent = remaining(el.dataset.deadline); }), 1000);
+  // Scorecard mode (scorecard.js): a ?scorecard= link opens at once.
+  const scorecard = window.SimianScorecard;
+  const linked = scorecard.boot();
+  // Opened from a file, there is no controller and nothing can be watched
+  // (a file: page has no origin a Simian could allow): scorecards only.
+  if (location.protocol === "file:") {
+    sims.standalone = true;
+    for (const id of ["active", "plan", "faults", "workloads"]) $(id).innerHTML = '<div class="empty">Live mode needs a Simian: serve this page with <code>simian web</code> or a controller.</div>';
+    $("st-stream").textContent = "stream: none (opened from a file)";
+    scorecard.landing({ standalone: true, nothingToWatch: true });
+    return;
+  }
   await discover();
   let stored = null;
   try { stored = localStorage.getItem(SEL_KEY); } catch (e) { /* none */ }
   const first = sims.list.find((c) => stored && c.url === stored) || sims.list.find((c) => c.self) ||
     (sims.standalone ? null : sims.list[0]);
   renderSims();
+  const solo = sims.standalone && sims.list.length === 1;
+  const landed = scorecard.landing({ standalone: sims.standalone, nothingToWatch: !first && !solo, openSims });
   if (first) await select(first);
-  else if (sims.standalone && sims.list.length === 1) await select(sims.list[0]);
+  else if (solo) await select(sims.list[0]);
   else {
     for (const id of ["active", "plan", "faults", "workloads"]) $(id).innerHTML = '<div class="empty">Pick a Simian to watch.</div>';
-    openSims();
+    // With no controller, the page lands in Scorecard mode, which offers
+    // the Simians dialog itself; a scorecard link is not interrupted.
+    if (!landed && !linked) openSims();
   }
   setInterval(refresh, 5000);
   setInterval(pollOthers, POLL_MS);

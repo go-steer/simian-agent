@@ -1,0 +1,100 @@
+{
+  "subject": "sre-agent",
+  "runs": [
+    {
+      "scenario_id": "parity-image-pull",
+      "report": {
+        "findings": [
+          {
+            "kind": "Deployment",
+            "resource_name": "checkout-api-9g89m4dy",
+            "reason": "ImagePullBackOff",
+            "severity": "critical",
+            "namespace": "fault-checkout"
+          },
+          {
+            "kind": "Pod",
+            "resource_name": "checkout-api-9g89m4dy-5769d6585-bshtp",
+            "reason": "ImagePullBackOff",
+            "severity": "critical",
+            "namespace": "fault-checkout"
+          },
+          {
+            "kind": "Pod",
+            "resource_name": "checkout-api-9g89m4dy-5769d6585-hd7cv",
+            "reason": "ImagePullBackOff",
+            "severity": "critical",
+            "namespace": "fault-checkout"
+          }
+        ],
+        "overall_severity": "critical"
+      },
+      "detected_at": "2026-09-20T10:19:51.234385069Z",
+      "cleared_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "scenario_id": "parity-crash-loop",
+      "subject_error": "subject sre-agent: exit status 1: 2026/09/20 10:23:48 withholding 3 lookout tool(s) that declare a write: k8s_findings_ack, k8s_findings_diff, k8s_triage_status\n2026/09/20 10:23:48 assessing 1 namespace(s) on context gke_example-project_us-central1_example-cluster, read-only\n2026/09/20 10:24:17 write transcript: write runs/gke-parity-20260920-100352/transcript-fault-payments.json: no space left on device",
+      "detected_at": "2026-09-20T10:24:17.032652439Z",
+      "cleared_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "scenario_id": "parity-failed-job",
+      "report": {
+        "findings": [
+          {
+            "kind": "Job",
+            "resource_name": "nightly-report-yvf3xd9w",
+            "reason": "BackoffLimitExceeded",
+            "severity": "warning",
+            "namespace": "fault-failedjob"
+          }
+        ],
+        "overall_severity": "warning"
+      },
+      "detected_at": "2026-09-20T10:19:13.815462423Z",
+      "cleared_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "scenario_id": "parity-cascade",
+      "detected_at": "0001-01-01T00:00:00Z",
+      "cleared_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "scenario_id": "parity-unbound-volume",
+      "detected_at": "0001-01-01T00:00:00Z",
+      "cleared_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "scenario_id": "parity-silent-failure",
+      "report": {
+        "findings": [
+          {
+            "kind": "Deployment",
+            "resource_name": "invoice-reconciler-4azeyw1y",
+            "reason": "SPOF",
+            "severity": "warning",
+            "namespace": "fault-invoicing"
+          },
+          {
+            "kind": "Deployment",
+            "resource_name": "invoice-reconciler-4azeyw1y",
+            "reason": "MissingPDB",
+            "severity": "warning",
+            "namespace": "fault-invoicing"
+          },
+          {
+            "kind": "Deployment",
+            "resource_name": "invoice-reconciler-4azeyw1y",
+            "reason": "NoLivenessProbe",
+            "severity": "warning",
+            "namespace": "fault-invoicing"
+          }
+        ],
+        "overall_severity": "warning"
+      },
+      "detected_at": "2026-09-20T10:18:16.677984183Z",
+      "cleared_at": "0001-01-01T00:00:00Z"
+    }
+  ]
+}
